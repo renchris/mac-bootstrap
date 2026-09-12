@@ -3,7 +3,7 @@
 Sets a brand-new Mac up for an agent workflow that has to behave identically under **Claude Code**
 and **GitHub Copilot CLI 1.0.83**.
 
-Readying one is part files a script can write, part gestures only a person can make — seventeen of
+Readying one is part files a script can write, part gestures only a person can make — eighteen of
 them plus one decision, and no script may take a single one for you. **So this is one entry point,
 not one command:** it drives every drivable step, records each of the rest with its exact gesture,
 and leaves you about four runs and roughly an hour, most of it waiting on Apple.
@@ -15,8 +15,11 @@ and leaves you about four runs and roughly an hour, most of it waiting on Apple.
 
 ## 1. Clear the gates no script may pass for you
 
-`lite` — the default — needs none of these. The driver detects and records each rather than
-attempting it, so doing them first only saves you a re-run.
+`lite` — the default — needs exactly one: **G12′**. An out-of-the-box Mac has only Terminal.app,
+which has no equalize action, so `m5_panes` has nothing to bind ⌘⇧E in; it records the gesture and
+the run exits `10` until a terminal emulator exists. Every other row below is `standard` or `full`.
+The driver detects and records each rather than attempting it, so doing them first only saves you a
+re-run — and re-running after one is the recovery procedure, not a repair.
 
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
@@ -58,7 +61,7 @@ nothing of you and leaves nothing to clean up.
 
 | Profile | You get | It costs |
 |---|---|---|
-| **lite** — the default | status line · instructions file · lifecycle hooks · ⌘⇧E pane equalize | config files only. No Homebrew, no permissions, no Apple ID, no network beyond the fetch |
+| **lite** — the default | status line · instructions file · lifecycle hooks · ⌘⇧E pane equalize | config files only. No Homebrew, no permissions, no Apple ID, no network beyond the fetch — it asks nothing of you *once a terminal emulator is installed*, and records G12′ until one is |
 | **standard** | + `/handoff` self-recycle · a local speech-rewrite model | Homebrew, tmux, a ~5 GB model download |
 | **full** | + the VoiceInk build · the screenshot pipeline | Xcode ~9 GB and an Apple ID, plus two permission toggles only you can grant |
 
@@ -156,6 +159,7 @@ detected each and attempted none.
 |---|---|---|---|
 | **G3** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | m6 |
 | **G4** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | m6 |
+| **G4′** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/m6-signing-identity.sh` — written for you at the moment this row is recorded | m6 |
 | **G5** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | m6 |
 | **G6** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | m8 |
 | **G7** | **Accessibility for Hammerspoon** — irreducible: `tccutil` only *resets*, and TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |
