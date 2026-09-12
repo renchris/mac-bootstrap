@@ -34,11 +34,11 @@ re-run plain `bash bootstrap.sh` to pick up ⌘⇧E.
 
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
-| **G0** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | m6, m7, m8 — and `node`, therefore Copilot itself |
-| **G0b** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the CLT, all three probed | `brew install cmake` | m6; whisper.cpp will not build |
+| **G0** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | the VoiceInk build, the local model, the screenshot pipeline — and `node`, therefore Copilot itself |
+| **G0b** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the CLT, all three probed | `brew install cmake` | the VoiceInk build; whisper.cpp will not build |
 | **G0c** | **tmux** — macOS ships none. Without it the drivers fall back to `direct` mode, where the successor dies with the terminal app | `brew install tmux` | 2c's fault tolerance (`agent-handoff doctor` names it) |
-| **G1** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree** | m6, and git everywhere — `/usr/bin/git` is an `xcrun` shim until these exist |
-| **G12′** | **A terminal emulator** — a fresh Mac has Terminal.app and nothing else, so m5 has nothing to configure | `brew install --cask iterm2` (or kitty) | m5 |
+| **G1** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree** | the VoiceInk build, and git everywhere — `/usr/bin/git` is an `xcrun` shim until these exist |
+| **G12′** | **A terminal emulator** — a fresh Mac has Terminal.app and nothing else, so pane-equalize has nothing to bind | `brew install --cask iterm2` (or kitty) | ⌘⇧E pane equalize |
 | **G2** | **Agent installed and logged in.** Copilot is four gestures deep — macOS ships no `node` | Claude Code: `claude` → `/login` → browser OAuth. Copilot: `brew install node` → `npm i -g @github/copilot` → `copilot` → device flow (`gh auth login` also satisfies the last step) | everything on the agent path |
 | **G2′** | ⛔ **A decision, not a gesture: has this Mac a Copilot seat?** Unanswerable from a shell | Only you know. If not, `COPILOT_PROVIDER_BASE_URL` documents *"GitHub authentication is not required"* — an unentitled Mac can still run `copilot` against local Ollama | the Copilot half of every row |
 
@@ -168,11 +168,11 @@ detected each and attempted none.
 
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
-| **G3** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | m6 |
-| **G4** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | m6 |
-| **G4′** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/m6-signing-identity.sh` — written for you at the moment this row is recorded | m6 |
-| **G5** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | m6 |
-| **G6** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | m8 |
+| **G3** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | the VoiceInk build |
+| **G4** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | the VoiceInk build |
+| **G4′** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/m6-signing-identity.sh` — written for you at the moment this row is recorded | the VoiceInk build |
+| **G5** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | the VoiceInk build |
+| **G6** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | the screenshot pipeline |
 | **G7** | **Accessibility for Hammerspoon** — irreducible: `tccutil` only *resets*, and TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |
 | **G8** | Screen Recording — believed unnecessary, never tested without it | Only if the thumbnail or copy fails after G7: Privacy & Security → **Screen Recording** → enable Hammerspoon → **restart it** | deliverable 5, maybe |
 | **G9** | VoiceInk Microphone + Accessibility | Click **OK** on the Microphone prompt. Then Privacy & Security → Accessibility → **+** → `~/Applications/VoiceInk.app` → toggle on | deliverable 4 |
