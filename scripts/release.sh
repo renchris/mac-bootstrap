@@ -85,7 +85,7 @@ release_verify() {
   release_say "         $(release_sha_file "$boot")  $(wc -l < "$boot" | tr -d ' ') lines"
 
   # The pin, read back out of the PUBLISHED bytes — not out of the working tree.
-  # BOTH spellings, and this is deliberate. `rl_verify` reads a PUBLISHED release, which may be
+  # BOTH spellings, and this is deliberate. This function reads a PUBLISHED release, which may be
   # any release this repo has ever cut — and releases before 2026-09-12 spell the variable MB_PIN.
   # A reader that only knows today's spelling cannot check yesterday's release, which is exactly
   # the check that matters when someone reports that an old pasted URL stopped working.
