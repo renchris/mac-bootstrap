@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 643.2482499999999 1119.7999999999997" width="643.2482499999999" height="1119.7999999999997" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="_start" data-to="PLANNED" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="437.25974999999994,68 437.25974999999994,116" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PLANNED" data-to="SEEDED" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="preflight passes" points="419.8940833333333,152.9 419.8940833333333,188.9 356.71325,188.9 356.71325,269.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PLANNED" data-to="FAILED_PREFLIGHT" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="refused, nothing moved" points="454.62541666666664,152.9 454.62541666666664,188.9 517.8062499999999,188.9 517.8062499999999,269.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SEEDED" data-to="LAUNCHING" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="356.71325,306.1 356.71325,330.1 280.61274999999995,330.1 280.61274999999995,354.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SEEDED" data-to="FAILED_SEED" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="356.71325,306.1 356.71325,330.1 432.81374999999997,330.1 432.81374999999997,354.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LAUNCHING" data-to="LAUNCHED" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="launcher returns" points="261.2710833333333,391 261.2710833333333,427.00000000000006 200.80724999999998,427.00000000000006 200.80724999999998,507.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LAUNCHING" data-to="FAILED_LAUNCH" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rc 0, session already gone" points="299.95441666666665,391 299.95441666666665,427.00000000000006 360.41825,427.00000000000006 360.41825,507.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LAUNCHED" data-to="ENGAGED" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="the oracle proves a real turn" points="181.95958333333334,544.2 181.95958333333334,580.2 116,580.2 116.00000000000003,660.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LAUNCHED" data-to="TIMEOUT_UNPROVEN" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="I4 · predecessor STAYS UP, rc 3" points="219.65491666666668,544.2 219.65491666666668,580.2 285.61449999999996,580.2 285.61449999999996,660.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ENGAGED" data-to="RETIRED" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="I1 · the only edge into RETIRED" points="116.00000000000003,697.4 115.99999999999999,813.6999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RETIRED" data-to="DONE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="detached reaper verifies" points="115.99999999999999,850.5999999999999 115.99999999999999,966.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DONE" data-to="_end" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.99999999999999,1003.7999999999998 116,1051.7999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="PLANNED" data-to="SEEDED" data-label="preflight passes">
+  <rect x="309.71325" y="195.9" width="93.08800000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="356.25725" y="211.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">preflight passes</text>
+</g>
+<g class="edge-label" data-from="PLANNED" data-to="FAILED_PREFLIGHT" data-label="refused, nothing moved">
+  <rect x="454.80625" y="195.9" width="125.75800000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="517.68525" y="211.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">refused, nothing moved</text>
+</g>
+<g class="edge-label" data-from="LAUNCHING" data-to="LAUNCHED" data-label="launcher returns">
+  <rect x="151.80724999999998" y="434.00000000000006" width="97.84000000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="200.72725" y="449.15000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">launcher returns</text>
+</g>
+<g class="edge-label" data-from="LAUNCHING" data-to="FAILED_LAUNCH" data-label="rc 0, session already gone">
+  <rect x="288.91824999999994" y="434.00000000000006" width="142.39000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="360.11325" y="449.15000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">rc 0, session already gone</text>
+</g>
+<g class="edge-label" data-from="LAUNCHED" data-to="ENGAGED" data-label="the oracle proves a real turn">
+  <rect x="40.5" y="587.2" width="150.11200000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="115.55600000000001" y="602.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">the oracle proves a real turn</text>
+</g>
+<g class="edge-label" data-from="LAUNCHED" data-to="TIMEOUT_UNPROVEN" data-label="I4 · predecessor STAYS UP, rc 3">
+  <rect x="198.11449999999996" y="587.2" width="174.466" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="285.34749999999997" y="602.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">I4 · predecessor STAYS UP, rc 3</text>
+</g>
+<g class="edge-label" data-from="ENGAGED" data-to="RETIRED" data-label="I1 · the only edge into RETIRED">
+  <rect x="36" y="740.4" width="159.022" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="115.511" y="755.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">I1 · the only edge into RETIRED</text>
+</g>
+<g class="edge-label" data-from="RETIRED" data-to="DONE" data-label="detached reaper verifies">
+  <rect x="48.5" y="893.5999999999999" width="134.074" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="115.537" y="908.7499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">detached reaper verifies</text>
+</g>
+<g class="node" data-id="_start" data-label="" data-shape="state-start">
+  <circle cx="437.25974999999994" cy="54" r="12" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="PLANNED" data-label="PLANNED" data-shape="rounded">
+  <rect x="385.16274999999996" y="116" width="104.194" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="437.25974999999994" y="134.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">PLANNED</text>
+</g>
+<g class="node" data-id="SEEDED" data-label="SEEDED" data-shape="rounded">
+  <rect x="309.06225" y="269.20000000000005" width="95.30199999999999" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="356.71325" y="287.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">SEEDED</text>
+</g>
+<g class="node" data-id="FAILED_PREFLIGHT" data-label="FAILED_PREFLIGHT" data-shape="rounded">
+  <rect x="432.36424999999997" y="269.20000000000005" width="170.88399999999993" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="517.80625" y="287.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">FAILED_PREFLIGHT</text>
+</g>
+<g class="node" data-id="LAUNCHING" data-label="LAUNCHING" data-shape="rounded">
+  <rect x="222.58774999999997" y="354.1" width="116.05" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="280.61274999999995" y="372.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LAUNCHING</text>
+</g>
+<g class="node" data-id="FAILED_SEED" data-label="FAILED_SEED" data-shape="rounded">
+  <rect x="366.63775" y="354.1" width="132.35199999999998" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="432.81374999999997" y="372.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">FAILED_SEED</text>
+</g>
+<g class="node" data-id="LAUNCHED" data-label="LAUNCHED" data-shape="rounded">
+  <rect x="144.26425" y="507.30000000000007" width="113.086" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="200.80725" y="525.7500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LAUNCHED</text>
+</g>
+<g class="node" data-id="FAILED_LAUNCH" data-label="FAILED_LAUNCH" data-shape="rounded">
+  <rect x="285.35025" y="507.30000000000007" width="150.13599999999997" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="360.41825" y="525.7500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">FAILED_LAUNCH</text>
+</g>
+<g class="node" data-id="ENGAGED" data-label="ENGAGED" data-shape="rounded">
+  <rect x="63.90300000000002" y="660.5" width="104.194" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="116.00000000000003" y="678.95" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">ENGAGED</text>
+</g>
+<g class="node" data-id="TIMEOUT_UNPROVEN" data-label="TIMEOUT_UNPROVEN" data-shape="rounded">
+  <rect x="196.09699999999998" y="660.5" width="179.03499999999994" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="285.61449999999996" y="678.95" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">TIMEOUT_UNPROVEN</text>
+</g>
+<g class="node" data-id="RETIRED" data-label="RETIRED" data-shape="rounded">
+  <rect x="66.86699999999999" y="813.6999999999999" width="98.26599999999999" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="115.99999999999999" y="832.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">RETIRED</text>
+</g>
+<g class="node" data-id="DONE" data-label="DONE" data-shape="rounded">
+  <rect x="77.24099999999999" y="966.8999999999999" width="77.518" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="115.99999999999999" y="985.3499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">DONE</text>
+</g>
+<g class="node" data-id="_end" data-label="" data-shape="state-end">
+  <circle cx="116" cy="1065.7999999999997" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="116" cy="1065.7999999999997" r="8" fill="var(--_text)" stroke="none" />
+</g>
+</svg>

@@ -36,3 +36,6 @@ secrets.*
 .claude-tasks/
 .claude-plans/
 .claude/settings.local.json
+
+# diagram render toolchain
+node_modules/

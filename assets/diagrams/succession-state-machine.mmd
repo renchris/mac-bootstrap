@@ -1,0 +1,13 @@
+stateDiagram-v2
+    [*] --> PLANNED
+    PLANNED --> SEEDED: preflight passes
+    PLANNED --> FAILED_PREFLIGHT: refused, nothing moved
+    SEEDED --> LAUNCHING
+    SEEDED --> FAILED_SEED
+    LAUNCHING --> LAUNCHED: launcher returns
+    LAUNCHING --> FAILED_LAUNCH: rc 0, session already gone
+    LAUNCHED --> ENGAGED: the oracle proves a real turn
+    LAUNCHED --> TIMEOUT_UNPROVEN: I4 · predecessor STAYS UP, rc 3
+    ENGAGED --> RETIRED: I1 · the only edge into RETIRED
+    RETIRED --> DONE: detached reaper verifies
+    DONE --> [*]

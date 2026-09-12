@@ -1,38 +1,60 @@
 # mac-bootstrap
 
-One entry point that sets a brand-new Mac up for an agent workflow which has to work the same under **Claude Code** and **GitHub Copilot CLI 1.0.83**.
+Sets a brand-new Mac up for an agent workflow that has to behave identically under **Claude Code**
+and **GitHub Copilot CLI 1.0.83**.
 
----
+Readying one is part files a script can write, part gestures only a person can make — seventeen of
+them plus one decision, and no script may take a single one for you. **So this is one entry point,
+not one command:** it drives every drivable step, records each of the rest with its exact gesture,
+and leaves you about four runs and roughly an hour, most of it waiting on Apple.
 
-## The one entry point
+1. **[Clear the gates no script may pass for you](#1-clear-the-gates-no-script-may-pass-for-you)** → a Mac that can fetch, install and build
+2. **[Decide what to install](#2-decide-what-to-install)** → a selection whose cost you know
+3. **[Run it, and read the exit code](#3-run-it-and-read-the-exit-code)** → a receipt
+4. **[Close out what the receipt says is yours](#4-close-out-what-the-receipt-says-is-yours)** → a verified machine
 
-> It drives every drivable step and records the rest. **Expect about four runs and roughly an hour, most of it waiting on Apple.**
+## 1. Clear the gates no script may pass for you
 
-That sentence is the honest framing and it is deliberate. This is not "one command": it is one entry point wrapped around a worksheet of sixteen human gestures — TCC permission toggles, an App Store download, two in-app pickers — none of which a script may take on your behalf. The driver's job is to **detect and record** each one, never to attempt it. Everything else it does itself.
+`lite` — the default — needs none of these. The driver detects and records each rather than
+attempting it, so doing them first only saves you a re-run.
 
-**Look before you leap — these three write nothing at all:**
+| | Gate | Exact gesture | Blocks |
+|---|---|---|---|
+| **G0** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | m6, m7, m8 — and `node`, therefore Copilot itself |
+| **G0b** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the CLT, all three probed | `brew install cmake` | m6; whisper.cpp will not build |
+| **G0c** | **tmux** — macOS ships none. Without it the drivers fall back to `direct` mode, where the successor dies with the terminal app | `brew install tmux` | 2c's fault tolerance (`agent-handoff doctor` names it) |
+| **G1** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree** | m6, and git everywhere — `/usr/bin/git` is an `xcrun` shim until these exist |
+| **G12′** | **A terminal emulator** — a fresh Mac has Terminal.app and nothing else, so m5 has nothing to configure | `brew install --cask iterm2` (or kitty) | m5 |
+| **G2** | **Agent installed and logged in.** Copilot is four gestures deep — macOS ships no `node` | Claude Code: `claude` → `/login` → browser OAuth. Copilot: `brew install node` → `npm i -g @github/copilot` → `copilot` → device flow (`gh auth login` also satisfies the last step) | everything on the agent path |
+| **G2′** | ⛔ **A decision, not a gesture: has this Mac a Copilot seat?** Unanswerable from a shell | Only you know. If not, `COPILOT_PROVIDER_BASE_URL` documents *"GitHub authentication is not required"* — an unentitled Mac can still run `copilot` against local Ollama | the Copilot half of every row |
 
-| | |
-|---|---|
-| What is on offer, what each costs | `bash bootstrap.sh --list` |
-| What *this* invocation would do to *this* Mac | `bash bootstrap.sh --plan` |
-| Every file it would write, with hashes | `bash bootstrap.sh --manifest` |
+One question first: clean install, or Migration Assistant? Migration carries existing TCC grants,
+agent config and app secrets across, so the two verify different things — and on a migrated Mac,
+rotate any API key that rode along. It is now a key on two machines.
 
-**Then pick and choose:**
+## 2. Decide what to install
 
-| | |
-|---|---|
-| The default — config files only, nothing to undo | `bash bootstrap.sh` |
-| A bigger set | `bash bootstrap.sh --profile standard` · `--profile full` |
-| Exactly these | `bash bootstrap.sh --only m1_statusline,m5_panes` |
-| Everything but that one | `bash bootstrap.sh --profile full --except m6_voiceink` |
-| Re-read the machine cold, change nothing | `bash bootstrap.sh --verify` |
-| Reverse it | `bash bootstrap.sh --uninstall` |
+These run against the script you fetch in step 3; on the agent path, the prompt does this looking
+for you and then asks which profile you want.
 
-Dependencies resolve themselves and say so (`note: m4_handoff needs m1_statusline — adding it`).
-A module name that does not exist is refused with the list of real ones — it never selects nothing and calls that success.
+| | Command | |
+|---|---|---|
+| What is on offer, and what each costs | `bash bootstrap.sh --list` | writes nothing |
+| What *this* invocation would do to *this* Mac | `bash bootstrap.sh --plan` | writes nothing |
+| Every file it would write, with hashes | `bash bootstrap.sh --manifest` | writes nothing |
+| The default | `bash bootstrap.sh` | acts |
+| A bigger set | `bash bootstrap.sh --profile standard` · `--profile full` | acts |
+| Exactly these | `bash bootstrap.sh --only m1_statusline,m5_panes` | acts |
+| Everything but that one | `bash bootstrap.sh --profile full --except m6_voiceink` | acts |
 
-### Profiles, cut by blast radius
+<!-- Diagram source: assets/diagrams/module-selection.mmd — edit it, run `npm run diagrams`, commit the SVGs. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/module-selection-dark.svg">
+  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs m1_statusline, m2_instructions, m3_hooks and m5_panes; standard adds m4_handoff and m7_model; full adds m6_voiceink and m8_screenshot. m4_handoff needs m1_statusline and m3_hooks, which are added out loud when missing.">
+</picture>
+
+Profiles are cut by blast radius; `lite` is the default because it is the largest set that asks
+nothing of you and leaves nothing to clean up.
 
 | Profile | You get | It costs |
 |---|---|---|
@@ -40,17 +62,27 @@ A module name that does not exist is refused with the list of real ones — it n
 | **standard** | + `/handoff` self-recycle · a local speech-rewrite model | Homebrew, tmux, a ~5 GB model download |
 | **full** | + the VoiceInk build · the screenshot pipeline | Xcode ~9 GB and an Apple ID, plus two permission toggles only you can grant |
 
-The default is `lite` on purpose: it is the largest set that asks nothing of you and leaves nothing to clean up.
+`--verify` re-reads the machine cold and changes nothing; `--uninstall` reverses a run. Dependencies
+resolve themselves and say so (`note: m4_handoff needs m1_statusline — adding it`); an unknown module
+name is refused with the list of real ones, so it never selects nothing and calls that success.
 
-**Exit codes**, identical on the install and the verify path — `0` every module satisfied · `10` satisfied except for steps waiting on **you** · `20` something failed, read the log · `30` the run could not assemble itself, so it is *not* a verdict about your machine. Precedence `30 > 20 > 10 > 0`.
+## 3. Run it, and read the exit code
 
-It is idempotent. **Re-running it is the recovery procedure.** Nothing is written inside this repo; all state lives in `$HOME/.mac-bootstrap/` (`receipt.json`, `bootstrap.log`).
+> [!IMPORTANT]
+> **This repo is private today, so the fetch below needs auth.** `raw.githubusercontent.com` answers
+> anonymously with 404, and that request is step 1 of both paths. Until it is public, run `gh auth
+> login` on the target Mac first (it needs GitHub for Copilot anyway), or clone this repo somewhere
+> that can and carry `bootstrap.sh` across.
 
----
+`0` all satisfied · `10` satisfied but for steps waiting on **you** · `20` something failed, read the
+log · `30` the run could not assemble itself, so it is *not* a verdict about your machine (precedence
+`30 > 20 > 10 > 0`, install and verify alike). It is idempotent — **re-running it is the recovery
+procedure** — and writes only to `$HOME/.mac-bootstrap/`.
 
-## Path A — paste this into Claude Code or Copilot CLI
+### If an agent is already running, paste this
 
-Replace `bd3f74ff41d10aaf285a0846b66d12d7c47b3986` with the release commit. Never `main`: a `main`-pinned raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured).
+Replace `bd3f74ff41d10aaf285a0846b66d12d7c47b3986` with the release commit — never `main`, whose
+raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured).
 
 ```text
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
@@ -99,13 +131,11 @@ for my yes. If a step needs a GUI gesture (a macOS permission prompt, Keychain A
 Store, an Apple ID), do not attempt it: name the exact gesture and move on.
 ```
 
-**Why the prompt says this much.** The repo, the SHA, the `curl` line, "never pipe into a shell", the exit-code contract, the receipt path and the safety clauses are inline **because they are the root of trust**. A safety rule that lived in the fetched file would be advice from the thing being trusted. Everything else — module bodies, the instructions artifact, hook definitions, model tables — is fetched, because inline text is re-paid on every paste and can only be fixed by you re-pasting it.
+The repo, SHA, `curl`, "never pipe into a shell", exit codes and safety clauses are inline **because
+they are the root of trust**: a safety rule fetched from the thing being trusted is not one.
+Everything else is fetched — inline text is re-paid on every paste.
 
----
-
-## Path B — no agent yet
-
-The genuine first state of a new Mac has no agent logged in. Then:
+### If not, four lines — and read it before you run it
 
 ```bash
 curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/bd3f74ff41d10aaf285a0846b66d12d7c47b3986/bootstrap.sh \
@@ -114,109 +144,64 @@ curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/m
   && bash /tmp/mac-bootstrap.sh
 ```
 
-Fetch → checksum → **read it** → run. Never `curl … | bash`. The `less` is the point, not decoration: it is the one second that makes this different from a pipe, and it is what lets you re-read the exact bytes afterwards. `bash /tmp/mac-bootstrap.sh --verify` is the same verification the agent path uses.
+Never `curl … | bash`. The `less` is the one second that makes this different from a pipe, and what
+lets you re-read the exact bytes afterwards.
 
----
+## 4. Close out what the receipt says is yours
 
-## What must already be true before either path
-
-The driver cannot install these; three of the four are browser or sudo gestures. Do them first.
-
-| | Gesture | Why it must precede |
-|---|---|---|
-| 1 | **Homebrew** — `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`, press RETURN at its prompt, enter your login password | Blocks the VoiceInk, model and screenshot modules — and `node`, therefore Copilot itself |
-| 2 | **Xcode Command Line Tools** — if `/usr/bin/git --version` fails: `xcode-select --install`, click **Install**, click **Agree** | `/usr/bin/git` is an `xcrun` shim until these exist; every git step raises a modal without them |
-| 3 | **Agent installed** | see the two chains below |
-| 4 | **Agent logged in** | a fresh config dir answers `Not logged in · Please run /login` at $0 — nothing in the prompt can run |
-
-**Claude Code:** launch `claude`, type `/login`, finish the browser OAuth. Two gestures.
-
-**Copilot CLI is four gestures deep, and this is the one most people get wrong** — macOS ships no `node`:
-
-```
-Homebrew  →  brew install node  →  npm i -g @github/copilot  →  copilot, then the device flow
-```
-
-The credential is the `gh` CLI keyring, so `gh auth login` also satisfies the last step. **One decision only you can answer: does the target Mac have a Copilot seat?** If not, `COPILOT_PROVIDER_BASE_URL` documents *"GitHub authentication is not required"*, so an unentitled Mac may still run `copilot` against local Ollama.
-
----
-
-## The five deliverables, with honest status
-
-| # | Deliverable | Claude Code | Copilot CLI 1.0.83 | Notes |
-|---|---|---|---|---|
-| **1** | context-% in the agent status line | **DELIVERED** | **DELIVERED — painting UNPROVEN** | One script, one alternation. Execution on Copilot is proven 39×; whether Copilot **paints** our stdout was never observed by anyone. Copilot renders a status line only in the interactive TUI, never under `-p`. |
-| **2a** | minimal repo-agnostic instructions file | **DELIVERED** | **DELIVERED** | Identical at the repo tier — one `CLAUDE.md`, both agents measured loading it. The global tier is two different paths bridged by one symlink; the content is one file, the paths cannot be. |
-| **2b** | agent lifecycle hooks | **DELIVERED** | **DELIVERED** | Identical scripts, two wrapper files. Copilot accepts Claude Code's PascalCase event names as a documented compatibility surface; the payload is field-for-field the same dialect. Copilot's `PreToolUse` fails **closed**, so every exit path is an explicit `0`. |
-| **2c** | self-recycle via `/handoff` | **DELIVERED** | **DEGRADED** | The *actuator* is identical and measured on both. The *typed gesture* is not: Copilot has no `/name` registration at all, so you type `/handoff` in Claude Code and `copilot --agent handoff` in Copilot, and only the file's frontmatter description reaches Copilot's context. **The design predicted a further degradation — one human paste per recycle — and the shipped succession oracle refuted it:** `fire` runs preflight → seed → launch → prove-engagement → retire with no per-recycle gesture, and its eight negative arms ship as a runnable control (`bash assets/succession/oracle.sh selftest`, 44 tests). One-time setup gestures remain; `agent-handoff doctor` names them. |
-| **3** | Cmd+Shift+E evens out split panes | **DELIVERED** | **DELIVERED** | Terminal-level, no agent involved. kitty gets `equalize_on_window_close` (kitty's own docs name the wrong option; the wrong spelling is a silent no-op). iTerm2 gets an undocumented native menu item bound via `NSUserKeyEquivalents` — no Python API, no Hammerspoon, no Accessibility grant. **A terminal emulator is not installed by this repo** — see G12′. |
-| **4** | local VoiceInk build + local rewrite model | **DELIVERED — gated** | same | Agent-independent. Gated on Xcode, `cmake`, a codesigning identity and TCC prompts. The model half is fully scriptable **except** one GUI selection inside VoiceInk (G11) — which is the deliverable's whole point, because a surviving cloud key silently wins the provider race otherwise. |
-| **5** | ⌘⇧4 → thumbnail → clipboard → paste into the agent | **DELIVERED** | **UNPROVEN** | On Claude Code the ⌘V→⌃V eventtap is required in every design: an image-only clipboard has zero text flavour, so ⌘V is a silent no-op in kitty and iTerm2 alike. On Copilot, two dated primary sources point opposite ways and nobody ran the path. |
-
-### The two UNPROVEN rows are one second of looking each
-
-Both are on the target machine, and neither is assertable from a shell. They are listed again as **G13** below.
-
-1. Open the agent and **look at the status line**. Does a percentage appear? That settles deliverable 1 on Copilot.
-2. Take a ⌘⇧4, then press **Ctrl+V** — not ⌘V — in the agent. Does an image attach? That settles deliverable 5 on Copilot.
-
----
-
-## Every human gesture, in the order it occurs
-
-Sixteen. The driver detects each one and writes it into `$HOME/.mac-bootstrap/receipt.json` with the exact command; it never attempts one.
+`$HOME/.mac-bootstrap/receipt.json` carries every row below with its exact command; the driver
+detected each and attempted none.
 
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
-| **G0** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | m6, m7, m8, and `node` → Copilot |
-| **G0b** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the Command Line Tools, all three probed | `brew install cmake` | m6 (the whisper.cpp build dies without it) |
-| **G0c** | **tmux** — macOS ships none, and the succession engine's fault tolerance IS the tmux substrate: without it the drivers fall back to `direct` mode, where the successor dies with the terminal app and the retire cannot be verified. You never interact with tmux; it is plumbing under `/handoff` | `brew install tmux` | deliverable 2c's fault-tolerance guarantee (`agent-handoff doctor` names it when absent) |
-| **G1** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree**. The sudo path is `sudo softwareupdate -i "<the Command Line Tools label>" --agree-to-license` | m6, and git everywhere |
-| **G12′** | **A terminal emulator** — a genuinely fresh Mac has Terminal.app and nothing else, so deliverable 3 has nothing to configure | `brew install --cask iterm2` (or kitty). The module records this rather than exiting clean having configured nothing | m5 |
-| **G2** | Agent install + login | Claude Code: `claude` → `/login` → browser OAuth. Copilot: `brew install node` → `npm i -g @github/copilot` → `copilot` → device flow | everything |
-| **G2′** | ⛔ **Decision, not a gesture: does this Mac have a Copilot seat?** | Only you know. Unanswerable from a shell — the credential lives in the `gh` keyring | the Copilot half of every row |
 | **G3** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | m6 |
 | **G4** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | m6 |
-| **G5** | Keychain trust dialog — **may not appear** | If a password dialog appears, type your login password. Re-running after a cancel is safe | m6 |
+| **G5** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | m6 |
 | **G6** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | m8 |
-| **G7** | **Accessibility for Hammerspoon** — irreducible on an unmanaged Mac: `tccutil` only *resets*, TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |
-| **G8** | Screen Recording — believed unnecessary, never tested without it | Only if the thumbnail or the copy fails after G7: System Settings → Privacy & Security → **Screen Recording** → enable Hammerspoon → **restart Hammerspoon** | deliverable 5, maybe |
-| **G9** | VoiceInk Microphone + Accessibility | Click **OK** on the Microphone prompt. Then System Settings → Privacy & Security → Accessibility → **+** → `~/Applications/VoiceInk.app` → toggle on | deliverable 4 |
-| **G10** | Transcription model, ~1.5 GB, in-app, no CLI path | VoiceInk → AI Models → download **parakeet-unified-0.6b** (English, ANE-resident, emits its own punctuation) or `ggml-large-v3-turbo` | deliverable 4 |
-| **G11** | **Selecting the Ollama provider inside VoiceInk** — GUI-only. A `defaults write` is *not* sufficient and can be actively wrong: the provider resolves **per mode**, and the fallback returns the first connected provider in declaration order, where a cloud provider sits 10 places ahead of Ollama | VoiceInk → Settings → AI Models → **Ollama → Connect** → pick `voiceink-rewrite`. If any cloud key remains in the keychain, **also** pin Ollama on the active mode: Settings → Modes → *your mode* → AI Provider | deliverable 4's whole point |
+| **G7** | **Accessibility for Hammerspoon** — irreducible: `tccutil` only *resets*, and TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |
+| **G8** | Screen Recording — believed unnecessary, never tested without it | Only if the thumbnail or copy fails after G7: Privacy & Security → **Screen Recording** → enable Hammerspoon → **restart it** | deliverable 5, maybe |
+| **G9** | VoiceInk Microphone + Accessibility | Click **OK** on the Microphone prompt. Then Privacy & Security → Accessibility → **+** → `~/Applications/VoiceInk.app` → toggle on | deliverable 4 |
+| **G10** | Transcription model, ~1.5 GB, in-app, no CLI path | VoiceInk → AI Models → download **parakeet-unified-0.6b** (English, ANE-resident, self-punctuating) or `ggml-large-v3-turbo` | deliverable 4 |
+| **G11** | **Selecting the Ollama provider inside VoiceInk** — GUI-only. A `defaults write` is not sufficient and can be wrong: the provider resolves **per mode**, and the fallback takes the first connected one in declaration order, where a cloud provider sits 10 places ahead of Ollama | VoiceInk → Settings → AI Models → **Ollama → Connect** → pick `voiceink-rewrite`. If any cloud key is still in the keychain, **also** pin Ollama on the active mode: Settings → Modes → *your mode* → AI Provider | deliverable 4's whole point |
 | **G12** | Relaunch iTerm2 — `NSUserKeyEquivalents` takes effect at the next launch | Quit and reopen iTerm2, split twice, drag a divider, press ⌘⇧E | deliverable 3 |
-| **G13** | **Two one-shot observations no script can make** | (a) look at the status line for one second; (b) ⌘⇧4 then **Ctrl+V** in the agent | closes the two UNPROVEN rows above |
+| **G13** | **Two observations no script can make**, both on Copilot | (a) look at the status line for one second — does a percentage appear? (b) take a ⌘⇧4, then press **Ctrl+V**, not ⌘V, in the agent — does an image attach? | the two UNPROVEN rows below |
 
-**Before you start, answer one question:** is the target a **clean install** or was it set up by **Migration Assistant**? Migration copies `~/Library/Preferences` wholesale, which carries existing TCC grants, existing agent config and any existing app secrets across with it. Both cases work, but they verify different things — and on a migrated Mac you should rotate any API key that came along for the ride, since it is now a key on two machines.
+## What you get, and the three places Copilot differs
 
----
+All five work on Claude Code. On Copilot one is degraded and two are unproven — and both unproven
+ones are G13, one second of looking each.
 
-## What this repo deliberately does not do
+| # | Deliverable | Claude Code | Copilot 1.0.83 | Notes |
+|---|---|---|---|---|
+| **1** | context-% in the agent status line | **DELIVERED** | **DELIVERED — painting UNPROVEN** | Execution on Copilot is proven 39×; whether it *paints* our stdout nobody has observed. Copilot renders a status line only in the interactive TUI, never under `-p`. |
+| **2a** | repo-agnostic instructions file | **DELIVERED** | **DELIVERED** | One `CLAUDE.md`, both agents measured loading it. The global tier is two paths bridged by one symlink: the content is one file, the paths cannot be. |
+| **2b** | agent lifecycle hooks | **DELIVERED** | **DELIVERED** | Identical scripts, two wrapper files: Copilot accepts Claude Code's PascalCase event names as a documented compatibility surface. Its `PreToolUse` fails **closed**, so every exit path is an explicit `0`. |
+| **2c** | self-recycle via `/handoff` | **DELIVERED** | **DEGRADED** | The *actuator* is identical and measured on both; the *typed gesture* is not. Copilot has no `/name` registration at all, so it is `/handoff` here and `copilot --agent handoff` there, and only the frontmatter description reaches Copilot's context. |
+| **3** | ⌘⇧E evens out split panes | **DELIVERED** | **DELIVERED** | Terminal-level, no agent involved. kitty gets `equalize_on_window_close` — its own docs name the wrong option, and the wrong spelling is a silent no-op. iTerm2 gets an undocumented native menu item via `NSUserKeyEquivalents`: no Python API, no Hammerspoon, no Accessibility grant. |
+| **4** | local VoiceInk build + rewrite model | **DELIVERED — gated** | same | Agent-independent; gated on Xcode, `cmake`, a codesigning identity and TCC prompts. Fully scriptable **except** G11 — which is the point, because a surviving cloud key otherwise wins the provider race silently. |
+| **5** | ⌘⇧4 → thumbnail → clipboard → paste | **DELIVERED** | **UNPROVEN** | The ⌘V→⌃V eventtap is required in every design: an image-only clipboard has zero text flavour, so ⌘V is a silent no-op in kitty and iTerm2 alike. On Copilot two dated primary sources point opposite ways and nobody ran the path. |
 
-| It will not | Because |
-|---|---|
-| **Write your agent's permissions, allowlists, or credentials** | Authorization is yours. Nothing here edits a `permissions.allow` block, a `settings.local.json`, an `allowedTools` list, an `apiKeyHelper` or a keychain entry — the driver refuses the write and asks you in chat instead. A tool that can widen its own permissions has no meaningful permission model. |
-| **Make you live inside a terminal multiplexer** | tmux is installed and used as an *invisible launch substrate* for `/handoff` only — a successor is born detached so it survives its predecessor, and you attach to an ordinary window. You never type a tmux command and your terminal keeps working exactly as it did. That is the measured basis of the fault-tolerance claim, not a workflow opinion: see G0c. |
-| **Reproduce the source machine's fleet tooling** | Multi-account routing, dispatch, land gates, mailboxes and the rest are specific to one machine and one person. What is here is the portable intersection — five deliverables that work on any Mac, under either agent. |
-| **Attempt any GUI, sudo, App Store or paid step** | Detect and record, never attempt. Every one is a row in the receipt with its exact command. |
-| **Pipe anything into a shell** | Both paths fetch to disk, checksum, and let you read the bytes first. |
-| **Write inside this repo** | All runtime state is under `$HOME/.mac-bootstrap/`. A stray working copy can never be committed. |
+The design predicted a further 2c degradation — one human paste per recycle — and the oracle refuted
+it: `fire` runs preflight → seed → launch → prove-engagement → retire with no per-recycle gesture,
+its eight negative arms shipping as a runnable control (`bash assets/succession/oracle.sh selftest`,
+44 tests). `RETIRED` is reachable only from `ENGAGED`; a timeout leaves the predecessor **up**:
 
----
+<!-- Diagram source: assets/diagrams/succession-state-machine.mmd — edit it, run `npm run diagrams`, commit the SVGs. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/succession-state-machine-dark.svg">
+  <img src="assets/diagrams/succession-state-machine-light.svg" alt="Succession state machine: PLANNED to SEEDED on preflight passing, or to FAILED_PREFLIGHT with nothing moved; SEEDED to LAUNCHING or FAILED_SEED; LAUNCHING to LAUNCHED when the launcher returns, or to FAILED_LAUNCH when rc is 0 but the session is already gone; LAUNCHED to ENGAGED when the oracle proves a real turn, or to TIMEOUT_UNPROVEN where invariant I4 keeps the predecessor up at rc 3; ENGAGED to RETIRED, which invariant I1 makes the only edge into RETIRED; RETIRED to DONE once a detached reaper verifies. Full failure taxonomy in assets/succession/README.md.">
+</picture>
 
-## Repo layout
+## What it will not do
 
-| Path | What it is |
-|---|---|
-| `bootstrap.sh` | the driver — the only entry point |
-| `verify.sh` | cold standalone re-verification; writes `receipt.verify.json`, never `receipt.json` |
-| `CONTRACT.md` | the module spec: six verbs, no top-level side effects |
-| `modules/mN_*.sh` | one deliverable each |
-| `assets/` | bytes that land on the machine verbatim |
-| `AGENTS.md` (= `CLAUDE.md`) | the instructions file an agent working *on this repo* reads |
+**It never writes your agent's permissions, allowlists or credentials** — no `permissions.allow`,
+`settings.local.json`, `allowedTools`, `apiKeyHelper` or keychain entry: it refuses the write and
+asks you in chat, because a tool that can widen its own permissions has no permission model. It
+**attempts no GUI, sudo, App Store or paid step**, **pipes nothing into a shell**, and **writes
+nothing inside this repo**. Every module verifies by **independent read-back** — parsing the plist
+with `plutil`, running the script against a synthetic payload, reading the pane geometry — never by
+grepping for a phrase it just wrote or trusting an installer's exit code.
 
-Every module verifies by **independent read-back** — parse the plist back with `plutil`, execute the script against a synthetic payload, read the pane geometry — never by grepping for a phrase it just wrote, and never by trusting an installer's exit code.
-
-## License
-
-MIT.
+`bootstrap.sh` is the only entry point and `CONTRACT.md` the module spec it obeys; `verify.sh`
+re-verifies cold into `receipt.verify.json`. Diagram sources are `assets/diagrams/*.mmd` (`npm run
+diagrams` renders, `diagrams:check` fails CI on a stale SVG). MIT licensed.
