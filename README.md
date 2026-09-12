@@ -79,7 +79,10 @@ Replace `bd3f74ff41d10aaf285a0846b66d12d7c47b3986` with the release commit — n
 raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured). At
 that pinned commit `bootstrap.sh` is 790 lines and `shasum -a 256` reads
 `ddb2831d09dd0103761315ab9a028f3599f5aeb9fcfb4c5066451c868e45e2ed`; step 1 shows you the checksum,
-and anything else means stop.
+and anything else means stop. Fetched on its own it has no `modules/` beside it, so it makes a
+second fetch, from the commit pinned *inside* it — which is this one's parent, because a commit
+cannot contain its own sha. `scripts/release.sh --check` re-walks both hops anonymously, and CI
+runs it on every push to `main`.
 
 ```text
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
@@ -200,5 +203,6 @@ with `plutil`, running the script against a synthetic payload, reading the pane 
 grepping for a phrase it just wrote or trusting an installer's exit code.
 
 `bootstrap.sh` is the only entry point and `CONTRACT.md` the module spec it obeys; `verify.sh`
-re-verifies cold into `receipt.verify.json`. Diagram sources are `assets/diagrams/*.mmd` (`npm run
+re-verifies cold into `receipt.verify.json`; `scripts/release.sh` cuts a release and refuses to
+call it one until it has fetched every module and asset back anonymously. Diagram sources are `assets/diagrams/*.mmd` (`npm run
 diagrams` renders, `diagrams:check` fails CI on a stale SVG). MIT licensed.

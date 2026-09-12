@@ -1,0 +1,24 @@
+name: release-pin
+
+# The one-prompt and one-command paths both fetch bootstrap.sh on its own, so it has to fetch
+# its own modules and assets from a pinned commit. The first release shipped the literal
+# placeholder `__PIN_SHA__` and BOTH documented entry points died at exit 30 on a repo that was
+# otherwise complete and public — a defect no test on this machine could see, because a clone
+# always has modules/ beside the script. This job is the arm that can see it: it fetches what a
+# stranger fetches, anonymously, and compares every byte against the pinned tree.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # --check reads `git show <pin>:<path>`; a shallow clone has no pin
+      - run: bash scripts/release.sh --check
