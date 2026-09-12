@@ -1,5 +1,5 @@
 #!/bin/bash
-# modules/m6_voiceink.sh — DELIVERABLE 4a: a local, licence-key-free, TCC-stable VoiceInk.
+# modules/voiceink.sh — DELIVERABLE 4a: a local, licence-key-free, TCC-stable VoiceInk.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # WHAT THIS MODULE CLAIMS WHEN IT SAYS SATISFIED, AND WHAT IT DOES NOT
@@ -23,7 +23,7 @@
 # SATISFIED does NOT mean Microphone, Accessibility or Screen Recording are granted, and it does
 # NOT mean a transcription model is downloaded. Those live in a SIP-protected TCC database and
 # in the app's own UI; this module cannot read them and therefore does not assert them. They are
-# written to $BOOTSTRAP_STATE_DIR/m6-human-steps.txt with their exact gestures, and install_ prints
+# written to $BOOTSTRAP_STATE_DIR/voiceink-human-steps.txt with their exact gestures, and install_ prints
 # that file. A module that claimed them would be claiming something it did not do.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@
 # authorization surface — house rule 6 and CONTRACT.md §8.6 — and the keychain trust dialog is
 # on this deliverable's named human-gate list. So gate_ detects the missing identity and
 # gesture_ hands over ONE command: a generated, idempotent, self-verifying program at
-# $BOOTSTRAP_STATE_DIR/m6-signing-identity.sh. The operator runs it; the next bootstrap run builds.
+# $BOOTSTRAP_STATE_DIR/voiceink-signing-identity.sh. The operator runs it; the next bootstrap run builds.
 #
 # (Mechanical note, stated rather than hidden: bootstrap.sh's pre-source denylist greps modules
 # for `security +import`. This module never performs that write, and the generated script calls
@@ -49,8 +49,8 @@
 #     which is a different code path, and the only local build that has ever worked on the
 #     source machine deliberately sets CODE_SIGNING_ALLOWED=NO and re-signs inside-out by hand.
 #     So it is shipped as the PRIMARY path and the measured fallback is a BRANCH, not a comment:
-#     if the designated requirement of the built app does not name our leaf, m6_resign_inside_out
-#     runs; if the build itself failed, m6_build_unsigned rebuilds with CODE_SIGNING_ALLOWED=NO
+#     if the designated requirement of the built app does not name our leaf, voiceink_resign_inside_out
+#     runs; if the build itself failed, voiceink_build_unsigned rebuilds with CODE_SIGNING_ALLOWED=NO
 #     first. The DR check decides which branch won, and it decides it from the artifact.
 # R1  Sparkle. `SUEnableAutomaticChecks` is already <false/> at v2.13 and the scheduler-disabling
 #     code is UPSTREAM and unconditional there. The `defaults write` is kept, but its reason is
@@ -110,8 +110,8 @@ BOOTSTRAP_VOICEINK_ALLOW_PATCH="${BOOTSTRAP_VOICEINK_ALLOW_PATCH:-0}"
 BOOTSTRAP_VOICEINK_BUNDLE_ID=com.prakashjoshipax.VoiceInk
 BOOTSTRAP_VOICEINK_MIN_FREE_GB="${BOOTSTRAP_VOICEINK_MIN_FREE_GB:-12}"
 
-m6_steps_file() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/m6-human-steps.txt"; }
-m6_sign_script() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/m6-signing-identity.sh"; }
+voiceink_steps_file() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/voiceink-human-steps.txt"; }
+voiceink_sign_script() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/voiceink-signing-identity.sh"; }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # probes — every one of these is a READ, and none of them pipes a command whose status it tests
@@ -119,7 +119,7 @@ m6_sign_script() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/m6-
 
 # Prints the first line of `xcodebuild -version` on success. On failure prints the combined
 # output so the caller can classify it, and returns 1. R3: no pipe, ever, on this command.
-m6_xcodebuild_probe() {
+voiceink_xcodebuild_probe() {
   local out rc
   out="$(/usr/bin/xcodebuild -version 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then printf '%s' "$out"; return 1; fi
@@ -128,7 +128,7 @@ m6_xcodebuild_probe() {
 }
 
 # Prints an Xcode.app that has a Developer directory, or nothing.
-m6_xcode_app() {
+voiceink_xcode_app() {
   local p
   for p in /Applications/Xcode.app /Applications/Xcode-beta.app "$HOME/Applications/Xcode.app"; do
     [ -d "$p/Contents/Developer" ] && { printf '%s' "$p"; return 0; }
@@ -139,7 +139,7 @@ m6_xcode_app() {
 # Prints an absolute cmake, or nothing. R5/C4: cmake is in NEITHER /usr/bin NOR Xcode NOR
 # CommandLineTools on a stock Mac — all three were probed, with `xcodebuild` present in two of
 # them as the positive control that the probe can say yes.
-m6_cmake() {
+voiceink_cmake() {
   local c dev
   for c in /opt/homebrew/bin/cmake /usr/local/bin/cmake /usr/bin/cmake \
            /Library/Developer/CommandLineTools/usr/bin/cmake; do
@@ -152,7 +152,7 @@ m6_cmake() {
   return 1
 }
 
-m6_brew() {
+voiceink_brew() {
   local c
   for c in /opt/homebrew/bin/brew /usr/local/bin/brew; do
     [ -x "$c" ] && { printf '%s' "$c"; return 0; }
@@ -163,8 +163,8 @@ m6_brew() {
 # Prints the lowercase SHA-1 of a VALID code-signing identity whose line contains "<cn>".
 # `-v` means valid-only: an imported-but-untrusted identity is listed by `find-identity` WITHOUT
 # -v as `(CSSMERR_TP_NOT_TRUSTED)` and is absent here. That asymmetry is the pre-cert control —
-# see m6_write_signing_script, which runs it.
-m6_leaf_for_cn() {
+# see voiceink_write_signing_script, which runs it.
+voiceink_leaf_for_cn() {
   local out leaf
   out="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null)" || return 1
   leaf="$(printf '%s\n' "$out" | /usr/bin/awk -v cn="\"$1\"" 'index($0, cn) { print tolower($2); exit }')"
@@ -174,24 +174,24 @@ m6_leaf_for_cn() {
 
 # Same, but without -v: "the certificate is here, it is just not trusted". Used only to tell the
 # operator WHICH of the two failures they are looking at.
-m6_cert_present_untrusted() {
+voiceink_cert_present_untrusted() {
   local out
   out="$(/usr/bin/security find-identity -p codesigning 2>/dev/null)" || return 1
   case "$out" in *"\"$1\""*) : ;; *) return 1 ;; esac
-  m6_leaf_for_cn "$1" >/dev/null 2>&1 && return 1   # it IS valid, so not this case
+  voiceink_leaf_for_cn "$1" >/dev/null 2>&1 && return 1   # it IS valid, so not this case
   return 0
 }
 
 # Prints the CN this machine can sign with, or returns 1.
-m6_identity_cn() {
-  m6_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_CN" >/dev/null 2>&1 && { printf '%s' "$BOOTSTRAP_VOICEINK_CERT_CN"; return 0; }
-  m6_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_ALT" >/dev/null 2>&1 && { printf '%s' "$BOOTSTRAP_VOICEINK_CERT_ALT"; return 0; }
+voiceink_identity_cn() {
+  voiceink_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_CN" >/dev/null 2>&1 && { printf '%s' "$BOOTSTRAP_VOICEINK_CERT_CN"; return 0; }
+  voiceink_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_ALT" >/dev/null 2>&1 && { printf '%s' "$BOOTSTRAP_VOICEINK_CERT_ALT"; return 0; }
   return 1
 }
 
 # Prints the "designated => …" line of a bundle. codesign -d writes to stderr, so 2>&1, and the
 # line is selected structurally rather than with `tail -1`.
-m6_app_dr() {
+voiceink_app_requirement() {
   local out rc
   out="$(/usr/bin/codesign -d -r- "$1" 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] || return 1
@@ -202,7 +202,7 @@ m6_app_dr() {
 
 # Prints the certificate leaf out of a DR line, lowercase, or returns 1. An AD-HOC DR is
 # `# designated => cdhash H"…" or cdhash H"…"` and has no leaf — that is the whole point.
-m6_dr_leaf() {
+voiceink_requirement_leaf() {
   local dr="$1" t
   case "$dr" in *'certificate leaf = H"'*) : ;; *) return 1 ;; esac
   t="${dr#*certificate leaf = H\"}"
@@ -218,7 +218,7 @@ m6_dr_leaf() {
 # The embedded entitlements must be the LOCAL set. Read through codesign, i.e. out of the signed
 # artifact, not out of any file we wrote. audio-input is the positive control: if it is missing
 # we did not read real entitlements at all and must not conclude anything from the absences.
-m6_entitlements_local_ok() {
+voiceink_entitlements_local_ok() {
   local x
   x="$(/usr/bin/codesign -d --entitlements - --xml "$1" 2>/dev/null)" || x=""
   [ -n "$x" ] || x="$(/usr/bin/codesign -d --entitlements :- "$1" 2>/dev/null)" || x=""
@@ -241,7 +241,7 @@ m6_entitlements_local_ok() {
 # rc 0 present · rc 1 absent · rc 2 INSTRUMENT BLIND. The caller must not read 2 as absence:
 # `strings` is an Xcode toolchain shim and can refuse, and a blind instrument that convicts would
 # make verify_ demand an endless rebuild.
-m6_localbuild_symbol_ok() {
+voiceink_localbuild_symbol_ok() {
   local f hit=0 ctl=0 n
   for f in "$1/Contents/MacOS"/*; do
     [ -f "$f" ] || continue
@@ -259,7 +259,7 @@ m6_localbuild_symbol_ok() {
 
 # Running now, or starts and stays up. BOOTSTRAP_VOICEINK_LAUNCH=0 removes only the STARTING: it can make this
 # arm stricter, never laxer.
-m6_liveness() {
+voiceink_liveness() {
   local p1 p2
   p1="$(/usr/bin/pgrep -x VoiceInk 2>/dev/null)" || p1=""
   p1="${p1%%$'\n'*}"
@@ -282,11 +282,11 @@ m6_liveness() {
 }
 
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_m6_voiceink()    { printf '%s' 'a local build of the open-source VoiceInk dictation app, no licence key'; }
-cost_m6_voiceink()    { printf '%s' 'Xcode ~9 GB via the App Store (Apple ID), cmake, two sudo commands, ~10 min of building.'; }
-profile_m6_voiceink() { printf '%s' 'full'; }
+what_voiceink()    { printf '%s' 'a local build of the open-source VoiceInk dictation app, no licence key'; }
+cost_voiceink()    { printf '%s' 'Xcode ~9 GB via the App Store (Apple ID), cmake, two sudo commands, ~10 min of building.'; }
+profile_voiceink() { printf '%s' 'full'; }
 
-verify_m6_voiceink() {
+verify_voiceink() {
   local app dr leaf rc
   app="$BOOTSTRAP_VOICEINK_APP"
 
@@ -300,28 +300,28 @@ verify_m6_voiceink() {
 
   # B. THE DESIGNATED REQUIREMENT. TCC stores Accessibility/Microphone grants against it. Ad-hoc
   #    ⇒ the DR IS the cdhash ⇒ two builds, two DRs ⇒ every rebuild silently revokes the grants.
-  dr="$(m6_app_dr "$app")" || return 1
+  dr="$(voiceink_app_requirement "$app")" || return 1
   case "$dr" in *cdhash*) return 1 ;; esac
-  leaf="$(m6_dr_leaf "$dr")" || return 1
+  leaf="$(voiceink_requirement_leaf "$dr")" || return 1
 
   # C. …and that leaf must be a CURRENTLY VALID identity here. A DR naming a certificate that no
   #    longer exists in this keychain is not a machine that can rebuild and keep its grants.
-  m6_leaf_matches_valid_identity "$leaf" || return 1
+  voiceink_leaf_matches_valid_identity "$leaf" || return 1
 
   # D. the licence-free build, two independent reads.
-  m6_entitlements_local_ok "$app" || return 1
-  m6_localbuild_symbol_ok "$app"; rc=$?
+  voiceink_entitlements_local_ok "$app" || return 1
+  voiceink_localbuild_symbol_ok "$app"; rc=$?
   if [ "$rc" = 1 ]; then return 1; fi
   if [ "$rc" = 2 ]; then
-    bootstrap_warn "m6: strings(1) could not read $app — the LOCAL_BUILD symbol arm was skipped, entitlements arm still enforced"
+    bootstrap_warn "voiceink: strings(1) could not read $app — the LOCAL_BUILD symbol arm was skipped, entitlements arm still enforced"
   fi
 
   # E. liveness.
-  m6_liveness || return 1
+  voiceink_liveness || return 1
   return 0
 }
 
-m6_leaf_matches_valid_identity() {
+voiceink_leaf_matches_valid_identity() {
   local out
   out="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null)" || return 1
   out="$(printf '%s' "$out" | /usr/bin/tr 'A-F' 'a-f')"
@@ -335,24 +335,24 @@ m6_leaf_matches_valid_identity() {
 
 # Prints one blocker id per line, in the order the human-steps file lists them (R5: cmake first).
 # Empty output ⇒ nothing here needs a human.
-m6_blockers() {
+voiceink_blockers() {
   local out xcapp
-  m6_cmake >/dev/null 2>&1 || printf 'cmake\n'
+  voiceink_cmake >/dev/null 2>&1 || printf 'cmake\n'
 
-  if ! out="$(m6_xcodebuild_probe)"; then
+  if ! out="$(voiceink_xcodebuild_probe)"; then
     case "$out" in
       *icense*)                                    printf 'license\n' ;;
-      *)  if xcapp="$(m6_xcode_app)"; then         printf 'xcodeselect\n'
+      *)  if xcapp="$(voiceink_xcode_app)"; then         printf 'xcodeselect\n'
           else                                     printf 'xcode\n'; fi ;;
     esac
   fi
 
-  m6_identity_cn >/dev/null 2>&1 || printf 'signing\n'
+  voiceink_identity_cn >/dev/null 2>&1 || printf 'signing\n'
 }
 
-m6_blocker_note() {
+voiceink_blocker_note() {
   case "$1" in
-    cmake)       if m6_brew >/dev/null 2>&1; then
+    cmake)       if voiceink_brew >/dev/null 2>&1; then
                    printf 'cmake is missing and whisper.cpp cannot build without it (it is in neither /usr/bin nor Xcode nor CommandLineTools)'
                  else
                    printf 'cmake is missing, and so is Homebrew — whisper.cpp cannot build without cmake'
@@ -360,7 +360,7 @@ m6_blocker_note() {
     xcode)       printf 'the full Xcode is not installed (~9 GB, App Store, needs an Apple ID); xcodebuild and the macOS SDK are Xcode-only' ;;
     license)     printf 'the Xcode licence has not been accepted, so xcodebuild refuses to run' ;;
     xcodeselect) printf 'Xcode is installed but xcode-select points somewhere else (CommandLineTools?)' ;;
-    signing)     if m6_cert_present_untrusted "$BOOTSTRAP_VOICEINK_CERT_CN" || m6_cert_present_untrusted "$BOOTSTRAP_VOICEINK_CERT_ALT"; then
+    signing)     if voiceink_cert_present_untrusted "$BOOTSTRAP_VOICEINK_CERT_CN" || voiceink_cert_present_untrusted "$BOOTSTRAP_VOICEINK_CERT_ALT"; then
                    printf 'the "%s" certificate exists but is not TRUSTED for code signing — the Keychain trust dialog was cancelled' "$BOOTSTRAP_VOICEINK_CERT_CN"
                  else
                    printf 'there is no code-signing identity, so the build could only be signed ad-hoc and every rebuild would silently revoke Microphone and Accessibility'
@@ -369,72 +369,72 @@ m6_blocker_note() {
   esac
 }
 
-m6_blocker_gesture() {
+voiceink_blocker_gesture() {
   local xcapp
   case "$1" in
-    cmake)       if m6_brew >/dev/null 2>&1; then printf 'brew install cmake'
+    cmake)       if voiceink_brew >/dev/null 2>&1; then printf 'brew install cmake'
                  else printf 'open "https://brew.sh"'; fi ;;
     xcode)       printf 'open "https://apps.apple.com/app/xcode/id497799835"' ;;
     license)     printf 'sudo xcodebuild -license accept' ;;
-    xcodeselect) xcapp="$(m6_xcode_app)" || xcapp=/Applications/Xcode.app
+    xcodeselect) xcapp="$(voiceink_xcode_app)" || xcapp=/Applications/Xcode.app
                  printf 'sudo xcode-select -s %s/Contents/Developer' "$xcapp" ;;
-    signing)     printf 'bash ~/.mac-bootstrap/m6-signing-identity.sh' ;;
+    signing)     printf 'bash ~/.mac-bootstrap/voiceink-signing-identity.sh' ;;
     *)           printf '' ;;
   esac
 }
 
-gate_m6_voiceink() {
+gate_voiceink() {
   local b
-  b="$(m6_blockers)"
+  b="$(voiceink_blockers)"
   [ -n "$b" ]
 }
 
-note_m6_voiceink() {
+note_voiceink() {
   local b first n
-  b="$(m6_blockers)"
+  b="$(voiceink_blockers)"
   if [ -z "$b" ]; then printf 'VoiceInk is not built yet'; return 0; fi
   first="${b%%$'\n'*}"
   n="$(printf '%s\n' "$b" | bootstrap_count)"
-  printf '%s' "$(m6_blocker_note "$first")"
+  printf '%s' "$(voiceink_blocker_note "$first")"
   [ "${n:-1}" -gt 1 ] && printf ' (the first of %s build steps that need you)' "$n"
-  printf '; every step is listed in ~/.mac-bootstrap/m6-human-steps.txt'
+  printf '; every step is listed in ~/.mac-bootstrap/voiceink-human-steps.txt'
   return 0
 }
 
-gesture_m6_voiceink() {
+gesture_voiceink() {
   local b first
-  b="$(m6_blockers)"
+  b="$(voiceink_blockers)"
   [ -n "$b" ] || return 0
   first="${b%%$'\n'*}"
   # The signing gesture names a program that must exist before it is named. Materialising it here
   # is the only place in the verb set that can: install_ never runs while the module is gated.
   # It writes only under $BOOTSTRAP_STATE_DIR and is idempotent. Recorded in contract_deviations.
-  [ "$first" = signing ] && m6_write_signing_script
-  m6_write_steps
-  m6_blocker_gesture "$first"
+  [ "$first" = signing ] && voiceink_write_signing_script
+  voiceink_write_steps
+  voiceink_blocker_gesture "$first"
   return 0
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # the human-steps file — the per-gesture record the one-row receipt cannot hold
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-m6_write_steps() {
+voiceink_write_steps() {
   local f blockers
-  f="$(m6_steps_file)"
+  f="$(voiceink_steps_file)"
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
-  blockers="$(m6_blockers)"
+  blockers="$(voiceink_blockers)"
   {
-    printf 'VoiceInk (m6) — every step that needs a human.\n'
+    printf 'VoiceInk (voiceink) — every step that needs a human.\n'
     printf 'Written %s. Re-read it after each bootstrap run; it is regenerated, not appended.\n' "$(date -u +%FT%TZ)"
     printf '\nBEFORE THE BUILD — each one blocks it. Status is read from this machine, now.\n\n'
-    m6_step_row cmake       "$blockers" 'Install cmake. whisper.cpp does not build without it, and cmake is on NO stock Mac: not in /usr/bin, not in Xcode, not in CommandLineTools. If Homebrew is absent too, install it first — its installer asks for your password and a RETURN.'
-    m6_step_row xcode       "$blockers" 'Install the full Xcode (~9 GB). Needs an Apple ID and the App Store. Command Line Tools are NOT enough: xcodebuild and the macOS SDK ship only with Xcode.'
-    m6_step_row license     "$blockers" 'Accept the Xcode licence. Needs root.'
-    m6_step_row xcodeselect "$blockers" 'Point xcode-select at Xcode rather than CommandLineTools. Needs root.'
-    m6_step_row signing     "$blockers" 'Create the code-signing identity. This bootstrap will not create it for you: it writes a private key into your login keychain and a Code Signing trust setting, and the trust step MAY raise a "security wants to modify your Trust Settings" password dialog. The script below is idempotent, verifies itself by a different call than the one that made each change, and asks once before it writes anything. WHY IT MATTERS: with no certificate the app can only be signed ad-hoc, the designated requirement becomes the cdhash, and macOS silently revokes Microphone and Accessibility on EVERY rebuild. With it, you grant them once, ever.'
+    voiceink_step_row cmake       "$blockers" 'Install cmake. whisper.cpp does not build without it, and cmake is on NO stock Mac: not in /usr/bin, not in Xcode, not in CommandLineTools. If Homebrew is absent too, install it first — its installer asks for your password and a RETURN.'
+    voiceink_step_row xcode       "$blockers" 'Install the full Xcode (~9 GB). Needs an Apple ID and the App Store. Command Line Tools are NOT enough: xcodebuild and the macOS SDK ship only with Xcode.'
+    voiceink_step_row license     "$blockers" 'Accept the Xcode licence. Needs root.'
+    voiceink_step_row xcodeselect "$blockers" 'Point xcode-select at Xcode rather than CommandLineTools. Needs root.'
+    voiceink_step_row signing     "$blockers" 'Create the code-signing identity. This bootstrap will not create it for you: it writes a private key into your login keychain and a Code Signing trust setting, and the trust step MAY raise a "security wants to modify your Trust Settings" password dialog. The script below is idempotent, verifies itself by a different call than the one that made each change, and asks once before it writes anything. WHY IT MATTERS: with no certificate the app can only be signed ad-hoc, the designated requirement becomes the cdhash, and macOS silently revokes Microphone and Accessibility on EVERY rebuild. With it, you grant them once, ever.'
     printf '\nAFTER THE BUILD — macOS requires a human gesture and there is no CLI for any of them.\n'
     printf 'This module cannot read the TCC database (it is SIP-protected), so it does not claim\n'
-    printf 'these are done. They are not part of what "m6 SATISFIED" asserts.\n\n'
+    printf 'these are done. They are not part of what "voiceink SATISFIED" asserts.\n\n'
     printf '  [ ] MICROPHONE       VoiceInk shows the system prompt the first time you record. Click OK.\n'
     printf '                       No CLI can pre-grant this.\n\n'
     printf '  [ ] ACCESSIBILITY    Required for the global hotkey and for pasting. The app can open the\n'
@@ -455,7 +455,7 @@ m6_write_steps() {
   return 0
 }
 
-m6_step_row() {                                  # m6_step_row <id> <blockers> <english>
+voiceink_step_row() {                                  # voiceink_step_row <id> <blockers> <english>
   local mark='x'
   case "
 $2
@@ -463,7 +463,7 @@ $2
 $1
 "*) mark=' ' ;; esac
   printf '  [%s] %s\n' "$mark" "$3"
-  [ "$mark" = ' ' ] && printf '      run: %s\n' "$(m6_blocker_gesture "$1")"
+  [ "$mark" = ' ' ] && printf '      run: %s\n' "$(voiceink_blocker_gesture "$1")"
   printf '\n'
   return 0
 }
@@ -471,13 +471,13 @@ $1
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # the operator's signing program — generated, never run by us
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-m6_write_signing_script() {
+voiceink_write_signing_script() {
   local f
-  f="$(m6_sign_script)"
+  f="$(voiceink_sign_script)"
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
   cat > "$f.tmp.$$" <<'M6SIGN'
 #!/bin/bash
-# m6-signing-identity.sh — create the ONE credential the bootstrap will not create for you.
+# voiceink-signing-identity.sh — create the ONE credential the bootstrap will not create for you.
 #
 # WHAT IT DOES, in order, and how each step is verified:
 #   1. mints a 10-year self-signed code-signing certificate with openssl, in a private temp dir
@@ -508,9 +508,9 @@ m6_write_signing_script() {
 # The private key never leaves a mode-700 temp directory and is deleted on exit, including on
 # failure. Nothing here touches permissions, allowlists, or any agent configuration.
 #
-#   bash ~/.mac-bootstrap/m6-signing-identity.sh          # asks once, then does everything
-#   bash ~/.mac-bootstrap/m6-signing-identity.sh --yes    # no question (for a scripted setup)
-#   bash ~/.mac-bootstrap/m6-signing-identity.sh --check  # report only, change nothing
+#   bash ~/.mac-bootstrap/voiceink-signing-identity.sh          # asks once, then does everything
+#   bash ~/.mac-bootstrap/voiceink-signing-identity.sh --yes    # no question (for a scripted setup)
+#   bash ~/.mac-bootstrap/voiceink-signing-identity.sh --check  # report only, change nothing
 set -u
 
 CN="${VOICEINK_CERT_CN:-__CERT_CN__}"
@@ -623,9 +623,9 @@ case "$PRE_OUT" in
 esac
 mkdir -p "$WORK/Probe.app/Contents/MacOS"
 cp /bin/echo "$WORK/Probe.app/Contents/MacOS/Probe"
-printf '%s' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Probe</string><key>CFBundleIdentifier</key><string>local.m6.probe</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>' \
+printf '%s' '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Probe</string><key>CFBundleIdentifier</key><string>local.voiceink.probe</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>' \
   > "$WORK/Probe.app/Contents/Info.plist"
-if "$CODESIGN" --force --sign "$CN" --identifier local.m6.probe "$WORK/Probe.app" >/dev/null 2>&1; then
+if "$CODESIGN" --force --sign "$CN" --identifier local.voiceink.probe "$WORK/Probe.app" >/dev/null 2>&1; then
   warn "codesign already accepts this identity before trust was granted."
 else
   ok "codesign refuses the identity before trust is granted (rc 1), as expected"
@@ -644,7 +644,7 @@ ok "the leaf IS the certificate's own SHA-1 fingerprint"
 
 say "7. end-to-end proof: sign something and read the designated requirement"
 rm -rf "$WORK/Probe.app/Contents/_CodeSignature"
-"$CODESIGN" --force --sign "$CN" --identifier local.m6.probe --timestamp=none "$WORK/Probe.app" >/dev/null 2>&1 \
+"$CODESIGN" --force --sign "$CN" --identifier local.voiceink.probe --timestamp=none "$WORK/Probe.app" >/dev/null 2>&1 \
   || die "codesign still cannot use this identity."
 DR="$("$CODESIGN" -d -r- "$WORK/Probe.app" 2>&1 | /usr/bin/awk '/designated =>/{print;exit}')"
 case "$DR" in
@@ -659,7 +659,7 @@ cat <<DONE
 ------------------------------------------------------------------
 Done. "$CN" is a valid code-signing identity, leaf $LEAF.
 
-Next:   bash bootstrap.sh --only m6_voiceink
+Next:   bash bootstrap.sh --only voiceink
 
 To undo:  security delete-identity -c "$CN" "$HOME/Library/Keychains/login.keychain-db"
 ------------------------------------------------------------------
@@ -677,41 +677,41 @@ M6SIGN
 # install
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
-m6_preflight() {
+voiceink_preflight() {
   local osv maj minr free
-  [ "$(uname -s)" = Darwin ] || { printf 'm6: macOS only.\n'; return 1; }
+  [ "$(uname -s)" = Darwin ] || { printf 'voiceink: macOS only.\n'; return 1; }
   osv="$(/usr/bin/sw_vers -productVersion 2>/dev/null)" || osv=""
   maj="${osv%%.*}"; minr="${osv#*.}"; minr="${minr%%.*}"
   case "${maj:-0}" in ''|*[!0-9]*) maj=0 ;; esac
   case "${minr:-0}" in ''|*[!0-9]*) minr=0 ;; esac
   if [ "$maj" -lt 14 ] || { [ "$maj" -eq 14 ] && [ "$minr" -lt 4 ]; }; then
-    printf 'm6: macOS 14.4 or later is required by the project deployment target; found %s\n' "$osv"
+    printf 'voiceink: macOS 14.4 or later is required by the project deployment target; found %s\n' "$osv"
     return 1
   fi
-  command -v git >/dev/null 2>&1   || { printf 'm6: git is missing.\n'; return 1; }
-  command -v swift >/dev/null 2>&1 || { printf 'm6: swift is missing (Xcode toolchain).\n'; return 1; }
+  command -v git >/dev/null 2>&1   || { printf 'voiceink: git is missing.\n'; return 1; }
+  command -v swift >/dev/null 2>&1 || { printf 'voiceink: swift is missing (Xcode toolchain).\n'; return 1; }
   free="$(/bin/df -g "$HOME" 2>/dev/null | /usr/bin/awk 'NR==2{print $4}')" || free=""
   case "${free:-x}" in
-    ''|*[!0-9]*) printf 'm6: could not read free disk space; continuing.\n' ;;
+    ''|*[!0-9]*) printf 'voiceink: could not read free disk space; continuing.\n' ;;
     *) [ "$free" -ge "$BOOTSTRAP_VOICEINK_MIN_FREE_GB" ] \
-         || printf 'm6: WARNING only %s GB free; a full build plus a model needs about %s GB.\n' \
+         || printf 'voiceink: WARNING only %s GB free; a full build plus a model needs about %s GB.\n' \
               "$free" "$BOOTSTRAP_VOICEINK_MIN_FREE_GB" ;;
   esac
-  printf 'm6: preflight ok — macOS %s, cmake %s\n' "$osv" "$(m6_cmake)"
+  printf 'voiceink: preflight ok — macOS %s, cmake %s\n' "$osv" "$(voiceink_cmake)"
   return 0
 }
 
 # R4: TAKE the lock, do not merely wait on one. This module installs no launchd job, but a
 # keepalive agent left from an earlier setup relaunches VoiceInk the instant pkill returns, and
 # it would do so in the middle of a 91 MB bundle move.
-m6_lock_take() {
+voiceink_lock_take() {
   local pid
   if [ -f "$BOOTSTRAP_VOICEINK_LOCK" ]; then
     pid="$(cat "$BOOTSTRAP_VOICEINK_LOCK" 2>/dev/null)" || pid=""
     case "${pid:-x}" in
       ''|*[!0-9]*) : ;;
       *) if [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null; then
-           printf 'm6: another VoiceInk build holds %s (pid %s). Not racing it.\n' "$BOOTSTRAP_VOICEINK_LOCK" "$pid"
+           printf 'voiceink: another VoiceInk build holds %s (pid %s). Not racing it.\n' "$BOOTSTRAP_VOICEINK_LOCK" "$pid"
            return 1
          fi ;;
     esac
@@ -719,7 +719,7 @@ m6_lock_take() {
   printf '%s' "$$" > "$BOOTSTRAP_VOICEINK_LOCK" 2>/dev/null || return 0
   return 0
 }
-m6_lock_free() {
+voiceink_lock_free() {
   local pid
   pid="$(cat "$BOOTSTRAP_VOICEINK_LOCK" 2>/dev/null)" || pid=""
   [ "$pid" = "$$" ] && rm -f "$BOOTSTRAP_VOICEINK_LOCK" 2>/dev/null
@@ -731,23 +731,23 @@ m6_lock_free() {
 # pbxproj's $(HOME)-relative file reference expects. Must run BEFORE `make local` (R8): the
 # Makefile's whisper target is guarded by `if [ ! -d "$(FRAMEWORK_PATH)" ]`, so getting there
 # first is what stops the 7-platform build from running at all.
-m6_build_whisper() {
+voiceink_build_whisper() {
   local fw="$BOOTSTRAP_VOICEINK_DEPS/whisper.cpp/build-apple/whisper.xcframework"
   local wd="$BOOTSTRAP_VOICEINK_DEPS/whisper.cpp" cm
   if [ -d "$fw/macos-arm64_x86_64" ]; then
-    printf 'm6: whisper framework already present at %s\n' "$fw"
+    printf 'voiceink: whisper framework already present at %s\n' "$fw"
     return 0
   fi
-  cm="$(m6_cmake)" || { printf 'm6: cmake is missing.\n'; return 1; }
+  cm="$(voiceink_cmake)" || { printf 'voiceink: cmake is missing.\n'; return 1; }
   mkdir -p "$BOOTSTRAP_VOICEINK_DEPS" || return 1
   if [ ! -d "$wd/.git" ]; then
-    printf 'm6: cloning whisper.cpp\n'
-    git clone "$BOOTSTRAP_VOICEINK_WHISPER_URL" "$wd" || { printf 'm6: whisper clone failed.\n'; return 1; }
+    printf 'voiceink: cloning whisper.cpp\n'
+    git clone "$BOOTSTRAP_VOICEINK_WHISPER_URL" "$wd" || { printf 'voiceink: whisper clone failed.\n'; return 1; }
   fi
   git -C "$wd" fetch --all --tags --quiet 2>/dev/null
   git -C "$wd" checkout --quiet "$BOOTSTRAP_VOICEINK_WHISPER_PIN" || {
-    printf 'm6: cannot check out pinned whisper sha %s\n' "$BOOTSTRAP_VOICEINK_WHISPER_PIN"; return 1; }
-  printf 'm6: whisper.cpp at %s\n' "$BOOTSTRAP_VOICEINK_WHISPER_PIN"
+    printf 'voiceink: cannot check out pinned whisper sha %s\n' "$BOOTSTRAP_VOICEINK_WHISPER_PIN"; return 1; }
+  printf 'voiceink: whisper.cpp at %s\n' "$BOOTSTRAP_VOICEINK_WHISPER_PIN"
 
   (
     set -e
@@ -827,28 +827,28 @@ M6PL
       -o "$F/Versions/A/whisper"
     mkdir -p build-apple
     xcodebuild -create-xcframework -framework "$F" -output build-apple/whisper.xcframework
-  ) || { printf 'm6: whisper.cpp build failed.\n'; return 1; }
+  ) || { printf 'voiceink: whisper.cpp build failed.\n'; return 1; }
 
   # The artifact, not the exit code.
   [ -d "$fw/macos-arm64_x86_64" ] \
-    || { printf 'm6: whisper build reported success but %s has no macOS slice.\n' "$fw"; return 1; }
-  printf 'm6: whisper framework built at %s\n' "$fw"
+    || { printf 'voiceink: whisper build reported success but %s has no macOS slice.\n' "$fw"; return 1; }
+  printf 'voiceink: whisper framework built at %s\n' "$fw"
   return 0
 }
 
 # Step 3. Upstream source at a release tag.
-m6_fetch_source() {
+voiceink_fetch_source() {
   local src="$BOOTSTRAP_VOICEINK_SRC" tag="$BOOTSTRAP_VOICEINK_TAG" pf rel
   if [ ! -d "$src/.git" ]; then
     mkdir -p "$(dirname "$src")" || return 1
-    printf 'm6: cloning %s\n' "$BOOTSTRAP_VOICEINK_UPSTREAM"
-    git clone "$BOOTSTRAP_VOICEINK_UPSTREAM" "$src" || { printf 'm6: clone failed.\n'; return 1; }
+    printf 'voiceink: cloning %s\n' "$BOOTSTRAP_VOICEINK_UPSTREAM"
+    git clone "$BOOTSTRAP_VOICEINK_UPSTREAM" "$src" || { printf 'voiceink: clone failed.\n'; return 1; }
   fi
-  git -C "$src" fetch origin --tags --quiet || { printf 'm6: fetch failed.\n'; return 1; }
+  git -C "$src" fetch origin --tags --quiet || { printf 'voiceink: fetch failed.\n'; return 1; }
   # A previous run's contingency patch dirtied the tree. Those edits are OURS and are recorded,
   # so reset exactly those paths — otherwise the refusal below fires on every later run and the
   # module is permanently FAILED by its own repair.
-  pf="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/m6-patched-paths"
+  pf="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/voiceink-patched-paths"
   if [ -s "$pf" ]; then
     while IFS= read -r rel; do
       [ -n "$rel" ] || continue
@@ -856,18 +856,18 @@ m6_fetch_source() {
       rm -f "$src/$rel.mac-bootstrap-backup" 2>/dev/null
     done < "$pf"
     rm -f "$pf"
-    printf 'm6: reset the path(s) a previous contingency patch had modified\n'
+    printf 'voiceink: reset the path(s) a previous contingency patch had modified\n'
   fi
   if [ "$tag" = latest ]; then
     tag="$(git -C "$src" describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*beta*' origin/main 2>/dev/null)" || tag=""
-    [ -n "$tag" ] || { printf 'm6: no stable release tag on origin/main.\n'; return 1; }
+    [ -n "$tag" ] || { printf 'voiceink: no stable release tag on origin/main.\n'; return 1; }
   fi
   if ! git -C "$src" diff --quiet || ! git -C "$src" diff --cached --quiet; then
-    printf 'm6: %s has uncommitted changes; refusing to move it. Commit or stash, then re-run.\n' "$src"
+    printf 'voiceink: %s has uncommitted changes; refusing to move it. Commit or stash, then re-run.\n' "$src"
     return 1
   fi
-  git -C "$src" checkout --quiet "$tag" || { printf 'm6: checkout %s failed.\n' "$tag"; return 1; }
-  printf 'm6: source at %s (%s)\n' "$tag" "$(git -C "$src" rev-parse --short HEAD 2>/dev/null)"
+  git -C "$src" checkout --quiet "$tag" || { printf 'voiceink: checkout %s failed.\n' "$tag"; return 1; }
+  printf 'voiceink: source at %s (%s)\n' "$tag" "$(git -C "$src" rev-parse --short HEAD 2>/dev/null)"
   return 0
 }
 
@@ -878,22 +878,22 @@ m6_fetch_source() {
 # would report a false absence. If the bypass is ever removed upstream, the contingency patch
 # below runs and is RE-ASSERTED afterwards — sed exits 0 when it substitutes nothing, which is
 # precisely how the fork's own apply-local-mods.sh became a no-op that printed success.
-m6_assert_license_bypass() {
+voiceink_assert_license_bypass() {
   local src="$BOOTSTRAP_VOICEINK_SRC/VoiceInk" f
   grep -rq --include='*.swift' -e 'LOCAL_BUILD' "$src" 2>/dev/null || {
-    printf 'm6: no LOCAL_BUILD conditionals in this tag — the local-build path is gone upstream.\n'
+    printf 'voiceink: no LOCAL_BUILD conditionals in this tag — the local-build path is gone upstream.\n'
     return 1; }
   if grep -rq --include='*.swift' -e 'licenseState = .licensed' "$src" 2>/dev/null; then
-    printf 'm6: LOCAL_BUILD licence bypass present upstream — nothing to patch\n'
+    printf 'voiceink: LOCAL_BUILD licence bypass present upstream — nothing to patch\n'
     return 0
   fi
-  printf 'm6: the upstream LOCAL_BUILD licence bypass is ABSENT in this tag.\n'
+  printf 'voiceink: the upstream LOCAL_BUILD licence bypass is ABSENT in this tag.\n'
   [ "$BOOTSTRAP_VOICEINK_ALLOW_PATCH" = 1 ] || {
-    printf 'm6: BOOTSTRAP_VOICEINK_ALLOW_PATCH=0, so refusing to build a trial-gated app.\n'; return 1; }
+    printf 'voiceink: BOOTSTRAP_VOICEINK_ALLOW_PATCH=0, so refusing to build a trial-gated app.\n'; return 1; }
   f="$(grep -rl --include='*.swift' -e 'licenseState: LicenseState' "$src" 2>/dev/null)" || f=""
   f="${f%%$'\n'*}"
-  [ -n "$f" ] || { printf 'm6: cannot locate the licence state declaration to patch.\n'; return 1; }
-  printf 'm6: applying the contingency patch to %s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}"
+  [ -n "$f" ] || { printf 'voiceink: cannot locate the licence state declaration to patch.\n'; return 1; }
+  printf 'voiceink: applying the contingency patch to %s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}"
   cp "$f" "$f.mac-bootstrap-backup" 2>/dev/null || return 1
   # Any initialiser, not just `.trial(...)`: at v2.13 the declaration reads `= .unlicensed`, and a
   # regex pinned to the 2025-era `.trial(daysRemaining: 7)` shape matches nothing — which is
@@ -905,20 +905,20 @@ m6_assert_license_bypass() {
   if grep -q 'licenseState: LicenseState = .licensed' "$f" 2>/dev/null; then
     rm -f "$f.mac-bootstrap-backup" 2>/dev/null
     # Record it, so the next run resets exactly this path instead of refusing a tree WE dirtied.
-    printf '%s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}" >> "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/m6-patched-paths"
-    printf 'm6: patch applied and re-asserted at %s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}"
-    printf 'm6: WARNING this is a ONE-SITE best effort. The historical licence removal touched three\n'
-    printf 'm6: sites. Check in the app that it is not trial-gated before trusting this build.\n'
+    printf '%s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}" >> "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/voiceink-patched-paths"
+    printf 'voiceink: patch applied and re-asserted at %s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}"
+    printf 'voiceink: WARNING this is a ONE-SITE best effort. The historical licence removal touched three\n'
+    printf 'voiceink: sites. Check in the app that it is not trial-gated before trusting this build.\n'
     return 0
   fi
   mv -f "$f.mac-bootstrap-backup" "$f" 2>/dev/null
   rm -f "$f.mac-bootstrap-backup" 2>/dev/null
-  printf 'm6: the contingency patch matched nothing; the source was restored. Re-read upstream.\n'
+  printf 'voiceink: the contingency patch matched nothing; the source was restored. Re-read upstream.\n'
   return 1
 }
 
 # R2. Read the configuration out of the Makefile's own `local:` target rather than asserting one.
-m6_make_config() {
+voiceink_make_config() {
   local mk="$BOOTSTRAP_VOICEINK_SRC/Makefile" seg cfg
   [ -r "$mk" ] && {
     seg="$(/usr/bin/awk '/^local:/{f=1;next} f&&/^[A-Za-z_][A-Za-z_0-9]*:/{f=0} f' "$mk")"
@@ -929,7 +929,7 @@ m6_make_config() {
   printf '%s' "$cfg"
 }
 
-m6_derived_data() {
+voiceink_derived_data() {
   local mk="$BOOTSTRAP_VOICEINK_SRC/Makefile" v
   v=""
   [ -r "$mk" ] && {
@@ -942,9 +942,9 @@ m6_derived_data() {
   case "$v" in /*) printf '%s' "$v" ;; *) printf '%s/%s' "$BOOTSTRAP_VOICEINK_SRC" "$v" ;; esac
 }
 
-m6_find_built_app() {
+voiceink_find_built_app() {
   local dd c
-  dd="$(m6_derived_data)"
+  dd="$(voiceink_derived_data)"
   for c in "$dd/Build/Products/Release/VoiceInk.app" "$dd/Build/Products/Debug/VoiceInk.app"; do
     [ -d "$c" ] && { printf '%s' "$c"; return 0; }
   done
@@ -955,24 +955,24 @@ m6_find_built_app() {
 # its SIGNING_REQUIRED=YES branch with no patching of upstream at all. NOBODY HAS EVER EXECUTED
 # THIS. It is not presented as proven; whether it worked is decided afterwards, from the
 # artifact's designated requirement, by install_.
-m6_build_primary() {
+voiceink_build_primary() {
   local cn="$1" cfg
-  cfg="$(m6_make_config)"
-  printf 'm6: building with the upstream make local target, configuration %s, read out of this tag Makefile. Identity "%s".\n' "$cfg" "$cn"
-  printf 'm6: first run is roughly 10-20 minutes — SPM fetches about 700 MB.\n'
+  cfg="$(voiceink_make_config)"
+  printf 'voiceink: building with the upstream make local target, configuration %s, read out of this tag Makefile. Identity "%s".\n' "$cfg" "$cn"
+  printf 'voiceink: first run is roughly 10-20 minutes — SPM fetches about 700 MB.\n'
   ( cd "$BOOTSTRAP_VOICEINK_SRC" && LOCAL_CODESIGN_IDENTITY="$cn" make local )
 }
 
 # FALLBACK BUILD (R0): the shape the only working local build on the source machine actually
 # uses — signing turned OFF in xcodebuild, re-signed by hand afterwards. Reached only when the
 # primary path produced no app at all.
-m6_build_unsigned() {
+voiceink_build_unsigned() {
   local cfg dd ent
-  cfg="$(m6_make_config)"; [ "$cfg" = unknown ] && cfg=Release
-  dd="$(m6_derived_data)"
+  cfg="$(voiceink_make_config)"; [ "$cfg" = unknown ] && cfg=Release
+  dd="$(voiceink_derived_data)"
   ent="$BOOTSTRAP_VOICEINK_SRC/VoiceInk/VoiceInk.local.entitlements"
-  [ -r "$ent" ] || { printf 'm6: %s is missing; cannot build without a team prefix.\n' "$ent"; return 1; }
-  printf 'm6: fallback build — CODE_SIGNING_ALLOWED=NO, configuration %s, re-signed afterwards\n' "$cfg"
+  [ -r "$ent" ] || { printf 'voiceink: %s is missing; cannot build without a team prefix.\n' "$ent"; return 1; }
+  printf 'voiceink: fallback build — CODE_SIGNING_ALLOWED=NO, configuration %s, re-signed afterwards\n' "$cfg"
   # shellcheck disable=SC2016  # $(inherited) is an xcodebuild build-setting reference and MUST
   # reach xcodebuild as those nine literal characters; expanding it here would drop every
   # inherited compilation condition and silently build something else.
@@ -993,51 +993,51 @@ m6_build_unsigned() {
 # verified on the live bundle, where it yields exactly those eight items in nesting order.
 # `-type d` matters: Sparkle.framework/Updater.app is a SYMLINK into Versions/Current and
 # codesign cannot sign a symlink.
-m6_resign_inside_out() {
+voiceink_resign_inside_out() {
   local app="$1" cn="$2" ent p n=0
   ent="$BOOTSTRAP_VOICEINK_SRC/VoiceInk/VoiceInk.local.entitlements"
-  [ -r "$ent" ] || { printf 'm6: %s is missing; cannot re-sign.\n' "$ent"; return 1; }
-  printf 'm6: re-signing inside-out with "%s"\n' "$cn"
+  [ -r "$ent" ] || { printf 'voiceink: %s is missing; cannot re-sign.\n' "$ent"; return 1; }
+  printf 'voiceink: re-signing inside-out with "%s"\n' "$cn"
   while IFS= read -r -d '' p; do
     /usr/bin/codesign --force --sign "$cn" --timestamp=none "$p" >/dev/null 2>&1 || {
-      printf 'm6: codesign failed on %s\n' "${p#"$app"/}"; return 1; }
+      printf 'voiceink: codesign failed on %s\n' "${p#"$app"/}"; return 1; }
     n=$((n + 1))
   done < <(/usr/bin/find "$app/Contents" -depth -type d \
              \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' -o -name '*.bundle' \) -print0 2>/dev/null)
-  printf 'm6: re-signed %s nested bundle(s)\n' "$n"
+  printf 'voiceink: re-signed %s nested bundle(s)\n' "$n"
   /usr/bin/codesign --force --sign "$cn" --timestamp=none \
       --entitlements "$ent" --identifier "$BOOTSTRAP_VOICEINK_BUNDLE_ID" "$app" >/dev/null 2>&1 \
-    || { printf 'm6: codesign failed on the app bundle.\n'; return 1; }
+    || { printf 'voiceink: codesign failed on the app bundle.\n'; return 1; }
   /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 \
-    || { printf 'm6: the re-signed bundle does not verify.\n'; return 1; }
+    || { printf 'voiceink: the re-signed bundle does not verify.\n'; return 1; }
   return 0
 }
 
 # Does this bundle's DR name the leaf of the identity we are signing with?
-m6_dr_pins_leaf() {
+voiceink_requirement_pins_leaf() {
   local dr leaf want
-  want="$(m6_leaf_for_cn "$2")" || return 1
-  dr="$(m6_app_dr "$1")" || return 1
-  case "$dr" in *cdhash*) printf 'm6: designated requirement is cdhash-pinned (ad-hoc): %s\n' "$dr"; return 1 ;; esac
-  leaf="$(m6_dr_leaf "$dr")" || { printf 'm6: unrecognised designated requirement: %s\n' "$dr"; return 1; }
-  [ "$leaf" = "$want" ] || { printf 'm6: designated requirement names leaf %s, identity "%s" is %s\n' "$leaf" "$2" "$want"; return 1; }
-  printf 'm6: designated requirement pins the certificate leaf — TCC grants survive rebuilds\n'
+  want="$(voiceink_leaf_for_cn "$2")" || return 1
+  dr="$(voiceink_app_requirement "$1")" || return 1
+  case "$dr" in *cdhash*) printf 'voiceink: designated requirement is cdhash-pinned (ad-hoc): %s\n' "$dr"; return 1 ;; esac
+  leaf="$(voiceink_requirement_leaf "$dr")" || { printf 'voiceink: unrecognised designated requirement: %s\n' "$dr"; return 1; }
+  [ "$leaf" = "$want" ] || { printf 'voiceink: designated requirement names leaf %s, identity "%s" is %s\n' "$leaf" "$2" "$want"; return 1; }
+  printf 'voiceink: designated requirement pins the certificate leaf — TCC grants survive rebuilds\n'
   return 0
 }
 
-m6_deploy() {
+voiceink_deploy() {
   local built="$1" app="$BOOTSTRAP_VOICEINK_APP"
   mkdir -p "$HOME/Applications" || return 1
   /usr/bin/pkill -x VoiceInk 2>/dev/null && sleep 1
   if [ -d "$app" ]; then rm -rf "$app.mac-bootstrap-previous"; mv "$app" "$app.mac-bootstrap-previous" || return 1; fi
   if ! /usr/bin/ditto "$built" "$app"; then
-    printf 'm6: ditto failed.\n'
-    [ -d "$app.mac-bootstrap-previous" ] && { rm -rf "$app"; mv "$app.mac-bootstrap-previous" "$app"; printf 'm6: previous build restored.\n'; }
+    printf 'voiceink: ditto failed.\n'
+    [ -d "$app.mac-bootstrap-previous" ] && { rm -rf "$app"; mv "$app.mac-bootstrap-previous" "$app"; printf 'voiceink: previous build restored.\n'; }
     return 1
   fi
   rm -rf "$app.mac-bootstrap-previous"
   /usr/bin/xattr -cr "$app" 2>/dev/null || true
-  printf 'm6: deployed to %s\n' "$app"
+  printf 'voiceink: deployed to %s\n' "$app"
   return 0
 }
 
@@ -1047,91 +1047,91 @@ m6_deploy() {
 # migration source UpdaterViewModel.initialAutomaticCheckPreference reads out of UserDefaults
 # into its own key VoiceInkChecksForUpdatesOnLaunch, which defaults to TRUE when both are
 # absent. It must therefore run BEFORE the first launch.
-m6_sparkle_off() {
+voiceink_sparkle_off() {
   local v
   /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks -bool false 2>/dev/null
   /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUAutomaticallyUpdate -bool false 2>/dev/null
   v="$(/usr/bin/defaults read "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks 2>/dev/null)" || v=""
   if [ "$v" = 0 ]; then
-    printf 'm6: Sparkle automatic checks disabled before first launch\n'
+    printf 'voiceink: Sparkle automatic checks disabled before first launch\n'
   else
-    printf 'm6: WARNING could not confirm Sparkle auto-checks are off (read back "%s")\n' "$v"
+    printf 'voiceink: WARNING could not confirm Sparkle auto-checks are off (read back "%s")\n' "$v"
   fi
   return 0
 }
 
-install_m6_voiceink() {
+install_voiceink() {
   local cn built rc
-  m6_write_steps
+  voiceink_write_steps
 
   # 1. THE CREDENTIAL GATE, FIRST, before a single expensive step. This module never mints the
   #    identity; it hands over a program. Returning non-zero here sends the driver back to
   #    gate_, which is the contract's own path for a gate an installer discovers.
-  if ! cn="$(m6_identity_cn)"; then
-    m6_write_signing_script
-    printf 'm6: no code-signing identity. Not creating one — that is a keychain credential write\n'
-    printf 'm6: and a trust dialog, both of which are yours. Run:\n'
-    printf 'm6:   bash ~/.mac-bootstrap/m6-signing-identity.sh\n'
+  if ! cn="$(voiceink_identity_cn)"; then
+    voiceink_write_signing_script
+    printf 'voiceink: no code-signing identity. Not creating one — that is a keychain credential write\n'
+    printf 'voiceink: and a trust dialog, both of which are yours. Run:\n'
+    printf 'voiceink:   bash ~/.mac-bootstrap/voiceink-signing-identity.sh\n'
     return 1
   fi
-  printf 'm6: signing identity "%s" (leaf %s)\n' "$cn" "$(m6_leaf_for_cn "$cn")"
+  printf 'voiceink: signing identity "%s" (leaf %s)\n' "$cn" "$(voiceink_leaf_for_cn "$cn")"
 
-  m6_preflight || return 1
+  voiceink_preflight || return 1
 
   # 2. whisper BEFORE make local (R8) — the Makefile's whisper target is guarded on this path
   #    existing, so arriving first is what prevents the 7-platform build.
-  m6_build_whisper || return 1
+  voiceink_build_whisper || return 1
 
   # 3. source + the licence assertion
-  m6_fetch_source || return 1
-  m6_assert_license_bypass || return 1
+  voiceink_fetch_source || return 1
+  voiceink_assert_license_bypass || return 1
 
   # 4. build. Primary is upstream's seam; the branch is decided from the artifact, below.
-  m6_build_primary "$cn"; rc=$?
+  voiceink_build_primary "$cn"; rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf 'm6: the make local target exited %s — trying the measured fallback build.\n' "$rc"
+    printf 'voiceink: the make local target exited %s — trying the measured fallback build.\n' "$rc"
   fi
-  if ! built="$(m6_find_built_app)"; then
-    m6_build_unsigned || { printf 'm6: both the primary and the fallback build failed.\n'; return 1; }
-    built="$(m6_find_built_app)" || { printf 'm6: no VoiceInk.app was produced.\n'; return 1; }
+  if ! built="$(voiceink_find_built_app)"; then
+    voiceink_build_unsigned || { printf 'voiceink: both the primary and the fallback build failed.\n'; return 1; }
+    built="$(voiceink_find_built_app)" || { printf 'voiceink: no VoiceInk.app was produced.\n'; return 1; }
   fi
   case "$built" in
-    */Release/*) printf 'm6: built %s (configuration Release)\n' "$built" ;;
-    */Debug/*)   printf 'm6: built %s (configuration DEBUG — this tag'"'"'s Makefile asks for Debug; the Release switch is in the commits after it)\n' "$built" ;;
-    *)           printf 'm6: built %s\n' "$built" ;;
+    */Release/*) printf 'voiceink: built %s (configuration Release)\n' "$built" ;;
+    */Debug/*)   printf 'voiceink: built %s (configuration DEBUG — this tag'"'"'s Makefile asks for Debug; the Release switch is in the commits after it)\n' "$built" ;;
+    *)           printf 'voiceink: built %s\n' "$built" ;;
   esac
 
   # 5. THE BRANCH. If the primary path did not actually sign with our identity — and nobody has
   #    ever measured that it does — re-sign inside-out on the built bundle. No rebuild: the bytes
   #    are fine, only the signature is wrong.
-  if ! m6_dr_pins_leaf "$built" "$cn"; then
-    printf 'm6: the primary signing path did not take. Falling back to the measured inside-out re-sign.\n'
-    m6_resign_inside_out "$built" "$cn" || return 1
-    m6_dr_pins_leaf "$built" "$cn" || {
-      printf 'm6: even after re-signing the designated requirement is wrong. Stopping rather than\n'
-      printf 'm6: deploying a build whose TCC grants would be revoked on every rebuild.\n'
+  if ! voiceink_requirement_pins_leaf "$built" "$cn"; then
+    printf 'voiceink: the primary signing path did not take. Falling back to the measured inside-out re-sign.\n'
+    voiceink_resign_inside_out "$built" "$cn" || return 1
+    voiceink_requirement_pins_leaf "$built" "$cn" || {
+      printf 'voiceink: even after re-signing the designated requirement is wrong. Stopping rather than\n'
+      printf 'voiceink: deploying a build whose TCC grants would be revoked on every rebuild.\n'
       return 1; }
   fi
 
   # 6. deploy, under the lock (R4)
-  m6_lock_take || return 1
-  m6_deploy "$built"; rc=$?
-  m6_lock_free
+  voiceink_lock_take || return 1
+  voiceink_deploy "$built"; rc=$?
+  voiceink_lock_free
   [ "$rc" -eq 0 ] || return 1
 
   # 7. Sparkle, before the first launch
-  m6_sparkle_off
+  voiceink_sparkle_off
 
   # 8. liveness. No launchd job is installed: the private repo's keepalive and autoupdate agents
   #    are deliberately not reproduced.
   if [ "$BOOTSTRAP_VOICEINK_LAUNCH" = 1 ]; then
-    m6_liveness || { printf 'm6: VoiceInk did not stay up. Check Console.app for a crash report.\n'; return 1; }
-    printf 'm6: running and stable\n'
+    voiceink_liveness || { printf 'voiceink: VoiceInk did not stay up. Check Console.app for a crash report.\n'; return 1; }
+    printf 'voiceink: running and stable\n'
   fi
 
-  m6_write_steps
+  voiceink_write_steps
   printf '\n'
-  /bin/cat "$(m6_steps_file)" 2>/dev/null
+  /bin/cat "$(voiceink_steps_file)" 2>/dev/null
   return 0
 }
 
@@ -1143,20 +1143,20 @@ install_m6_voiceink() {
 # and about 150 MB of re-download. The one command to remove them is printed instead.
 # It removes the signing identity ONLY when that identity is the one our generated script would
 # have created (BOOTSTRAP_VOICEINK_CERT_CN) — never BOOTSTRAP_VOICEINK_CERT_ALT, which may predate this bootstrap entirely.
-uninstall_m6_voiceink() {
+uninstall_voiceink() {
   local app="$BOOTSTRAP_VOICEINK_APP"
   /usr/bin/pkill -x VoiceInk 2>/dev/null && sleep 1
   rm -rf "$app" "$app.mac-bootstrap-previous" 2>/dev/null
   /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks 2>/dev/null
   /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUAutomaticallyUpdate 2>/dev/null
-  rm -f "$(m6_steps_file)" "$(m6_sign_script)" 2>/dev/null
-  m6_lock_free
-  if m6_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_CN" >/dev/null 2>&1; then
+  rm -f "$(voiceink_steps_file)" "$(voiceink_sign_script)" 2>/dev/null
+  voiceink_lock_free
+  if voiceink_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_CN" >/dev/null 2>&1; then
     /usr/bin/security delete-identity -c "$BOOTSTRAP_VOICEINK_CERT_CN" \
         "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1 \
-      || printf 'm6: could not remove the "%s" identity; remove it in Keychain Access.\n' "$BOOTSTRAP_VOICEINK_CERT_CN"
+      || printf 'voiceink: could not remove the "%s" identity; remove it in Keychain Access.\n' "$BOOTSTRAP_VOICEINK_CERT_CN"
   fi
-  printf 'm6: the source checkout and the whisper dependencies were left in place.\n'
-  printf 'm6: to remove them too:  rm -rf "%s" "%s"\n' "$BOOTSTRAP_VOICEINK_SRC" "$BOOTSTRAP_VOICEINK_DEPS"
+  printf 'voiceink: the source checkout and the whisper dependencies were left in place.\n'
+  printf 'voiceink: to remove them too:  rm -rf "%s" "%s"\n' "$BOOTSTRAP_VOICEINK_SRC" "$BOOTSTRAP_VOICEINK_DEPS"
   return 0
 }

@@ -17,7 +17,7 @@
 # buys false confidence in the one direction — an irreversible command — where being wrong cannot
 # be undone. This file has now been wrong once in exactly that direction, so it earns its wiring
 # by running in anger under a real agent, not by passing its own author's fixtures.
-# `m3_hooks.sh` installs it and does NOT register it; `verify_m3_hooks` ASSERTS it is absent from
+# `hooks.sh` installs it and does NOT register it; `verify_hooks` ASSERTS it is absent from
 # both settings files, so "unwired" is a checked fact rather than a hope. To wire it deliberately,
 # after reading this paragraph:   bash guard-bash.sh --wire-me-instructions
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -399,7 +399,7 @@ Wire it with the repo's own writer, never by hand-editing a settings file:
   bootstrap_copilot_hook_wire "$HOME/.copilot/hooks/00-lifecycle.json" PreToolUse Bash "$HOME/.mac-bootstrap/hooks/guard-bash.sh" 10
 
 Then re-run `bash "$HOME/.mac-bootstrap/hooks/guard-bash.sh" --selftest`, and know that
-verify_m3_hooks will then report FAILED: it asserts this hook is NOT wired, on purpose.
+verify_hooks will then report FAILED: it asserts this hook is NOT wired, on purpose.
 WIRE
     exit 0 ;;
 esac

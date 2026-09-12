@@ -5,7 +5,7 @@
 #
 # This is NOT part of `bootstrap.sh --verify`, deliberately: it starts a real agent turn, so it
 # costs tokens on the Claude Code arm and AI credits on the Copilot arm, and it needs an agent
-# that is already logged in. `verify_m2_instructions` proves the FILES are right; this proves the
+# that is already logged in. `verify_instructions` proves the FILES are right; this proves the
 # AGENT SEES THEM, which is a different claim and the only one that matters in the end.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────

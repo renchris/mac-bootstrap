@@ -10,7 +10,7 @@ This is the document you write a `modules/mN_name.sh` against. The rail — `boo
 
 A file at `modules/<name>.sh` that defines six shell functions and **no top-level side effects**.
 It is `.`-sourced, never executed. `<name>` is the function suffix: a module at
-`modules/m1_statusline.sh` defines `verify_m1_statusline`, `gate_m1_statusline`, and so on.
+`modules/statusline.sh` defines `verify_statusline`, `gate_statusline`, and so on.
 
 **Every verb runs in its own subshell, with `bootstrap-lib.sh` and your module freshly sourced.**
 That is not an implementation detail you may ignore:
@@ -98,7 +98,7 @@ Two consequences worth stating, because the design this replaces got both wrong:
 ### Three more, added 2026-09-11 by the integration pass that measured them going wrong
 
 - **A manifest module with NO row was never judged, and lands in 30 — never in 0.** Measured
-  pre-fix: `bash bootstrap.sh --only m4_handoff` on a fresh Mac exited **0** and printed *"every
+  pre-fix: `bash bootstrap.sh --only handoff` on a fresh Mac exited **0** and printed *"every
   module satisfied"* while seven deliverables had never been evaluated and no statusline existed
   on disk. An unselected module writes no row and the verdict only ever read rows that exist.
   The receipt still carries only the rows that were judged; the `error` field names the rest.
@@ -145,10 +145,10 @@ and by every lifecycle hook. Run its fixtures any time: `bash assets/hooks/boots
 bootstrap_settings_merge <file> <keypath> <json-value> [set|append]
 ```
 
-`m1` (the statusLine) and `m3` (the hooks) both go through it, and so does every Copilot file —
+`statusline` (the statusLine) and `hooks` (the hooks) both go through it, and so does every Copilot file —
 `$HOME/.copilot/settings.json` and `$HOME/.copilot/hooks/00-lifecycle.json`. **Do not call
 `plutil` or `jq` to write a settings file yourself.** Two writers for one file is the defect this
-rule exists to prevent: the design had `m1` writing with `plutil` while `m3` used a jq-only
+rule exists to prevent: the design had `statusline` writing with `plutil` while `hooks` used a jq-only
 merger that *hard-exited* when jq was missing, so on a Mac without `/usr/bin/jq` the statusline
 would install and the hooks would not, with the failure attributed to the wrong thing.
 
@@ -317,7 +317,7 @@ Two rules the verdict depends on, both of which were false greens first:
 2. **An unresolvable module is INCLUDED in the selection, never skipped.** Dropping it would
    remove it from the set the verdict is scored over, and the run would report success having
    silently lost a module it was asked for. Included, it records `SKIPPED`, and `SKIPPED` is 30.
-   Measured: before this, `BOOTSTRAP_MODULES="m1_statusline m99_ghost"` exited **0**.
+   Measured: before this, `BOOTSTRAP_MODULES="statusline m99_ghost"` exited **0**.
 
 `exit 0` therefore means *every module in this selection is satisfied*, and the closing line names
 the selection size so `0` can never be read as a claim about the modules you declined.

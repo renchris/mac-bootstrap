@@ -1,5 +1,5 @@
 #!/bin/bash
-# m2_instructions — DELIVERABLE 2a. The minimal, repo-agnostic instructions file, honoured by
+# instructions — DELIVERABLE 2a. The minimal, repo-agnostic instructions file, honoured by
 # BOTH Claude Code and GitHub Copilot CLI.
 #
 # It installs four things and nothing else:
@@ -38,25 +38,25 @@
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
 # ── where things go ──────────────────────────────────────────────────────────────────────────
-m2i_state()   { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
-m2i_global()  { printf '%s' "$HOME/.claude/CLAUDE.md"; }
-m2i_copilot() { printf '%s' "${COPILOT_HOME:-$HOME/.copilot}/copilot-instructions.md"; }
-m2i_tpl()     { printf '%s/templates/repo-CLAUDE.md' "$(m2i_state)"; }
-m2i_init()    { printf '%s/bin/agent-repo-init' "$(m2i_state)"; }
+instructions_state()   { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
+instructions_global()  { printf '%s' "$HOME/.claude/CLAUDE.md"; }
+instructions_copilot_bridge() { printf '%s' "${COPILOT_HOME:-$HOME/.copilot}/copilot-instructions.md"; }
+instructions_template()     { printf '%s/templates/repo-CLAUDE.md' "$(instructions_state)"; }
+instructions_repo_init()    { printf '%s/bin/agent-repo-init' "$(instructions_state)"; }
 
-# ── m2i_asset <name> — a readable path to assets/<name>, fetching it if this is a curl'd run ──
+# ── instructions_asset <name> — a readable path to assets/<name>, fetching it if this is a curl'd run ──
 # CONTRACT DEVIATION, declared: bootstrap-lib.sh has no asset resolver, so this one lives here rather than
 # in the rail. It mirrors the driver's own order — beside the script, then the state dir, then
 # the pinned raw URL — and it refuses a moving ref exactly as driver_fetch does.
-m2i_asset() {
+instructions_asset() {
   local n="${1:-}" dest code
   [ -n "$n" ] || return 1
   if [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -r "$BOOTSTRAP_ASSETS/$n" ]; then printf '%s' "$BOOTSTRAP_ASSETS/$n"; return 0; fi
-  dest="$(m2i_state)/assets/$n"
+  dest="$(instructions_state)/assets/$n"
   [ -r "$dest" ] && { printf '%s' "$dest"; return 0; }
   case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
   command -v curl >/dev/null 2>&1 || return 1
-  mkdir -p "$(m2i_state)/assets" 2>/dev/null || return 1
+  mkdir -p "$(instructions_state)/assets" 2>/dev/null || return 1
   code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$n" 2>/dev/null)" || {
     rm -f "$dest.part" 2>/dev/null; return 1; }
   [ "$code" = "200" ] && [ -s "$dest.part" ] || { rm -f "$dest.part" 2>/dev/null; return 1; }
@@ -65,7 +65,7 @@ m2i_asset() {
 }
 
 # $HOME/x rather than an expanded home directory — rule 9, applied to what we PRINT as well as what we ship.
-m2i_homeify() {
+instructions_homeify() {
   local p="${1:-}"
   case "$p" in
     "$HOME"/*) printf '$HOME/%s' "${p#"$HOME"/}" ;;
@@ -73,12 +73,12 @@ m2i_homeify() {
   esac
 }
 
-# ── m2i_abs <path> — absolute, symlink-resolved. The final component need not exist. ─────────
+# ── instructions_absolute <path> — absolute, symlink-resolved. The final component need not exist. ─────────
 # /usr/bin/realpath is not on every macOS, and a plain `readlink` comparison is wrong under a
 # temp HOME: mktemp -d hands back /var/folders/… which is itself a symlink to /private/var/…,
 # so the stored link text and the resolved target differ while naming the same file. Both sides
 # of every comparison below go through this.
-m2i_abs() {
+instructions_absolute() {
   local p="${1:-}" d b t r n=0
   [ -n "$p" ] || return 1
   d="$(dirname "$p")"; b="$(basename "$p")"
@@ -100,24 +100,24 @@ m2i_abs() {
   printf '%s/%s' "$d" "$b"
 }
 
-# ── m2i_bridge_shape_ok — is the Copilot path OUR symlink? (shape only; target may not exist) ─
-m2i_bridge_shape_ok() {
+# ── instructions_bridge_shape_ok — is the Copilot path OUR symlink? (shape only; target may not exist) ─
+instructions_bridge_shape_ok() {
   local cop a b
-  cop="$(m2i_copilot)"
+  cop="$(instructions_copilot_bridge)"
   [ -L "$cop" ] || return 1
-  a="$(m2i_abs "$cop")" || return 1
-  b="$(m2i_abs "$(m2i_global)")" || return 1
+  a="$(instructions_absolute "$cop")" || return 1
+  b="$(instructions_absolute "$(instructions_global)")" || return 1
   [ "$a" = "$b" ]
 }
 
-# ── m2i_exec_readback — EXECUTE the shipped helper and read its effects back ──────────────────
+# ── instructions_exec_readback — EXECUTE the shipped helper and read its effects back ──────────────────
 # Rule 4: verify by running the thing, not by finding it on disk. Rule 5: and prove the check
 # can say no — the second arm plants a real CLAUDE.md and requires the helper to REFUSE (rc 4)
 # with the file byte-intact. A verifier that only ever exercises the happy path would pass just
 # as happily over the `ln -sfn` one-liner that silently destroys an existing instructions file.
-m2i_exec_readback() {
+instructions_exec_readback() {
   local d rc init tpl body
-  init="$(m2i_init)"; tpl="$(m2i_tpl)"
+  init="$(instructions_repo_init)"; tpl="$(instructions_template)"
   [ -x "$init" ] || return 1
   [ -r "$tpl" ]  || return 1
   d="$(mktemp -d "${TMPDIR:-/tmp}/m2iv.XXXXXX")" 2>/dev/null || return 1
@@ -154,32 +154,32 @@ m2i_exec_readback() {
 # EXECUTES the helper. Nothing here greps for a string we wrote.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_m2_instructions()    { printf '%s' 'a 6 KB repo-agnostic instructions file both agents read, plus a per-repo template'; }
-cost_m2_instructions()    { printf '%s' 'two files and one symlink. No installs, no permissions. Replaceable with your own.'; }
-profile_m2_instructions() { printf '%s' 'lite'; }
+what_instructions()    { printf '%s' 'a 6 KB repo-agnostic instructions file both agents read, plus a per-repo template'; }
+cost_instructions()    { printf '%s' 'two files and one symlink. No installs, no permissions. Replaceable with your own.'; }
+profile_instructions() { printf '%s' 'lite'; }
 
-verify_m2_instructions() {
+verify_instructions() {
   local g t r cop
 
-  g="$(m2i_asset global-CLAUDE.md)" || return 1
-  t="$(m2i_asset repo-CLAUDE.md)"   || return 1
-  r="$(m2i_asset agent-repo-init)"  || return 1
+  g="$(instructions_asset global-CLAUDE.md)" || return 1
+  t="$(instructions_asset repo-CLAUDE.md)"   || return 1
+  r="$(instructions_asset agent-repo-init)"  || return 1
 
   # 1. the global file is byte-for-byte the shipped asset
-  cmp -s "$g" "$(m2i_global)" || return 1
+  cmp -s "$g" "$(instructions_global)" || return 1
 
   # 2. the Copilot bridge is a SYMLINK — not a copy, which would drift — that RESOLVES to it
-  cop="$(m2i_copilot)"
-  m2i_bridge_shape_ok || return 1
+  cop="$(instructions_copilot_bridge)"
+  instructions_bridge_shape_ok || return 1
   [ -f "$cop" ] || return 1                     # it resolves (a dangling link is not a bridge)
   cmp -s "$cop" "$g" || return 1                # …and to these exact bytes
 
   # 3. the per-repo template is staged
-  cmp -s "$t" "$(m2i_tpl)" || return 1
+  cmp -s "$t" "$(instructions_template)" || return 1
 
   # 4. the per-repo wiring helper is present, current, and PROVEN BY EXECUTION
-  cmp -s "$r" "$(m2i_init)" || return 1
-  m2i_exec_readback || return 1
+  cmp -s "$r" "$(instructions_repo_init)" || return 1
+  instructions_exec_readback || return 1
 
   return 0
 }
@@ -189,37 +189,37 @@ verify_m2_instructions() {
 # machine already has an instructions file of its own at one of the two paths we would write.
 # That is a merge, and a merge is a judgment, so it is the operator's. A fresh Mac never gates.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
-gate_m2_instructions() {
+gate_instructions() {
   local g gl cop
-  g="$(m2i_asset global-CLAUDE.md)" || return 1  # asset unresolvable ⇒ a FAILURE, not a gesture
+  g="$(instructions_asset global-CLAUDE.md)" || return 1  # asset unresolvable ⇒ a FAILURE, not a gesture
 
-  gl="$(m2i_global)"
+  gl="$(instructions_global)"
   if [ -e "$gl" ] || [ -L "$gl" ]; then
     cmp -s "$g" "$gl" || return 0
   fi
 
-  cop="$(m2i_copilot)"
+  cop="$(instructions_copilot_bridge)"
   if [ -e "$cop" ] || [ -L "$cop" ]; then
-    m2i_bridge_shape_ok || return 0
+    instructions_bridge_shape_ok || return 0
   fi
 
   return 1
 }
 
-note_m2_instructions() {
+note_instructions() {
   local g gl cop
-  g="$(m2i_asset global-CLAUDE.md)" || {
+  g="$(instructions_asset global-CLAUDE.md)" || {
     printf 'the shipped instructions file could not be found beside this script or fetched at this pin'
     return 0; }
 
-  gl="$(m2i_global)"
+  gl="$(instructions_global)"
   if { [ -e "$gl" ] || [ -L "$gl" ]; } && ! cmp -s "$g" "$gl"; then
     printf 'this Mac already has its own global agent instructions at $HOME/.claude/CLAUDE.md; nothing was overwritten, and merging the two is your call'
     return 0
   fi
 
-  cop="$(m2i_copilot)"
-  if { [ -e "$cop" ] || [ -L "$cop" ]; } && ! m2i_bridge_shape_ok; then
+  cop="$(instructions_copilot_bridge)"
+  if { [ -e "$cop" ] || [ -L "$cop" ]; } && ! instructions_bridge_shape_ok; then
     printf 'Copilot already has its own $HOME/.copilot/copilot-instructions.md; nothing was overwritten, so move yours aside if you want it bridged to the Claude file'
     return 0
   fi
@@ -230,19 +230,19 @@ note_m2_instructions() {
 
 # ONE resolved command, executable exactly as typed, and spelled with $HOME so no user name
 # lands in the receipt. Never a bare path: a path pasted into a shell is executed, not opened.
-gesture_m2_instructions() {
+gesture_instructions() {
   local g gl cop
-  g="$(m2i_asset global-CLAUDE.md)" || return 0
+  g="$(instructions_asset global-CLAUDE.md)" || return 0
 
-  gl="$(m2i_global)"
+  gl="$(instructions_global)"
   if { [ -e "$gl" ] || [ -L "$gl" ]; } && ! cmp -s "$g" "$gl"; then
-    printf 'diff "$HOME/.claude/CLAUDE.md" "%s"' "$(m2i_homeify "$g")"
+    printf 'diff "$HOME/.claude/CLAUDE.md" "%s"' "$(instructions_homeify "$g")"
     return 0
   fi
 
-  cop="$(m2i_copilot)"
-  if { [ -e "$cop" ] || [ -L "$cop" ]; } && ! m2i_bridge_shape_ok; then
-    printf 'mv "%s" "%s.yours"' "$(m2i_homeify "$cop")" "$(m2i_homeify "$cop")"
+  cop="$(instructions_copilot_bridge)"
+  if { [ -e "$cop" ] || [ -L "$cop" ]; } && ! instructions_bridge_shape_ok; then
+    printf 'mv "%s" "%s.yours"' "$(instructions_homeify "$cop")" "$(instructions_homeify "$cop")"
     return 0
   fi
 
@@ -254,11 +254,11 @@ gesture_m2_instructions() {
 # instructions file can never land; refuses, loudly, rather than overwrite anything it did not
 # write. Returns non-zero if any leg refused, which sends the driver back to gate_.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
-install_m2_instructions() {
+install_instructions() {
   local g t r rc=0
-  g="$(m2i_asset global-CLAUDE.md)" || { bootstrap_warn "m2: cannot resolve assets/global-CLAUDE.md"; return 1; }
-  t="$(m2i_asset repo-CLAUDE.md)"   || { bootstrap_warn "m2: cannot resolve assets/repo-CLAUDE.md";   return 1; }
-  r="$(m2i_asset agent-repo-init)"  || { bootstrap_warn "m2: cannot resolve assets/agent-repo-init";  return 1; }
+  g="$(instructions_asset global-CLAUDE.md)" || { bootstrap_warn "instructions: cannot resolve assets/global-CLAUDE.md"; return 1; }
+  t="$(instructions_asset repo-CLAUDE.md)"   || { bootstrap_warn "instructions: cannot resolve assets/repo-CLAUDE.md";   return 1; }
+  r="$(instructions_asset agent-repo-init)"  || { bootstrap_warn "instructions: cannot resolve assets/agent-repo-init";  return 1; }
 
   # THE BRIDGE IS CONDITIONAL ON THE GLOBAL FILE BEING OURS, and that ordering is load-bearing.
   # Found by running the conflict fixture: when the global leg refuses (the operator's own file is
@@ -266,57 +266,57 @@ install_m2_instructions() {
   # there is no global file at all it leaves a DANGLING symlink, which the next fixture then
   # wrote *through*, silently creating the very file the refusal had just preserved us from.
   # We route Copilot at our own file or at nothing.
-  if m2i_place_guarded "$g" "$(m2i_global)"; then
-    m2i_place_bridge || rc=1
+  if instructions_place_guarded "$g" "$(instructions_global)"; then
+    instructions_place_bridge || rc=1
   else
     rc=1
   fi
-  m2i_place_ours "$t" "$(m2i_tpl)"  ''   || rc=1
-  m2i_place_ours "$r" "$(m2i_init)" exec || rc=1
+  instructions_place_ours "$t" "$(instructions_template)"  ''   || rc=1
+  instructions_place_ours "$r" "$(instructions_repo_init)" exec || rc=1
   return $rc
 }
 
 # A file we must NOT own: install it only into an empty slot, or when it is already ours.
-m2i_place_guarded() {
+instructions_place_guarded() {
   local src="$1" dst="$2" tmp
   if [ -e "$dst" ] || [ -L "$dst" ]; then
     cmp -s "$src" "$dst" && return 0
-    bootstrap_warn "m2: $dst already exists and differs from the shipped file — refusing to overwrite it."
+    bootstrap_warn "instructions: $dst already exists and differs from the shipped file — refusing to overwrite it."
     return 1
   fi
-  mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$dst")"; return 1; }
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "instructions: cannot create $(dirname "$dst")"; return 1; }
   tmp="$dst.mac-bootstrap-tmp.$$"
-  cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m2: cannot stage $dst"; return 1; }
-  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m2: cannot place $dst"; return 1; }
+  cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "instructions: cannot stage $dst"; return 1; }
+  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "instructions: cannot place $dst"; return 1; }
   return 0
 }
 
 # A file that IS ours, under $BOOTSTRAP_STATE_DIR: a stale copy there is our own older release, so it
 # is replaced rather than refused. Still written via temp+mv, never edited in place.
-m2i_place_ours() {
+instructions_place_ours() {
   local src="$1" dst="$2" mode="${3:-}" tmp
   cmp -s "$src" "$dst" 2>/dev/null && { [ "$mode" = exec ] && chmod 0755 "$dst" 2>/dev/null; return 0; }
-  mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$dst")"; return 1; }
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "instructions: cannot create $(dirname "$dst")"; return 1; }
   tmp="$dst.mac-bootstrap-tmp.$$"
-  cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m2: cannot stage $dst"; return 1; }
+  cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "instructions: cannot stage $dst"; return 1; }
   [ "$mode" = exec ] && chmod 0755 "$tmp" 2>/dev/null
-  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m2: cannot place $dst"; return 1; }
+  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "instructions: cannot place $dst"; return 1; }
   return 0
 }
 
 # The Copilot bridge. `ln -s` is not idempotent (rc 1, "File exists" on the second run) and the
 # obvious repair, `ln -sfn`, silently destroys a real file at that path. Guarded in all three
 # states instead; the refusal preserves what is there.
-m2i_place_bridge() {
+instructions_place_bridge() {
   local cop
-  cop="$(m2i_copilot)"
-  m2i_bridge_shape_ok && return 0
+  cop="$(instructions_copilot_bridge)"
+  instructions_bridge_shape_ok && return 0
   if [ -e "$cop" ] || [ -L "$cop" ]; then
-    bootstrap_warn "m2: $cop already exists and is not a link to the Claude file — refusing to replace it."
+    bootstrap_warn "instructions: $cop already exists and is not a link to the Claude file — refusing to replace it."
     return 1
   fi
-  mkdir -p "$(dirname "$cop")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$cop")"; return 1; }
-  ln -s "$(m2i_global)" "$cop" 2>/dev/null || { bootstrap_warn "m2: cannot create the Copilot bridge"; return 1; }
+  mkdir -p "$(dirname "$cop")" 2>/dev/null || { bootstrap_warn "instructions: cannot create $(dirname "$cop")"; return 1; }
+  ln -s "$(instructions_global)" "$cop" 2>/dev/null || { bootstrap_warn "instructions: cannot create the Copilot bridge"; return 1; }
   return 0
 }
 
@@ -324,21 +324,21 @@ m2i_place_bridge() {
 # uninstall_ — removes ONLY what this module wrote, identified by content, never by path.
 # A global file the operator has since edited is left exactly where it is.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
-uninstall_m2_instructions() {
+uninstall_instructions() {
   local g gl cop
-  g="$(m2i_asset global-CLAUDE.md)" || g=""
+  g="$(instructions_asset global-CLAUDE.md)" || g=""
 
-  gl="$(m2i_global)"
+  gl="$(instructions_global)"
   if [ -f "$gl" ] && [ -n "$g" ] && cmp -s "$g" "$gl"; then
-    rm -f "$gl" 2>/dev/null || { bootstrap_warn "m2: cannot remove $gl"; return 1; }
+    rm -f "$gl" 2>/dev/null || { bootstrap_warn "instructions: cannot remove $gl"; return 1; }
   fi
 
-  cop="$(m2i_copilot)"
-  if m2i_bridge_shape_ok; then
-    rm -f "$cop" 2>/dev/null || { bootstrap_warn "m2: cannot remove $cop"; return 1; }
+  cop="$(instructions_copilot_bridge)"
+  if instructions_bridge_shape_ok; then
+    rm -f "$cop" 2>/dev/null || { bootstrap_warn "instructions: cannot remove $cop"; return 1; }
   fi
 
-  rm -f "$(m2i_tpl)" "$(m2i_init)" 2>/dev/null
-  rmdir "$(m2i_state)/templates" 2>/dev/null    # only if we left it empty
+  rm -f "$(instructions_template)" "$(instructions_repo_init)" 2>/dev/null
+  rmdir "$(instructions_state)/templates" 2>/dev/null    # only if we left it empty
   return 0
 }

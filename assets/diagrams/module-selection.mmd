@@ -1,21 +1,21 @@
 flowchart LR
   FULL(["--profile full"]) -->|"includes"| STD(["--profile standard"])
   STD -->|"includes"| LITE(["--profile lite · the default"])
-  LITE --> m1["m1_statusline<br/><i>context-% in the status line</i>"]
-  LITE --> m2["m2_instructions<br/><i>one instructions file</i>"]
-  LITE --> m3["m3_hooks<br/><i>lifecycle hooks</i>"]
-  LITE --> m5["m5_panes<br/><i>⌘⇧E evens panes</i>"]
-  STD --> m4["m4_handoff<br/><i>self-recycling /handoff</i>"]
-  STD --> m7["m7_model<br/><i>local rewrite model</i>"]
-  FULL --> m6["m6_voiceink<br/><i>local VoiceInk build</i>"]
-  FULL --> m8["m8_screenshot<br/><i>⌘⇧4 to clipboard</i>"]
-  m4 -.->|"needs — added out loud"| m1
-  m4 -.->|"needs"| m3
+  LITE --> statusline["statusline<br/><i>context-% in the status line</i>"]
+  LITE --> instructions["instructions<br/><i>one instructions file</i>"]
+  LITE --> hooks["hooks<br/><i>lifecycle hooks</i>"]
+  LITE --> panes["pane_equalize<br/><i>⌘⇧E evens panes</i>"]
+  STD --> handoff["handoff<br/><i>self-recycling /handoff</i>"]
+  STD --> rewrite["rewrite_model<br/><i>local rewrite model</i>"]
+  FULL --> voiceink["voiceink<br/><i>local VoiceInk build</i>"]
+  FULL --> screenshot["screenshot<br/><i>⌘⇧4 to clipboard</i>"]
+  handoff -.->|"needs — added out loud"| statusline
+  handoff -.->|"needs"| hooks
   classDef lite fill:@green-bg,stroke:@green-fg,color:@text
   classDef std fill:@gold-bg,stroke:@gold-fg,color:@text
   classDef full fill:@red-bg,stroke:@red-fg,color:@text
   classDef prof fill:@gray-bg,stroke:@blue-fg,color:@text-bright
-  class m1,m2,m3,m5 lite
-  class m4,m7 std
-  class m6,m8 full
+  class statusline,instructions,hooks,panes lite
+  class handoff,rewrite std
+  class voiceink,screenshot full
   class LITE,STD,FULL prof

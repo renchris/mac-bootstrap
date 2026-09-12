@@ -12,7 +12,7 @@
 # break, so the net was built first.
 #
 # ── WHY EVERY ASSERTION IS NAME-INDEPENDENT, AND WHY THAT IS THE WHOLE DESIGN ────────────────
-# A harness that asserted `m1_statusline=SATISFIED` would fail the moment a module is renamed,
+# A harness that asserted `statusline=SATISFIED` would fail the moment a module is renamed,
 # which is exactly when it is needed — it would be measuring the rename instead of the damage.
 # So NOTHING here names a module, a variable or a hook file. Every check derives its subject at
 # runtime from the driver's own `--manifest` and `--list`, and then asserts a property that is

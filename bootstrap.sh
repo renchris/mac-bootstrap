@@ -8,9 +8,9 @@
 #
 #   bash bootstrap.sh                  install everything that is installable, then verify it
 #   bash bootstrap.sh --verify         re-read the machine cold; change nothing
-#   bash bootstrap.sh --only m1_statusline      re-drive ONE module (merges into the receipt)
-#   bash bootstrap.sh --only m7_model --bench qwen3:8b     measure a candidate, write nothing
-#   bash bootstrap.sh --only m7_model --model qwen3:8b     install with a parameter
+#   bash bootstrap.sh --only statusline      re-drive ONE module (merges into the receipt)
+#   bash bootstrap.sh --only rewrite_model --bench qwen3:8b     measure a candidate, write nothing
+#   bash bootstrap.sh --only rewrite_model --model qwen3:8b     install with a parameter
 #   bash bootstrap.sh --uninstall      reverse it
 #
 # EXIT CODES — one meaning each, on BOTH the install and the --verify path:
@@ -60,10 +60,19 @@ BOOTSTRAP_BENCH=""
 BOOTSTRAP_MODEL=""
 BOOTSTRAP_RC=0
 
-# The manifest of last resort: used only when there is no modules/ directory beside this script,
-# i.e. when bootstrap.sh was curl'd on its own. A module that is not in the release at this pin
-# is recorded SKIPPED, which is a precondition error (30) — never a silent absence.
-BOOTSTRAP_MODULE_ORDER="m1_statusline m2_instructions m3_hooks m4_handoff m5_panes m6_voiceink m7_model m8_screenshot"
+# ── THE INSTALL ORDER, DECLARED. Cheapest and most reversible first; anything that needs a
+# download, a permission or money last — so a run that stops early has done the safe things and
+# none of the expensive ones. It is written down HERE because it has to be: the modules used to
+# be named m1_ … m8_ and the order fell out of an alphabetical glob, which meant the sequence was
+# a property of eight filenames and nothing stated it or could check it. Worse, the number read
+# as a ranking it was not: m5_panes is in `lite` while m4_handoff is `standard`, so "4 before 5"
+# implied a progression that does not exist. A module not named here still works — it is appended
+# after these, in the glob's own order, and says so in --manifest.
+#
+# This list is ALSO the manifest of last resort, used when there is no modules/ directory beside
+# this script — i.e. when bootstrap.sh was curl'd on its own. A module that is not in the release
+# at this pin is recorded SKIPPED, a precondition error (30), never a silent absence.
+BOOTSTRAP_MODULE_ORDER="statusline instructions hooks handoff pane_equalize voiceink rewrite_model screenshot"
 
 driver_self_dir() {
   local s="${BASH_SOURCE[0]:-$0}" d
@@ -152,9 +161,6 @@ export BOOTSTRAP_BENCH="$BOOTSTRAP_BENCH"
 export BOOTSTRAP_PIN="$BOOTSTRAP_PIN"
 export BOOTSTRAP_RAW="$BOOTSTRAP_RAW"
 export BOOTSTRAP_ASSETS="$BOOTSTRAP_HERE/assets"
-# Compatibility aliases for the spelling the architecture document used for m7's parameters.
-export BOOTSTRAP_MODEL="$BOOTSTRAP_MODEL"
-export BOOTSTRAP_BENCH="$BOOTSTRAP_BENCH"
 
 # ── fetch ────────────────────────────────────────────────────────────────────────────────────
 driver_fetch() {                                    # driver_fetch <relpath> <dest>  → 0 on a real 200
@@ -178,12 +184,22 @@ driver_manifest() {
   local f n out=""
   if [ -n "${BOOTSTRAP_MODULES:-}" ]; then printf '%s' "$BOOTSTRAP_MODULES"; return 0; fi
   if [ -d "$BOOTSTRAP_HERE/modules" ]; then
-    for f in "$BOOTSTRAP_HERE/modules"/m*_*.sh; do
+    for f in "$BOOTSTRAP_HERE/modules"/*.sh; do
       [ -r "$f" ] || continue
       n="${f##*/}"; out="$out ${n%.sh}"
     done
   fi
-  [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  if [ -n "$out" ]; then
+    # Emit in the DECLARED order, then anything on disk the declaration does not name. The glob
+    # is alphabetical, which is not the order these have to run in and never was.
+    for n in $BOOTSTRAP_MODULE_ORDER; do
+      case " $out " in *" $n "*) printf '%s ' "$n" ;; esac
+    done
+    for n in $out; do
+      case " $BOOTSTRAP_MODULE_ORDER " in *" $n "*) : ;; *) printf '%s ' "$n" ;; esac
+    done
+    return 0
+  fi
   printf '%s' "$BOOTSTRAP_MODULE_ORDER"
 }
 
@@ -219,6 +235,25 @@ driver_meta() {                                     # driver_meta <module-file> 
 # Notes from inside a command substitution. stdout belongs to the caller's capture.
 driver_note_out() { printf '%s\n' "$*" >&2; }
 
+# driver_renamed_to <name> — the one release in which every module was renamed, answered for a
+# reader who pasted a command from an older README. It REFUSES rather than aliasing: running a
+# different module than the one you named is worse than a clear error, and a permanent alias is
+# the dead name surviving forever. This table is deliberately finite and dated — DELETE IT in the
+# release after the next one, by which point an older command is old enough to be re-read.
+driver_renamed_to() {
+  case "$1" in
+    m1_statusline)   printf 'statusline' ;;
+    m2_instructions) printf 'instructions' ;;
+    m3_hooks)        printf 'hooks' ;;
+    m4_handoff)      printf 'handoff' ;;
+    m5_panes)        printf 'pane_equalize' ;;
+    m6_voiceink)     printf 'voiceink' ;;
+    m7_model)        printf 'rewrite_model' ;;
+    m8_screenshot)   printf 'screenshot' ;;
+    *) return 1 ;;
+  esac
+}
+
 driver_profile_rank() {                             # lite=1 standard=2 full=3, anything else=2
   case "$1" in lite) printf 1 ;; standard) printf 2 ;; full) printf 3 ;; all) printf 9 ;; *) printf 2 ;; esac
 }
@@ -240,6 +275,10 @@ driver_select() {
   if [ -n "$bad" ]; then
     driver_note_out "bootstrap: no such module:$bad"
     driver_note_out "           known modules: $BOOTSTRAP_MANIFEST"
+    for m in $bad; do
+      chg="$(driver_renamed_to "$m")" || continue
+      driver_note_out "           \"$m\" was renamed to \"$chg\" in the 2026-09-12 release."
+    done
     return 1
   fi
 
@@ -609,7 +648,7 @@ driver_run_module() {
 # C8 — THE FOUR MEASURED FALSE SIGNALS THIS FUNCTION EXISTS TO KILL. Each was reproduced on this
 # machine against the version that shipped before it, and each one now has a fixture below.
 #
-#   1. `--only m4_handoff` on a FRESH Mac exited 0 and printed "every module satisfied", with
+#   1. `--only handoff` on a FRESH Mac exited 0 and printed "every module satisfied", with
 #      seven of the eight deliverables never evaluated and no statusline installed at all. An
 #      unselected module writes no row, the verdict only ever looked at rows that EXIST, and the
 #      one prompt the agent follows teaches 0 = done two steps earlier. A manifest module with no
@@ -741,7 +780,7 @@ if [ -n "$BOOTSTRAP_ONLY" ]; then
 fi
 
 # C8 — NAME THE MODULES THIS RUN NEVER JUDGED, so the 30 driver_verdict returns for them carries its
-# reason. Measured before this existed: `--only m4_handoff` on a fresh Mac printed "exit 0 — every
+# reason. Measured before this existed: `--only handoff` on a fresh Mac printed "exit 0 — every
 # module satisfied" with seven deliverables never evaluated and no statusline on disk at all.
 # bench is excluded because it exits below without ever consulting the verdict.
 if [ "$BOOTSTRAP_MODE" != uninstall ] && [ "$BOOTSTRAP_MODE" != bench ] && [ -z "$BOOTSTRAP_ERR" ]; then

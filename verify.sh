@@ -2,7 +2,7 @@
 # verify.sh — cold, standalone re-verification of the machine.
 #
 #   bash verify.sh                 verify every module
-#   bash verify.sh --only m1_statusline
+#   bash verify.sh --only statusline
 #   bash verify.sh --no-selftest   skip the instrument control (not recommended)
 #
 # It changes NOTHING. It writes $HOME/.mac-bootstrap/receipt.verify.json and never touches

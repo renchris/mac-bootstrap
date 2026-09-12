@@ -244,7 +244,7 @@ bootstrap_settings_refuse() {
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # bootstrap_settings_merge — THE ONE SETTINGS WRITER (C2). Nothing else in this repo writes a JSON
-# settings file. m1 (statusLine) and m3 (hooks) both come through here, and so does every
+# settings file. statusline (statusLine) and hooks (hooks) both come through here, and so does every
 # Copilot file: ~/.copilot/settings.json and ~/.copilot/hooks/00-lifecycle.json.
 #
 #   bootstrap_settings_merge <file> <keypath> <json-value> [set|append]
@@ -810,7 +810,7 @@ fi
 # directory from the PASSWORD DATABASE, not from $HOME, so every `defaults read/write` ESCAPES a
 # sandboxed HOME and acts on the real user's domain. The documented way to test this bootstrap —
 # `HOME=$(mktemp -d) bash bootstrap.sh` — therefore silently rewrites the live machine for exactly
-# the two modules that use defaults (m7 VoiceInk, m8 screencapture). Observed: a sandboxed run set
+# the two modules that use defaults (rewrite_model VoiceInk, screenshot screencapture). Observed: a sandboxed run set
 # the real com.apple.screencapture `location` to a path inside a temp dir, and when that temp dir
 # was removed the user's screenshots had nowhere to go. Nothing in the run reported a thing,
 # because from defaults' point of view every call succeeded.

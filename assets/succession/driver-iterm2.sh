@@ -6,7 +6,7 @@
 #       The successor is born DETACHED in tmux; an ordinary iTerm2 window is then opened
 #       attached to it. The operator sees a normal iTerm2 window, and the successor survives
 #       iTerm2 dying, being ⌘Q'd, crashing, or being restarted by the OS — measured: a tmux
-#       successor's pid is unchanged after the entire terminal is killed, where an iTerm2-native
+#       successor's pid is unchanged after the entire terminal is killed, where an iTeriterm2-native
 #       child dies with iTermServer.
 #   AH_SUBSTRATE=direct
 #       `create window with default profile command "…"`. This is a REAL argv launch — the prior

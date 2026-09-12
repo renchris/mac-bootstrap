@@ -27,16 +27,16 @@
 </defs>
 <polyline class="edge" data-from="FULL" data-to="STD" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="includes" points="144.935,336.3416666666667 156.935,336.3416666666667 156.935,247.76666666666668 260.67850000000004,247.76666666666668" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="STD" data-to="LITE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="includes" points="402.66350000000006,238.54166666666669 420.96200000000016,238.54166666666669 420.96200000000016,115.18 531.0040000000001,115.18" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="LITE" data-to="m1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,230.50000000000003 829.157,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="LITE" data-to="m2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,66.9 754.3340000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="LITE" data-to="m3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,312.3 829.157,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="LITE" data-to="m5" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,148.70000000000002 829.157,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="STD" data-to="m4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.66350000000006,247.76666666666668 444.96200000000005,247.76666666666668 444.96200000000005,280.3666666666667 456.96200000000005,280.3666666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="STD" data-to="m7" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.66350000000006,256.9916666666667 432.96200000000005,256.9916666666667 432.96200000000005,362.16666666666674 531.671,362.16666666666674" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="FULL" data-to="m6" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.935,345.5666666666667 242.38000000000005,345.5666666666667 242.38000000000005,312.9666666666667 260.67850000000004,312.9666666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="FULL" data-to="m8" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.935,354.79166666666674 336.3550000000001,354.79166666666674 336.3550000000001,394.76666666666665 348.3550000000001,394.76666666666665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="m4" data-to="m1" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="needs — added out loud" points="628.587,271.40000000000003 664.587,271.40000000000003 664.587,239.4666666666667 829.157,239.4666666666667" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="m4" data-to="m3" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="needs" points="628.587,289.33333333333337 717.807,289.33333333333337 717.807,321.2666666666667 829.157,321.2666666666667" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LITE" data-to="statusline" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,230.50000000000003 829.157,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LITE" data-to="instructions" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,66.9 754.3340000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LITE" data-to="hooks" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,312.3 829.157,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LITE" data-to="panes" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="706.3340000000001,115.18 730.3340000000001,115.18 730.3340000000001,148.70000000000002 829.157,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="STD" data-to="handoff" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.66350000000006,247.76666666666668 444.96200000000005,247.76666666666668 444.96200000000005,280.3666666666667 456.96200000000005,280.3666666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="STD" data-to="rewrite" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.66350000000006,256.9916666666667 432.96200000000005,256.9916666666667 432.96200000000005,362.16666666666674 531.671,362.16666666666674" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FULL" data-to="voiceink" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.935,345.5666666666667 242.38000000000005,345.5666666666667 242.38000000000005,312.9666666666667 260.67850000000004,312.9666666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FULL" data-to="screenshot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="144.935,354.79166666666674 336.3550000000001,354.79166666666674 336.3550000000001,394.76666666666665 348.3550000000001,394.76666666666665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="handoff" data-to="statusline" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="needs — added out loud" points="628.587,271.40000000000003 664.587,271.40000000000003 664.587,239.4666666666667 829.157,239.4666666666667" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="handoff" data-to="hooks" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="needs" points="628.587,289.33333333333337 717.807,289.33333333333337 717.807,321.2666666666667 829.157,321.2666666666667" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="FULL" data-to="STD" data-label="includes">
   <rect x="164.935" y="231.76666666666668" width="58.042" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
   <text x="193.95600000000002" y="246.91666666666669" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">includes</text>
@@ -45,11 +45,11 @@
   <rect x="428.96200000000016" y="99.18" width="58.042" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
   <text x="457.9830000000002" y="114.33000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">includes</text>
 </g>
-<g class="edge-label" data-from="m4" data-to="m1" data-label="needs — added out loud">
+<g class="edge-label" data-from="handoff" data-to="statusline" data-label="needs — added out loud">
   <rect x="672.587" y="223.4666666666667" width="124.57000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
   <text x="734.872" y="238.6166666666667" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">needs — added out loud</text>
 </g>
-<g class="edge-label" data-from="m4" data-to="m3" data-label="needs">
+<g class="edge-label" data-from="handoff" data-to="hooks" data-label="needs">
   <rect x="725.807" y="305.2666666666667" width="47.35" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
   <text x="749.482" y="320.4166666666667" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">needs</text>
 </g>
@@ -65,44 +65,44 @@
   <rect x="531.0040000000001" y="96.73" width="175.32999999999998" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#161b22" stroke="#58a6ff" stroke-width="0.75" />
   <text x="618.6690000000001" y="115.18" text-anchor="middle" font-size="13" font-weight="500" fill="#f0f6fc" dy="4.55">--profile lite · the default</text>
 </g>
-<g class="node" data-id="m1" data-label="m1_statusline
+<g class="node" data-id="statusline" data-label="statusline
 &lt;i&gt;context-% in the status line&lt;/i&gt;" data-shape="rectangle">
   <rect x="829.157" y="203.60000000000002" width="190.891" height="53.800000000000004" rx="0" ry="0" fill="#1a2b1a" stroke="#3fb950" stroke-width="0.75" />
-  <text x="924.6025000000001" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="924.6025000000001" dy="-3.9000000000000012">m1_statusline</tspan><tspan x="924.6025000000001" dy="16.900000000000002"><tspan font-style="italic">context-% in the status line</tspan></tspan></text>
+  <text x="924.6025000000001" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="924.6025000000001" dy="-3.9000000000000012">statusline</tspan><tspan x="924.6025000000001" dy="16.900000000000002"><tspan font-style="italic">context-% in the status line</tspan></tspan></text>
 </g>
-<g class="node" data-id="m2" data-label="m2_instructions
+<g class="node" data-id="instructions" data-label="instructions
 &lt;i&gt;one instructions file&lt;/i&gt;" data-shape="rectangle">
   <rect x="754.3340000000001" y="40" width="154.582" height="53.800000000000004" rx="0" ry="0" fill="#1a2b1a" stroke="#3fb950" stroke-width="0.75" />
-  <text x="831.625" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="831.625" dy="-3.9000000000000012">m2_instructions</tspan><tspan x="831.625" dy="16.900000000000002"><tspan font-style="italic">one instructions file</tspan></tspan></text>
+  <text x="831.625" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="831.625" dy="-3.9000000000000012">instructions</tspan><tspan x="831.625" dy="16.900000000000002"><tspan font-style="italic">one instructions file</tspan></tspan></text>
 </g>
-<g class="node" data-id="m3" data-label="m3_hooks
+<g class="node" data-id="hooks" data-label="hooks
 &lt;i&gt;lifecycle hooks&lt;/i&gt;" data-shape="rectangle">
   <rect x="829.157" y="285.40000000000003" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#1a2b1a" stroke="#3fb950" stroke-width="0.75" />
-  <text x="894.2215000000001" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="894.2215000000001" dy="-3.9000000000000012">m3_hooks</tspan><tspan x="894.2215000000001" dy="16.900000000000002"><tspan font-style="italic">lifecycle hooks</tspan></tspan></text>
+  <text x="894.2215000000001" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="894.2215000000001" dy="-3.9000000000000012">hooks</tspan><tspan x="894.2215000000001" dy="16.900000000000002"><tspan font-style="italic">lifecycle hooks</tspan></tspan></text>
 </g>
-<g class="node" data-id="m5" data-label="m5_panes
+<g class="node" data-id="panes" data-label="pane_equalize
 &lt;i&gt;⌘⇧E evens panes&lt;/i&gt;" data-shape="rectangle">
   <rect x="829.157" y="121.80000000000001" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#1a2b1a" stroke="#3fb950" stroke-width="0.75" />
-  <text x="901.2610000000001" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="901.2610000000001" dy="-3.9000000000000012">m5_panes</tspan><tspan x="901.2610000000001" dy="16.900000000000002"><tspan font-style="italic">⌘⇧E evens panes</tspan></tspan></text>
+  <text x="901.2610000000001" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="901.2610000000001" dy="-3.9000000000000012">pane_equalize</tspan><tspan x="901.2610000000001" dy="16.900000000000002"><tspan font-style="italic">⌘⇧E evens panes</tspan></tspan></text>
 </g>
-<g class="node" data-id="m4" data-label="m4_handoff
+<g class="node" data-id="handoff" data-label="handoff
 &lt;i&gt;self-recycling /handoff&lt;/i&gt;" data-shape="rectangle">
   <rect x="456.96200000000005" y="253.4666666666667" width="171.62499999999997" height="53.800000000000004" rx="0" ry="0" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
-  <text x="542.7745" y="280.3666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="542.7745" dy="-3.9000000000000012">m4_handoff</tspan><tspan x="542.7745" dy="16.900000000000002"><tspan font-style="italic">self-recycling /handoff</tspan></tspan></text>
+  <text x="542.7745" y="280.3666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="542.7745" dy="-3.9000000000000012">handoff</tspan><tspan x="542.7745" dy="16.900000000000002"><tspan font-style="italic">self-recycling /handoff</tspan></tspan></text>
 </g>
-<g class="node" data-id="m7" data-label="m7_model
+<g class="node" data-id="rewrite" data-label="rewrite_model
 &lt;i&gt;local rewrite model&lt;/i&gt;" data-shape="rectangle">
   <rect x="531.671" y="335.2666666666667" width="150.13599999999997" height="53.800000000000004" rx="0" ry="0" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
-  <text x="606.739" y="362.1666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="606.739" dy="-3.9000000000000012">m7_model</tspan><tspan x="606.739" dy="16.900000000000002"><tspan font-style="italic">local rewrite model</tspan></tspan></text>
+  <text x="606.739" y="362.1666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="606.739" dy="-3.9000000000000012">rewrite_model</tspan><tspan x="606.739" dy="16.900000000000002"><tspan font-style="italic">local rewrite model</tspan></tspan></text>
 </g>
-<g class="node" data-id="m6" data-label="m6_voiceink
+<g class="node" data-id="voiceink" data-label="voiceink
 &lt;i&gt;local VoiceInk build&lt;/i&gt;" data-shape="rectangle">
   <rect x="260.67850000000004" y="286.0666666666667" width="154.582" height="53.800000000000004" rx="0" ry="0" fill="#2b1618" stroke="#ff6b6b" stroke-width="0.75" />
-  <text x="337.96950000000004" y="312.9666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="337.96950000000004" dy="-3.9000000000000012">m6_voiceink</tspan><tspan x="337.96950000000004" dy="16.900000000000002"><tspan font-style="italic">local VoiceInk build</tspan></tspan></text>
+  <text x="337.96950000000004" y="312.9666666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="337.96950000000004" dy="-3.9000000000000012">voiceink</tspan><tspan x="337.96950000000004" dy="16.900000000000002"><tspan font-style="italic">local VoiceInk build</tspan></tspan></text>
 </g>
-<g class="node" data-id="m8" data-label="m8_screenshot
+<g class="node" data-id="screenshot" data-label="screenshot
 &lt;i&gt;⌘⇧4 to clipboard&lt;/i&gt;" data-shape="rectangle">
   <rect x="348.3550000000001" y="367.8666666666667" width="135.316" height="53.800000000000004" rx="0" ry="0" fill="#2b1618" stroke="#ff6b6b" stroke-width="0.75" />
-  <text x="416.0130000000001" y="394.76666666666665" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="416.0130000000001" dy="-3.9000000000000012">m8_screenshot</tspan><tspan x="416.0130000000001" dy="16.900000000000002"><tspan font-style="italic">⌘⇧4 to clipboard</tspan></tspan></text>
+  <text x="416.0130000000001" y="394.76666666666665" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="416.0130000000001" dy="-3.9000000000000012">screenshot</tspan><tspan x="416.0130000000001" dy="16.900000000000002"><tspan font-style="italic">⌘⇧4 to clipboard</tspan></tspan></text>
 </g>
 </svg>

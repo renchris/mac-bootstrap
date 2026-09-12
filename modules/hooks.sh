@@ -1,5 +1,5 @@
 #!/bin/bash
-# m3_hooks.sh — DELIVERABLE 2b: the agent lifecycle hook core, for BOTH agents.
+# hooks.sh — DELIVERABLE 2b: the agent lifecycle hook core, for BOTH agents.
 #
 # INSTALLS five files into $BOOTSTRAP_STATE_DIR/hooks — bootstrap-lib.sh and four hooks — and REGISTERS THREE
 # of them, twice: once in $HOME/.claude/settings.json and once in
@@ -28,7 +28,7 @@
 # must-deny fixtures was unquoted. It is rewritten and now passes a 66-case matrix with a quoted
 # arm per class and a pre-fix arm asserted RED — but a guard believed present and inert is worse
 # than one known absent, and this one has already been wrong in the unrecoverable direction.
-# verify_m3_hooks ASSERTS it is absent from both settings files, so "unwired" is a checked fact.
+# verify_hooks ASSERTS it is absent from both settings files, so "unwired" is a checked fact.
 #
 # ── THE ONE WRITER ───────────────────────────────────────────────────────────────────────────
 # Every settings write goes through bootstrap_hook_wire / bootstrap_copilot_hook_wire / bootstrap_settings_merge.
@@ -39,20 +39,20 @@
 
 # ── small helpers this module needs and bootstrap-lib.sh does not have. Noted as contract deviations. ──
 
-m3_dir()      { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/hooks"; }
-m3_cc()       { printf '%s' "$HOME/.claude/settings.json"; }
-m3_cop()      { printf '%s' "$HOME/.copilot/hooks/00-lifecycle.json"; }
-m3_scripts()  { printf '%s' "session-start.sh stop.sh guard-write.sh guard-bash.sh"; }
-m3_unwired()  { printf '%s' "guard-bash.sh"; }
+hooks_dir()      { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/hooks"; }
+hooks_claude_settings()       { printf '%s' "$HOME/.claude/settings.json"; }
+hooks_copilot_settings()      { printf '%s' "$HOME/.copilot/hooks/00-lifecycle.json"; }
+hooks_scripts()  { printf '%s' "session-start.sh stop.sh guard-write.sh guard-bash.sh"; }
+hooks_unwired()  { printf '%s' "guard-bash.sh"; }
 
-# m3_asset <relpath> <dest> — resolve a shipped asset: the clone first, then the installed copy,
+# hooks_asset <relpath> <dest> — resolve a shipped asset: the clone first, then the installed copy,
 # then the pinned raw URL. Returns 1 if it cannot be had, and never leaves a partial file.
-m3_asset() {
+hooks_asset() {
   local rel="${1:-}" dest="${2:-}" code
   [ -n "$rel" ] && [ -n "$dest" ] || return 1
   if [ -r "${BOOTSTRAP_ASSETS:-}/$rel" ]; then cp -f "${BOOTSTRAP_ASSETS}/$rel" "$dest" 2>/dev/null && return 0; fi
-  if [ -r "$(m3_dir)/$(basename "$rel")" ] && [ "$dest" != "$(m3_dir)/$(basename "$rel")" ]; then
-    cp -f "$(m3_dir)/$(basename "$rel")" "$dest" 2>/dev/null && return 0
+  if [ -r "$(hooks_dir)/$(basename "$rel")" ] && [ "$dest" != "$(hooks_dir)/$(basename "$rel")" ]; then
+    cp -f "$(hooks_dir)/$(basename "$rel")" "$dest" 2>/dev/null && return 0
   fi
   case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|"") return 1 ;; esac
   command -v curl >/dev/null 2>&1 || return 1
@@ -62,37 +62,37 @@ m3_asset() {
   mv -f "$dest.part" "$dest" 2>/dev/null
 }
 
-# m3_table — the wire table's path: the clone's copy if we have it, else the installed one.
-m3_table() {
+# hooks_wire_table — the wire table's path: the clone's copy if we have it, else the installed one.
+hooks_wire_table() {
   if [ -r "${BOOTSTRAP_ASSETS:-}/copilot-hooks.json" ]; then printf '%s' "${BOOTSTRAP_ASSETS}/copilot-hooks.json"; return 0; fi
-  [ -r "$(m3_dir)/copilot-hooks.json" ] && { printf '%s' "$(m3_dir)/copilot-hooks.json"; return 0; }
+  [ -r "$(hooks_dir)/copilot-hooks.json" ] && { printf '%s' "$(hooks_dir)/copilot-hooks.json"; return 0; }
   return 1
 }
 
-# m3_rows — how many rows the wire table has (0 if it cannot be read).
-m3_rows() {
+# hooks_wire_rows — how many rows the wire table has (0 if it cannot be read).
+hooks_wire_rows() {
   local t
-  t="$(m3_table)" || { printf '0'; return 0; }
+  t="$(hooks_wire_table)" || { printf '0'; return 0; }
   bootstrap_array_len "$t" "_spec.wire"
 }
 
-# m3_field <row-index> <field> — one field of one wire row, or empty.
-m3_field() {
+# hooks_wire_field <row-index> <field> — one field of one wire row, or empty.
+hooks_wire_field() {
   local t
-  t="$(m3_table)" || return 1
+  t="$(hooks_wire_table)" || return 1
   bootstrap_settings_get "$t" "_spec.wire.${1:-0}.${2:-script}" raw
 }
 
-# m3_cmd <script> — the ABSOLUTE command string we register. $HOME is expanded here rather than
+# hooks_script_path <script> — the ABSOLUTE command string we register. $HOME is expanded here rather than
 # left literal: the settings file is machine-local runtime state, so the expanded path is both
 # correct and free of any assumption about how the agent invokes it. No shipped file in this repo
 # ever contains it (house rule 9).
-m3_cmd() { printf '%s/%s' "$(m3_dir)" "${1:-}"; }
+hooks_script_path() { printf '%s/%s' "$(hooks_dir)" "${1:-}"; }
 
-# m3_count_cc <settings> <command> — how many times this exact command appears anywhere under
+# hooks_count_claude <settings> <command> — how many times this exact command appears anywhere under
 # .hooks, across every event and group. A COUNT, not a boolean: "wired" and "wired twice" are
 # different states, and only the count can tell them apart. plutil only — never the writer's jq.
-m3_count_cc() {
+hooks_count_claude() {
   local f="${1:-}" cmd="${2:-}" ev i j c n=0
   [ -f "$f" ] || { printf '0'; return 0; }
   for ev in $(bootstrap_hook_events "$f"); do
@@ -110,8 +110,8 @@ m3_count_cc() {
   printf '%s' "$n"
 }
 
-# m3_count_cop <hooks.json> <command> — the same count in the Copilot envelope (.bash, no group).
-m3_count_cop() {
+# hooks_count_copilot <hooks.json> <command> — the same count in the Copilot envelope (.bash, no group).
+hooks_count_copilot() {
   local f="${1:-}" cmd="${2:-}" ev i b n=0
   [ -f "$f" ] || { printf '0'; return 0; }
   for ev in $(bootstrap_hook_events "$f"); do
@@ -125,10 +125,10 @@ m3_count_cop() {
   printf '%s' "$n"
 }
 
-# m3_file_unusable <file> — 0 when the file EXISTS and we must not touch it: unreadable, not
+# hooks_file_unusable <file> — 0 when the file EXISTS and we must not touch it: unreadable, not
 # writable, not valid JSON, or a plist wearing a .json name. That is a human's decision, not
 # ours — we never repair a file the user owns.
-m3_file_unusable() {
+hooks_file_unusable() {
   local f="${1:-}"
   [ -f "$f" ] || return 1
   [ -r "$f" ] || return 0
@@ -158,19 +158,19 @@ m3_file_unusable() {
 # near-miss controls do not; what is measured HERE is that the scripts are registered exactly
 # once and that they do what they claim when executed. Neither of those is "the agent ran it".
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_m3_hooks()    { printf '%s' 'session lifecycle hooks: a start brief, a state ledger, a context-fill advisory, a write guard'; }
-cost_m3_hooks()    { printf '%s' 'four scripts plus hook entries in both settings files. No installs, no permissions.'; }
-profile_m3_hooks() { printf '%s' 'lite'; }
+what_hooks()    { printf '%s' 'session lifecycle hooks: a start brief, a state ledger, a context-fill advisory, a write guard'; }
+cost_hooks()    { printf '%s' 'four scripts plus hook entries in both settings files. No installs, no permissions.'; }
+profile_hooks() { printf '%s' 'lite'; }
 
-verify_m3_hooks() {
+verify_hooks() {
   local d t n i s cmd ev rows T out before after rc=0
-  d="$(m3_dir)"
-  t="$(m3_table)" || return 1
-  rows="$(m3_rows)"; case "$rows" in ''|*[!0-9]*) return 1 ;; esac
+  d="$(hooks_dir)"
+  t="$(hooks_wire_table)" || return 1
+  rows="$(hooks_wire_rows)"; case "$rows" in ''|*[!0-9]*) return 1 ;; esac
   [ "$rows" -gt 0 ] || return 1
 
   # files
-  for s in $(m3_scripts); do
+  for s in $(hooks_scripts); do
     [ -f "$d/$s" ] && [ -x "$d/$s" ] || return 1
     if [ -r "${BOOTSTRAP_ASSETS:-}/hooks/$s" ]; then
       cmp -s "${BOOTSTRAP_ASSETS}/hooks/$s" "$d/$s" || return 1
@@ -183,8 +183,8 @@ verify_m3_hooks() {
   # the wire table's two renderings must still agree — a table copied twice drifts in silence
   i=0
   while [ "$i" -lt "$rows" ]; do
-    s="$(m3_field "$i" script)";  [ -n "$s" ] || return 1
-    ev="$(m3_field "$i" event)";  [ -n "$ev" ] || return 1
+    s="$(hooks_wire_field "$i" script)";  [ -n "$s" ] || return 1
+    ev="$(hooks_wire_field "$i" event)";  [ -n "$ev" ] || return 1
     [ "$(bootstrap_settings_get "$t" "hooks.$ev.0.bash" raw 2>/dev/null)" = "\$HOME/.mac-bootstrap/hooks/$s" ] || return 1
     i=$((i + 1))
   done
@@ -192,25 +192,25 @@ verify_m3_hooks() {
   # registered exactly once, in both files, counted through plutil
   i=0
   while [ "$i" -lt "$rows" ]; do
-    s="$(m3_field "$i" script)"
-    cmd="$(m3_cmd "$s")"
-    [ "$(m3_count_cc  "$(m3_cc)"  "$cmd")" = 1 ] || return 1
-    [ "$(m3_count_cop "$(m3_cop)" "$cmd")" = 1 ] || return 1
+    s="$(hooks_wire_field "$i" script)"
+    cmd="$(hooks_script_path "$s")"
+    [ "$(hooks_count_claude  "$(hooks_claude_settings)"  "$cmd")" = 1 ] || return 1
+    [ "$(hooks_count_copilot "$(hooks_copilot_settings)" "$cmd")" = 1 ] || return 1
     i=$((i + 1))
   done
-  [ "$(bootstrap_settings_get "$(m3_cop)" version raw 2>/dev/null)" = 1 ] || return 1
+  [ "$(bootstrap_settings_get "$(hooks_copilot_settings)" version raw 2>/dev/null)" = 1 ] || return 1
 
   # the unwired guard: present on disk, registered NOWHERE
-  for s in $(m3_unwired); do
-    cmd="$(m3_cmd "$s")"
-    [ "$(m3_count_cc  "$(m3_cc)"  "$cmd")" = 0 ] || return 1
-    [ "$(m3_count_cop "$(m3_cop)" "$cmd")" = 0 ] || return 1
+  for s in $(hooks_unwired); do
+    cmd="$(hooks_script_path "$s")"
+    [ "$(hooks_count_claude  "$(hooks_claude_settings)"  "$cmd")" = 0 ] || return 1
+    [ "$(hooks_count_copilot "$(hooks_copilot_settings)" "$cmd")" = 0 ] || return 1
   done
 
   # NEGATIVE CONTROL: an event name that does not exist must be registered in neither file.
   # This is what makes the counts above mean something: it proves the counter can return 0.
-  bootstrap_settings_get "$(m3_cc)"  "hooks.NotAnEventXYZ" json >/dev/null 2>&1 && return 1
-  bootstrap_settings_get "$(m3_cop)" "hooks.NotAnEventXYZ" json >/dev/null 2>&1 && return 1
+  bootstrap_settings_get "$(hooks_claude_settings)"  "hooks.NotAnEventXYZ" json >/dev/null 2>&1 && return 1
+  bootstrap_settings_get "$(hooks_copilot_settings)" "hooks.NotAnEventXYZ" json >/dev/null 2>&1 && return 1
 
   # FIRE the write guard for real, in a sandbox, and require the file it promises to appear.
   T="$(mktemp -d -t m3v 2>/dev/null)" || return 1
@@ -256,17 +256,17 @@ XIN
 # writable, invalid JSON, or an XML/binary plist wearing a .json name. Repairing a file the user
 # owns is their call, not ours — and the alternative, a merge that "fixes" it, is how an agent
 # silently starts with no settings at all.
-gate_m3_hooks() {
-  m3_file_unusable "$(m3_cc)"  && return 0
-  m3_file_unusable "$(m3_cop)" && return 0
+gate_hooks() {
+  hooks_file_unusable "$(hooks_claude_settings)"  && return 0
+  hooks_file_unusable "$(hooks_copilot_settings)" && return 0
   [ -w "$HOME" ] || return 0
   return 1
 }
 
-note_m3_hooks() {
-  if m3_file_unusable "$(m3_cc)"; then
+note_hooks() {
+  if hooks_file_unusable "$(hooks_claude_settings)"; then
     printf 'Your Claude Code settings file exists but is not JSON we can safely merge into (invalid, a plist, or not writable) — nothing was touched.'
-  elif m3_file_unusable "$(m3_cop)"; then
+  elif hooks_file_unusable "$(hooks_copilot_settings)"; then
     printf 'Your Copilot hooks file exists but is not JSON we can safely merge into (invalid, a plist, or not writable) — nothing was touched.'
   elif [ ! -w "$HOME" ]; then
     printf 'Your home directory is not writable by this account, so no agent settings can be installed.'
@@ -275,54 +275,54 @@ note_m3_hooks() {
   fi
 }
 
-gesture_m3_hooks() {
-  if m3_file_unusable "$(m3_cc)"; then
-    printf 'open -e "%s"' "$(m3_cc)"
-  elif m3_file_unusable "$(m3_cop)"; then
-    printf 'open -e "%s"' "$(m3_cop)"
+gesture_hooks() {
+  if hooks_file_unusable "$(hooks_claude_settings)"; then
+    printf 'open -e "%s"' "$(hooks_claude_settings)"
+  elif hooks_file_unusable "$(hooks_copilot_settings)"; then
+    printf 'open -e "%s"' "$(hooks_copilot_settings)"
   fi
   return 0
 }
 
 # ── install ──────────────────────────────────────────────────────────────────────────────────
 # Reversible, idempotent, and every settings write goes through the library's one writer.
-install_m3_hooks() {
+install_hooks() {
   local d t rows i s ev mt to cmd rc=0
-  d="$(m3_dir)"
-  mkdir -p "$d" 2>/dev/null || { bootstrap_warn "m3: cannot create $d"; return 1; }
+  d="$(hooks_dir)"
+  mkdir -p "$d" 2>/dev/null || { bootstrap_warn "hooks: cannot create $d"; return 1; }
 
   # the library the hooks source: the one in force, so a hook can never run against a different
   # bootstrap-lib.sh than the driver did. Falls back to the shipped asset when BOOTSTRAP_LIB is unset.
   if [ -n "${BOOTSTRAP_LIB:-}" ] && [ -r "${BOOTSTRAP_LIB}" ]; then
-    cp -f "${BOOTSTRAP_LIB}" "$d/bootstrap-lib.sh" 2>/dev/null || { bootstrap_warn "m3: cannot place bootstrap-lib.sh"; return 1; }
+    cp -f "${BOOTSTRAP_LIB}" "$d/bootstrap-lib.sh" 2>/dev/null || { bootstrap_warn "hooks: cannot place bootstrap-lib.sh"; return 1; }
   else
-    m3_asset hooks/bootstrap-lib.sh "$d/bootstrap-lib.sh" || { bootstrap_warn "m3: cannot resolve bootstrap-lib.sh"; return 1; }
+    hooks_asset hooks/bootstrap-lib.sh "$d/bootstrap-lib.sh" || { bootstrap_warn "hooks: cannot resolve bootstrap-lib.sh"; return 1; }
   fi
-  for s in $(m3_scripts); do
-    m3_asset "hooks/$s" "$d/$s" || { bootstrap_warn "m3: cannot resolve $s"; return 1; }
+  for s in $(hooks_scripts); do
+    hooks_asset "hooks/$s" "$d/$s" || { bootstrap_warn "hooks: cannot resolve $s"; return 1; }
     chmod +x "$d/$s" 2>/dev/null || true
   done
-  m3_asset copilot-hooks.json "$d/copilot-hooks.json" || { bootstrap_warn "m3: cannot resolve copilot-hooks.json"; return 1; }
+  hooks_asset copilot-hooks.json "$d/copilot-hooks.json" || { bootstrap_warn "hooks: cannot resolve copilot-hooks.json"; return 1; }
 
-  t="$(m3_table)" || { bootstrap_warn "m3: no wire table"; return 1; }
-  rows="$(m3_rows)"; case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
-  [ "$rows" -gt 0 ] || { bootstrap_warn "m3: wire table is empty"; return 1; }
+  t="$(hooks_wire_table)" || { bootstrap_warn "hooks: no wire table"; return 1; }
+  rows="$(hooks_wire_rows)"; case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
+  [ "$rows" -gt 0 ] || { bootstrap_warn "hooks: wire table is empty"; return 1; }
 
   i=0
   while [ "$i" -lt "$rows" ]; do
-    s="$(m3_field "$i" script)"
-    ev="$(m3_field "$i" event)"
-    to="$(m3_field "$i" timeout)"; case "$to" in ''|*[!0-9]*) to=10 ;; esac
-    cmd="$(m3_cmd "$s")"
-    [ -n "$s" ] && [ -n "$ev" ] || { bootstrap_warn "m3: wire row $i is incomplete"; rc=1; i=$((i + 1)); continue; }
+    s="$(hooks_wire_field "$i" script)"
+    ev="$(hooks_wire_field "$i" event)"
+    to="$(hooks_wire_field "$i" timeout)"; case "$to" in ''|*[!0-9]*) to=10 ;; esac
+    cmd="$(hooks_script_path "$s")"
+    [ -n "$s" ] && [ -n "$ev" ] || { bootstrap_warn "hooks: wire row $i is incomplete"; rc=1; i=$((i + 1)); continue; }
 
-    mt="$(m3_field "$i" claude_matcher)"
-    bootstrap_hook_wire "$(m3_cc)" "$ev" "$mt" "$cmd" "$to" || { bootstrap_warn "m3: could not wire $s into $(m3_cc)"; rc=1; }
+    mt="$(hooks_wire_field "$i" claude_matcher)"
+    bootstrap_hook_wire "$(hooks_claude_settings)" "$ev" "$mt" "$cmd" "$to" || { bootstrap_warn "hooks: could not wire $s into $(hooks_claude_settings)"; rc=1; }
 
     # Copilot: an EMPTY matcher is omitted by the library rather than written as "" — matcher is
     # a regex there, and an empty regex is not a wildcard.
-    mt="$(m3_field "$i" copilot_matcher)"
-    bootstrap_copilot_hook_wire "$(m3_cop)" "$ev" "$mt" "$cmd" "$to" || { bootstrap_warn "m3: could not wire $s into $(m3_cop)"; rc=1; }
+    mt="$(hooks_wire_field "$i" copilot_matcher)"
+    bootstrap_copilot_hook_wire "$(hooks_copilot_settings)" "$ev" "$mt" "$cmd" "$to" || { bootstrap_warn "hooks: could not wire $s into $(hooks_copilot_settings)"; rc=1; }
     i=$((i + 1))
   done
   return "$rc"
@@ -331,19 +331,19 @@ install_m3_hooks() {
 # ── uninstall ────────────────────────────────────────────────────────────────────────────────
 # Safe when nothing is installed. Removes OUR registrations and OUR scripts, and nothing else:
 # the backups the write guard made are the user's own data and are deliberately left behind.
-uninstall_m3_hooks() {
+uninstall_hooks() {
   local d f i ev b keep=0 s
-  d="$(m3_dir)"
+  d="$(hooks_dir)"
   # OWNERSHIP IS THE DIRECTORY, NOT A FILENAME PREFIX. This used to match the hook scripts by
   # their old shared filename prefix, so renaming them silently stopped the uninstall unwiring
   # them: the registrations survived in the user's settings.json, pointing at scripts that had
   # just been deleted. The hooks directory is ours entirely — that is the fact, and a filename
   # convention nothing enforced was never it.
-  bootstrap_hook_unwire "$(m3_cc)" "$d/" >/dev/null 2>&1
+  bootstrap_hook_unwire "$(hooks_claude_settings)" "$d/" >/dev/null 2>&1
 
   # The Copilot file is ours by name (00-lifecycle.json). Remove it only if every entry in it is
   # ours; if a human added one, leave the file alone and say so rather than editing around them.
-  f="$(m3_cop)"
+  f="$(hooks_copilot_settings)"
   if [ -f "$f" ]; then
     for ev in $(bootstrap_hook_events "$f"); do
       i=0
@@ -356,11 +356,11 @@ uninstall_m3_hooks() {
     if [ "$keep" = 0 ]; then
       bootstrap_backup "$f"; rm -f "$f" 2>/dev/null
     else
-      bootstrap_warn "m3: $f also holds hooks this bootstrap did not write — leaving it in place."
+      bootstrap_warn "hooks: $f also holds hooks this bootstrap did not write — leaving it in place."
     fi
   fi
 
-  for s in $(m3_scripts); do rm -f "$d/$s" 2>/dev/null; done
+  for s in $(hooks_scripts); do rm -f "$d/$s" 2>/dev/null; done
   rm -f "$d/bootstrap-lib.sh" "$d/copilot-hooks.json" 2>/dev/null
   rmdir "$d" 2>/dev/null || true
   rm -f "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/stop-count" \

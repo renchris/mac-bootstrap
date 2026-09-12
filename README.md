@@ -16,16 +16,16 @@ and leaves you about four runs and roughly an hour, most of it waiting on Apple.
 ## 1. Clear the gates no script may pass for you
 
 `lite` — the default — needs exactly one: **G12′**. An out-of-the-box Mac has only Terminal.app,
-which has no equalize action, so `m5_panes` has nothing to bind ⌘⇧E in; it records the gesture and
+which has no equalize action, so `pane_equalize` has nothing to bind ⌘⇧E in; it records the gesture and
 the run exits `10` until a terminal emulator exists. Every other row below is `standard` or `full`.
 The driver detects and records each rather than attempting it, so doing them first only saves you a
 re-run — and re-running after one is the recovery procedure, not a repair.
 
-**You can skip all of it and start now.** `m5_panes` is the only lite module that looks for an
+**You can skip all of it and start now.** `pane_equalize` is the only lite module that looks for an
 installed app, so on a machine with nothing on it yet:
 
 ```bash
-bash bootstrap.sh --profile lite --except m5_panes
+bash bootstrap.sh --profile lite --except pane_equalize
 ```
 
 exits `0` with the status line, the instructions file and the lifecycle hooks all live — no
@@ -58,13 +58,13 @@ for you and then asks which profile you want.
 | Every file it would write, with hashes | `bash bootstrap.sh --manifest` | writes nothing |
 | The default | `bash bootstrap.sh` | acts |
 | A bigger set | `bash bootstrap.sh --profile standard` · `--profile full` | acts |
-| Exactly these | `bash bootstrap.sh --only m1_statusline,m5_panes` | acts |
-| Everything but that one | `bash bootstrap.sh --profile full --except m6_voiceink` | acts |
+| Exactly these | `bash bootstrap.sh --only statusline,pane_equalize` | acts |
+| Everything but that one | `bash bootstrap.sh --profile full --except voiceink` | acts |
 
 <!-- Diagram source: assets/diagrams/module-selection.mmd — edit it, run `npm run diagrams`, commit the SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/module-selection-dark.svg">
-  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs m1_statusline, m2_instructions, m3_hooks and m5_panes; standard adds m4_handoff and m7_model; full adds m6_voiceink and m8_screenshot. m4_handoff needs m1_statusline and m3_hooks, which are added out loud when missing.">
+  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs statusline, instructions, hooks and pane_equalize; standard adds handoff and rewrite_model; full adds voiceink and screenshot. handoff needs statusline and hooks, which are added out loud when missing.">
 </picture>
 
 Profiles are cut by blast radius; `lite` is the default because it is the largest set that asks
@@ -77,7 +77,7 @@ nothing of you and leaves nothing to clean up.
 | **full** | + the VoiceInk build · the screenshot pipeline | Xcode ~9 GB and an Apple ID, plus two permission toggles only you can grant |
 
 `--verify` re-reads the machine cold and changes nothing; `--uninstall` reverses a run. Dependencies
-resolve themselves and say so (`note: m4_handoff needs m1_statusline — adding it`); an unknown module
+resolve themselves and say so (`note: handoff needs statusline — adding it`); an unknown module
 name is refused with the list of real ones, so it never selects nothing and calls that success.
 
 ## 3. Run it, and read the exit code
@@ -128,9 +128,9 @@ You are setting up a Mac for an agent workflow. Work only in this terminal. Do n
    $HOME/.mac-bootstrap/bootstrap.log, say the cause in one line, fix it only if the cause is
    yours, then re-run `--only <module>`. Never retry a module unchanged.
 
-6. ONLY IF m7_model is in the selection — your judgment call, and it is yours:
+6. ONLY IF rewrite_model is in the selection — your judgment call, and it is yours:
      sysctl -n hw.memsize ; sysctl -n machdep.cpu.brand_string
-   At 16 GB or more use qwen3:8b. Under 16 GB do not guess: `--only m7_model --bench <model>`
+   At 16 GB or more use qwen3:8b. Under 16 GB do not guess: `--only rewrite_model --bench <model>`
    on two candidates and choose on the printed output. Tell me the pick in one sentence.
 
 7. VERIFY, then REPORT and stop.
@@ -170,7 +170,7 @@ detected each and attempted none.
 |---|---|---|---|
 | **G3** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | the VoiceInk build |
 | **G4** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | the VoiceInk build |
-| **G4′** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/m6-signing-identity.sh` — written for you at the moment this row is recorded | the VoiceInk build |
+| **G4′** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/voiceink-signing-identity.sh` — written for you at the moment this row is recorded | the VoiceInk build |
 | **G5** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | the VoiceInk build |
 | **G6** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | the screenshot pipeline |
 | **G7** | **Accessibility for Hammerspoon** — irreducible: `tccutil` only *resets*, and TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |

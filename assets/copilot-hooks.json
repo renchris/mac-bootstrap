@@ -1,6 +1,6 @@
 {
   "_spec": {
-    "README": "THE WIRE TABLE. This file is the single source of truth for which lifecycle hooks are registered, under which event, on both agents. m3_hooks.sh READS _spec.wire and registers each row through bootstrap_settings_merge (the one writer) — it never copies this file into place, so the _spec block never reaches a user's machine. The top-level hooks object below is the rendered Copilot envelope, kept so a human can see exactly what lands; verify_m3_hooks asserts it still agrees with _spec.wire, because two renderings of one table drift silently.",
+    "README": "THE WIRE TABLE. This file is the single source of truth for which lifecycle hooks are registered, under which event, on both agents. hooks.sh READS _spec.wire and registers each row through bootstrap_settings_merge (the one writer) — it never copies this file into place, so the _spec block never reaches a user's machine. The top-level hooks object below is the rendered Copilot envelope, kept so a human can see exactly what lands; verify_hooks asserts it still agrees with _spec.wire, because two renderings of one table drift silently.",
     "paths": {
       "claude": "$HOME/.claude/settings.json  (hooks.<Event>[].hooks[].command)",
       "copilot": "$HOME/.copilot/hooks/00-lifecycle.json  (hooks.<Event>[].bash)",
@@ -16,7 +16,7 @@
     ],
     "matcher_policy": "Claude Code matches PreToolUse on tool_name, so the write guard carries Write|MultiEdit there. Copilot's write tool turned out to be called \"Edit\" (measured), which a Write|MultiEdit matcher would have missed entirely, so the Copilot row carries NO matcher — an omitted matcher is every tool — and guard-write.sh filters in-script. An empty matcher string is NOT a wildcard in Copilot (it is a regex), which is why the field is omitted rather than set to \"\".",
     "unwired": {
-      "guard-bash.sh": "INSTALLED BUT DELIBERATELY NOT REGISTERED. It false-allowed rm -rf on a quoted $HOME and a quoted force-push to trunk; the rewrite fixes that and proves it with a quoted matrix, but a guard believed present and inert is worse than one known absent. verify_m3_hooks ASSERTS its absence from both settings files. See the header of guard-bash.sh and its --wire-me-instructions."
+      "guard-bash.sh": "INSTALLED BUT DELIBERATELY NOT REGISTERED. It false-allowed rm -rf on a quoted $HOME and a quoted force-push to trunk; the rewrite fixes that and proves it with a quoted matrix, but a guard believed present and inert is worse than one known absent. verify_hooks ASSERTS its absence from both settings files. See the header of guard-bash.sh and its --wire-me-instructions."
     },
     "wire": [
       {
