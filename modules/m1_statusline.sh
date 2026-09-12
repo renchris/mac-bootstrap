@@ -91,6 +91,11 @@ m1_probe() {
 
 # ── the six verbs ────────────────────────────────────────────────────────────────────────────
 
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m1_statusline()    { printf '%s' 'context-% in the agent status line, for Claude Code and Copilot CLI alike'; }
+cost_m1_statusline()    { printf '%s' 'a ~4 KB script plus one key in each settings file. No installs, no permissions, no network.'; }
+profile_m1_statusline() { printf '%s' 'lite'; }
+
 verify_m1_statusline() {
   local sl f cur out
   sl="$(M1_SL)"

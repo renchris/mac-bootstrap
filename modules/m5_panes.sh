@@ -525,6 +525,11 @@ _m5_gate_reason() {
 
 # ── the six verbs ────────────────────────────────────────────────────────────────────────────
 
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m5_panes()    { printf '%s' 'Cmd+Shift+E evens out split panes, in kitty and iTerm2 alike'; }
+cost_m5_panes()    { printf '%s' 'two config lines and one plist key. No installs, no permissions. Needs one terminal relaunch.'; }
+profile_m5_panes() { printf '%s' 'lite'; }
+
 verify_m5_panes() {
   local configured=0
   [ -n "$(_m5_gate_reason)" ] && return 1

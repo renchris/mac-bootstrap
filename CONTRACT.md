@@ -285,3 +285,39 @@ bash verify.sh --only <name>                      # a cold, separate process agr
 
 A module is done when `verify_` passes from a cold process, the second install run is a no-op,
 the no-jq arm reaches the same end state, and every gesture you print runs as typed.
+
+## Catalog metadata — four OPTIONAL verbs
+
+A module may describe itself. These are optional by design: the six required verbs are the
+contract, and a module declaring none of them still works.
+
+| verb | prints | default when absent |
+|---|---|---|
+| `what_<m>` | one line: what the user gets | the module name |
+| `cost_<m>` | one line: disk, minutes, and the human gestures it will ask for | `unpriced` |
+| `profile_<m>` | the smallest profile containing it: `lite`, `standard`, `full` | `standard` |
+| `needs_<m>` | space-separated modules it requires to be meaningful | none |
+
+**Why the default profile is `standard` and not `lite`:** silence must never be dangerous. An
+undeclared module is not in `lite`, so a module nobody has priced can never arrive by default on a
+stranger's machine.
+
+## Selection, and how it is scored
+
+`--profile` chooses a set; `--only` replaces it outright; `--except` subtracts; `needs_` adds back
+and says so on stderr. Dependency notes go to **stderr** because `mb_select` runs inside a command
+substitution — a note on stdout is captured as if it were a module name and then dropped by the
+rebuild, which is how "adding it out loud" silently became "adding it".
+
+Two rules the verdict depends on, both of which were false greens first:
+
+1. **The verdict is scored over the SELECTION, not the manifest.** A module you did not select is
+   a *declined* module, not an unevaluated one. Scoring over the manifest made `--profile lite`
+   permanently return 30, which would have made the whole feature unreachable.
+2. **An unresolvable module is INCLUDED in the selection, never skipped.** Dropping it would
+   remove it from the set the verdict is scored over, and the run would report success having
+   silently lost a module it was asked for. Included, it records `SKIPPED`, and `SKIPPED` is 30.
+   Measured: before this, `PB_MODULES="m1_statusline m99_ghost"` exited **0**.
+
+`exit 0` therefore means *every module in this selection is satisfied*, and the closing line names
+the selection size so `0` can never be read as a claim about the modules you declined.

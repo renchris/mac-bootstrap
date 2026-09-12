@@ -343,6 +343,11 @@ m7_machine_ready() {
 # THE SIX VERBS
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m7_model()    { printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key'; }
+cost_m7_model()    { printf '%s' 'Homebrew + ollama + a ~5 GB model download. Several minutes. One in-app picker at the end.'; }
+profile_m7_model() { printf '%s' 'standard'; }
+
 verify_m7_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
@@ -411,11 +416,19 @@ m7_pending() {
 }
 
 gate_m7_model() {
+  # A sandboxed HOME is a DECISION, not a bug: `defaults` would escape it and hit the real
+  # domain, so pb_defaults_home_ok refuses. Reported through gate_ so it reads NEEDS_HUMAN
+  # rather than FAILED — FAILED sends the reader to the log for a defect that is not there.
+  pb_defaults_home_ok >/dev/null 2>&1 || return 0
   [ "$(m7_pending)" = NONE ] && return 1
   return 0
 }
 
 note_m7_model() {
+  if ! pb_defaults_home_ok >/dev/null 2>&1; then
+    printf 'this run has a sandboxed HOME ($HOME is not your real home), and `defaults` ignores $HOME — writing would hit your REAL preferences. Nothing was written.'
+    return 0
+  fi
   local extra=""
   m7_cloud_key_present && extra=' You must ALSO pin Ollama on your active mode under Settings > Modes: a saved cloud key still outranks Ollama in the provider fallback, so without the pin your local model is never called.'
   case "$(m7_pending)" in
@@ -434,6 +447,10 @@ note_m7_model() {
 }
 
 gesture_m7_model() {
+  if ! pb_defaults_home_ok >/dev/null 2>&1; then
+    printf 'run it from your own account (no HOME override), or set PB_ALLOW_FOREIGN_DEFAULTS=1 if you truly mean to write the real domain'
+    return 0
+  fi
   local root
   case "$(m7_pending)" in
     HOMEBREW)

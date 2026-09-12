@@ -135,6 +135,12 @@ _m4_blocked_dir() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m4_handoff()    { printf '%s' '/handoff: the session retires itself and starts its successor with no human in the loop'; }
+cost_m4_handoff()    { printf '%s' 'a few scripts. Needs tmux (brew install tmux) for its fault tolerance; without it, degrades and says so.'; }
+profile_m4_handoff() { printf '%s' 'standard'; }
+needs_m4_handoff()   { printf '%s' 'm1_statusline m3_hooks'; }
+
 verify_m4_handoff() {
   local bin succ out rc p
   bin="$(_m4_bin)"; succ="$(_m4_succ)"

@@ -10,12 +10,37 @@ One entry point that sets a brand-new Mac up for an agent workflow which has to 
 
 That sentence is the honest framing and it is deliberate. This is not "one command": it is one entry point wrapped around a worksheet of sixteen human gestures — TCC permission toggles, an App Store download, two in-app pickers — none of which a script may take on your behalf. The driver's job is to **detect and record** each one, never to attempt it. Everything else it does itself.
 
+**Look before you leap — these three write nothing at all:**
+
 | | |
 |---|---|
-| Install everything installable, then verify it | `bash bootstrap.sh` |
+| What is on offer, what each costs | `bash bootstrap.sh --list` |
+| What *this* invocation would do to *this* Mac | `bash bootstrap.sh --plan` |
+| Every file it would write, with hashes | `bash bootstrap.sh --manifest` |
+
+**Then pick and choose:**
+
+| | |
+|---|---|
+| The default — config files only, nothing to undo | `bash bootstrap.sh` |
+| A bigger set | `bash bootstrap.sh --profile standard` · `--profile full` |
+| Exactly these | `bash bootstrap.sh --only m1_statusline,m5_panes` |
+| Everything but that one | `bash bootstrap.sh --profile full --except m6_voiceink` |
 | Re-read the machine cold, change nothing | `bash bootstrap.sh --verify` |
-| Re-drive one module after you clear a gate | `bash bootstrap.sh --only m5_panes` |
 | Reverse it | `bash bootstrap.sh --uninstall` |
+
+Dependencies resolve themselves and say so (`note: m4_handoff needs m1_statusline — adding it`).
+A module name that does not exist is refused with the list of real ones — it never selects nothing and calls that success.
+
+### Profiles, cut by blast radius
+
+| Profile | You get | It costs |
+|---|---|---|
+| **lite** — the default | status line · instructions file · lifecycle hooks · ⌘⇧E pane equalize | config files only. No Homebrew, no permissions, no Apple ID, no network beyond the fetch |
+| **standard** | + `/handoff` self-recycle · a local speech-rewrite model | Homebrew, tmux, a ~5 GB model download |
+| **full** | + the VoiceInk build · the screenshot pipeline | Xcode ~9 GB and an Apple ID, plus two permission toggles only you can grant |
+
+The default is `lite` on purpose: it is the largest set that asks nothing of you and leaves nothing to clean up.
 
 **Exit codes**, identical on the install and the verify path — `0` every module satisfied · `10` satisfied except for steps waiting on **you** · `20` something failed, read the log · `30` the run could not assemble itself, so it is *not* a verdict about your machine. Precedence `30 > 20 > 10 > 0`.
 
@@ -28,43 +53,45 @@ It is idempotent. **Re-running it is the recovery procedure.** Nothing is writte
 Replace `<SHA>` with the release commit. Never `main`: a `main`-pinned raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured).
 
 ```text
-You are bootstrapping a brand-new Mac. Work only in this terminal. Do not open a browser.
+You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
 
 1. FETCH — never pipe a script into a shell. Save it, then show me its checksum and first lines:
      curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/<SHA>/bootstrap.sh
      shasum -a 256 /tmp/mac-bootstrap.sh && wc -l /tmp/mac-bootstrap.sh && head -20 /tmp/mac-bootstrap.sh
    If the download fails or the file is under 100 lines, stop and tell me. Do not find another source.
 
-2. RUN it:  bash /tmp/mac-bootstrap.sh
+2. LOOK before touching anything. These three write NOTHING:
+     bash /tmp/mac-bootstrap.sh --list
+     bash /tmp/mac-bootstrap.sh --plan
+   Then tell me in at most five lines: what the default (lite) would install here, and what
+   standard and full would add and cost. Read the costs off --list; do not invent them.
+
+3. ASK me which profile, and wait. Recommend one and say why in a sentence, based on what this
+   machine already has. If I have already told you, skip this step and use what I said.
+   Profiles: lite (config only) · standard (+ self-recycle, + a local model) · full (+ app build,
+   + screenshots). You can also propose --only or --except if some single module is the real fit.
+
+4. RUN it with my answer, e.g.  bash /tmp/mac-bootstrap.sh --profile standard
    It is idempotent; running it twice is the recovery procedure. It does nothing irreversible:
    anything needing a GUI permission, a keychain entry, sudo, an Apple ID or money is recorded
    for me, never attempted.
-   Exit 0 = done. 10 = steps need me. 20 = something failed. 30 = the run could not assemble
-   itself and says nothing about the machine — read the log and fix that first.
+   Exit 0 = every selected module satisfied. 10 = some need me. 20 = something failed.
+   30 = the run could not assemble itself and says nothing about the machine — fix that first.
 
-3. READ $HOME/.mac-bootstrap/receipt.json. For each module whose state is FAILED: read
+5. READ $HOME/.mac-bootstrap/receipt.json. For each module whose state is FAILED: read
    $HOME/.mac-bootstrap/bootstrap.log, say the cause in one line, fix it only if the cause is
-   yours, then re-run `bash /tmp/mac-bootstrap.sh --only <module>`. Never retry a module unchanged.
+   yours, then re-run `--only <module>`. Never retry a module unchanged.
 
-4. YOUR judgment call — the only one, and it is yours:
+6. ONLY IF m7_model is in the selection — your judgment call, and it is yours:
      sysctl -n hw.memsize ; sysctl -n machdep.cpu.brand_string
-     command -v ollama >/dev/null && ollama list || echo "(ollama not installed yet — m7 installs it)"
-   Pick the local text-rewrite model. At 16 GB or more, use qwen3:8b unless something already
-   pulled is strictly better. Under 16 GB, do not guess: pull two candidates and run
-   `bash /tmp/mac-bootstrap.sh --only m7_model --bench <model>` on each, then choose on its
-   printed output. Install with `--only m7_model --model <pick>`. Tell me the pick in one sentence.
+   At 16 GB or more use qwen3:8b. Under 16 GB do not guess: `--only m7_model --bench <model>`
+   on two candidates and choose on the printed output. Tell me the pick in one sentence.
 
-5. VERIFY — run exactly this and do not substitute a check of your own:
+7. VERIFY, then REPORT and stop.
      bash /tmp/mac-bootstrap.sh --verify
-   It re-reads every module from disk, cold. Exit 0 means every module is SATISFIED — nothing is
-   waiting on me. Exit 10 means the rest is mine to clear; name those modules. Any other code is
-   not done — say which module and why.
-
-6. REPORT, then stop.
-   - Line 1: what is installed and verified.
-   - Then, for each thing that needs me: one line of plain English, then its single command alone
-     on its own line in backticks, executable as typed. If I should not run it, do not show it.
-   Do not ask me to confirm steps 1-5. Just do them.
+   Line 1: what is installed and verified. Then, for each thing that needs me: one line of plain
+   English, then its single command alone on its own line in backticks, executable as typed.
+   If I should not run it, do not show it. Do not ask me to confirm steps 1-2 or 4-7.
 
 In force throughout: never edit my agent's permission settings, allowlists or credentials — if you
 need a permission, ask me in chat. Never run sudo without showing me the exact command and waiting

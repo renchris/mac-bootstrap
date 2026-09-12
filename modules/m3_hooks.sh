@@ -157,6 +157,11 @@ m3_file_unusable() {
 # measured upstream (copilot-surface.md §3.4, R-A) is that these exact event names fire and six
 # near-miss controls do not; what is measured HERE is that the scripts are registered exactly
 # once and that they do what they claim when executed. Neither of those is "the agent ran it".
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m3_hooks()    { printf '%s' 'session lifecycle hooks: a start brief, a state ledger, a context-fill advisory, a write guard'; }
+cost_m3_hooks()    { printf '%s' 'four scripts plus hook entries in both settings files. No installs, no permissions.'; }
+profile_m3_hooks() { printf '%s' 'lite'; }
+
 verify_m3_hooks() {
   local d t n i s cmd ev rows T out before after rc=0
   d="$(m3_dir)"

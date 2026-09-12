@@ -57,14 +57,36 @@
 #   PB_M8_ACC_WAIT  seconds install_ waits for the Accessibility grant before handing back. 5.
 
 M8_APP="/Applications/Hammerspoon.app"
-M8_REPO_URL="https://github.com/renchris/hammerspoon-config.git"
+# The Hammerspoon config is VENDORED at assets/hammerspoon/init.lua. It used to be cloned from a
+# personal GitHub repo, which made deliverable 5 fail for anyone who is not its owner and put an
+# account-shaped dependency in a bootstrap whose whole premise is an ANONYMOUS reader. The clone
+# path survives only when the operator explicitly points at a checkout they want to track.
+M8_REPO_URL="${PB_M8_REPO_URL:-}"
 M8_DEFAULTS="/usr/bin/defaults"
 M8_SCREENCAPTURE="/usr/sbin/screencapture"
 
 # ── paths, computed rather than stored, because no state survives between verbs ───────────────
 m8_shot_dir() { printf '%s' "$HOME/Screenshots"; }
 m8_hs_dir()   { printf '%s' "$HOME/.hammerspoon"; }
-m8_repo_dir() { printf '%s' "${PB_M8_REPO_DIR:-$HOME/Development/hammerspoon-config}"; }
+m8_repo_dir() { printf '%s' "${PB_M8_REPO_DIR:-${PB_STATE_DIR:-$HOME/.mac-bootstrap}/hammerspoon}"; }
+# ── m8_cfg_source — where init.lua comes from. Local assets dir, then the cached copy, then the
+# pinned raw URL. Identical in shape to m1_source, deliberately: one idiom for every asset.
+m8_cfg_source() {
+  local c t code
+  for c in "${PB_ASSETS:-}/hammerspoon/init.lua" \
+           "${PB_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"; do
+    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  t="${PB_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"
+  mkdir -p "$(dirname "$t")" 2>/dev/null || return 1
+  [ -n "${PB_RAW:-}" ] || return 1
+  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${PB_RAW}/assets/hammerspoon/init.lua" 2>/dev/null)" || {
+    rm -f "$t.part" 2>/dev/null; return 1; }
+  [ "$code" = 200 ] || { rm -f "$t.part" 2>/dev/null; return 1; }
+  mv -f "$t.part" "$t" 2>/dev/null || return 1
+  printf '%s' "$t"
+}
+
 m8_domain()   { printf '%s' "${PB_M8_DOMAIN:-com.apple.screencapture}"; }
 m8_state()    { printf '%s' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 m8_mark()     { printf '%s/m8-blocked' "$(m8_state)"; }
@@ -288,6 +310,11 @@ m8_live_probe() {
 # THE SIX VERBS
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m8_screenshot()    { printf '%s' 'Cmd+Shift+4 to a bottom-right thumbnail to the clipboard to a paste into your agent'; }
+cost_m8_screenshot()    { printf '%s' 'Homebrew + Hammerspoon, and one Accessibility toggle that no script can grant for you.'; }
+profile_m8_screenshot() { printf '%s' 'full'; }
+
 verify_m8_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
@@ -321,12 +348,20 @@ m8_gate_reason() {
 }
 
 gate_m8_screenshot() {
+  # A sandboxed HOME is a DECISION, not a bug: `defaults` would escape it and hit the real
+  # domain, so pb_defaults_home_ok refuses. Reported through gate_ so it reads NEEDS_HUMAN
+  # rather than FAILED — FAILED sends the reader to the log for a defect that is not there.
+  pb_defaults_home_ok >/dev/null 2>&1 || return 0
   local r
   r="$(m8_gate_reason)"
   [ -n "$r" ]
 }
 
 note_m8_screenshot() {
+  if ! pb_defaults_home_ok >/dev/null 2>&1; then
+    printf 'this run has a sandboxed HOME ($HOME is not your real home), and `defaults` ignores $HOME — writing would hit your REAL preferences. Nothing was written.'
+    return 0
+  fi
   case "$(m8_gate_reason)" in
     homebrew)        printf 'Homebrew is not installed, so Hammerspoon cannot be installed; the Homebrew installer needs your password (sudo).' ;;
     clt)             printf 'The Xcode Command Line Tools are absent, so git cannot clone the config; the installer is a GUI dialog you must approve.' ;;
@@ -338,6 +373,10 @@ note_m8_screenshot() {
 }
 
 gesture_m8_screenshot() {
+  if ! pb_defaults_home_ok >/dev/null 2>&1; then
+    printf 'run it from your own account (no HOME override), or set PB_ALLOW_FOREIGN_DEFAULTS=1 if you truly mean to write the real domain'
+    return 0
+  fi
   case "$(m8_gate_reason)" in
     homebrew)        printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' ;;
     clt)             printf 'xcode-select --install' ;;
@@ -390,7 +429,7 @@ install_m8_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
   pb_defaults_home_ok || return 1
-  local brew git dir hs out i rc want unfinished=0
+  local brew git dir hs out i rc want src unfinished=0
 
   rm -f "$(m8_mark)" 2>/dev/null
 
@@ -410,30 +449,41 @@ install_m8_screenshot() {
     fi
   fi
 
-  # 2. the PUBLIC config checkout
+  # 2. the config itself — VENDORED, not cloned. A git checkout is used only when the operator
+  #    explicitly named one (PB_M8_REPO_DIR at a .git, or PB_M8_REPO_URL); otherwise the file
+  #    comes from this repo's own assets and needs no git, no GitHub account and no network
+  #    beyond the pinned raw URL the driver already used.
   dir="$(m8_repo_dir)"
-  if m8_repo_ok; then
-    printf '   ok   config checkout at %s\n' "$dir"
-    if git="$(m8_git)" && [ -d "$dir/.git" ]; then
-      if [ -z "$("$git" -C "$dir" status --porcelain 2>/dev/null)" ]; then
-        GIT_TERMINAL_PROMPT=0 "$git" -C "$dir" pull --ff-only </dev/null >/dev/null 2>&1 \
-          && printf '   ok   fast-forwarded\n' || printf '   --   no fast-forward available; leaving the checkout as it is\n'
-      else
-        printf '   --   checkout has local changes; not pulling\n'
-      fi
-    fi
-  else
+  if [ -n "$M8_REPO_URL" ] && ! m8_repo_ok; then
     if git="$(m8_git)"; then
       mkdir -p "$(dirname "$dir")" 2>/dev/null
-      printf '   ..   git clone %s\n' "$M8_REPO_URL"
+      printf '   ..   git clone %s (explicitly requested)\n' "$M8_REPO_URL"
       GIT_TERMINAL_PROMPT=0 "$git" clone --depth 1 "$M8_REPO_URL" "$dir" </dev/null 2>&1
-      m8_repo_ok || { printf '   x    clone did not produce %s/init.lua\n' "$dir"; return 1; }
-      printf '   ok   cloned to %s\n' "$dir"
     else
-      printf '   x    no usable git (the /usr/bin/git shim would raise the Command Line Tools dialog) — that step is yours.\n'
+      printf '   x    PB_M8_REPO_URL is set but there is no usable git — that step is yours.\n'
       return 1
     fi
   fi
+  if [ -d "$dir/.git" ] && git="$(m8_git)"; then
+    printf '   ok   tracking the checkout at %s\n' "$dir"
+    if [ -z "$("$git" -C "$dir" status --porcelain 2>/dev/null)" ]; then
+      GIT_TERMINAL_PROMPT=0 "$git" -C "$dir" pull --ff-only </dev/null >/dev/null 2>&1 \
+        && printf '   ok   fast-forwarded\n' || printf '   --   no fast-forward available; leaving it as it is\n'
+    else
+      printf '   --   checkout has local changes; not pulling\n'
+    fi
+  else
+    src="$(m8_cfg_source)" || { printf '   x    cannot find or fetch assets/hammerspoon/init.lua\n'; return 1; }
+    mkdir -p "$dir" 2>/dev/null
+    if [ -f "$dir/init.lua" ] && cmp -s "$src" "$dir/init.lua"; then
+      printf '   ok   config already current at %s\n' "$dir"
+    else
+      cp "$src" "$dir/init.lua.part" 2>/dev/null && mv -f "$dir/init.lua.part" "$dir/init.lua" 2>/dev/null \
+        || { printf '   x    could not write %s/init.lua\n' "$dir"; return 1; }
+      printf '   ok   config installed to %s (vendored, no GitHub account needed)\n' "$dir"
+    fi
+  fi
+  m8_repo_ok || { printf '   x    no init.lua at %s\n' "$dir"; return 1; }
 
   # 3. the symlink — guarded, idempotent, non-destructive. Anything already there that is not
   #    ours is MOVED ASIDE, never overwritten: `ln -sfn` would silently discard it.

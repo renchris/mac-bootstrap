@@ -52,6 +52,10 @@ MB_VRECEIPT="$MB_STATE/receipt.verify.json"
 
 MB_MODE=install
 MB_ONLY=""
+MB_EXCEPT=""
+MB_SELECTED=""
+MB_PROFILE=""            # empty => the default profile below
+MB_PROFILE_DEFAULT=lite    # the safest useful set: config files only, no installs, no gestures
 MB_BENCH=""
 MB_MODEL=""
 MB_RC=0
@@ -83,11 +87,18 @@ while [ $# -gt 0 ]; do
     --verify)    MB_MODE=verify ;;
     --uninstall) MB_MODE=uninstall ;;
     --only)      [ $# -ge 2 ] || { printf 'bootstrap: --only needs a module name\n' >&2; exit 30; }
-                 MB_ONLY="$MB_ONLY $2"; shift ;;
+                 MB_ONLY="$MB_ONLY $(printf '%s' "$2" | tr ',' ' ')"; shift ;;
     --bench)     [ $# -ge 2 ] || { printf 'bootstrap: --bench needs a model name\n' >&2; exit 30; }
                  MB_MODE=bench; MB_BENCH="$2"; shift ;;
     --model)     [ $# -ge 2 ] || { printf 'bootstrap: --model needs a name\n' >&2; exit 30; }
                  MB_MODEL="$2"; shift ;;
+    --list)      MB_MODE=list ;;
+    --plan)      MB_MODE=plan ;;
+    --manifest)  MB_MODE=manifest ;;
+    --profile)   [ $# -ge 2 ] || { printf 'bootstrap: --profile needs a name (lite|standard|full|all)\n' >&2; exit 30; }
+                 MB_PROFILE="$2"; shift ;;
+    --except)    [ $# -ge 2 ] || { printf 'bootstrap: --except needs a module name\n' >&2; exit 30; }
+                 MB_EXCEPT="$MB_EXCEPT $(printf '%s' "$2" | tr ',' ' ')"; shift ;;
     --help|-h)   mb_help; exit 0 ;;
     --dry-run)   printf 'bootstrap: --dry-run was REMOVED, not renamed.\n' >&2
                  printf '  It overwrote the receipt and exited 0 on a machine where nothing was\n' >&2
@@ -183,6 +194,174 @@ mb_module_file() {                              # prints the readable path, or n
   mb_fetch "modules/$m.sh" "$MB_CACHE/$m.sh" >/dev/null 2>&1 && {
     printf '%s' "$MB_CACHE/$m.sh"; return 0; }
   return 1
+}
+
+# ── the CATALOG ───────────────────────────────────────────────────────────────────────────────
+# A module may declare itself with four OPTIONAL verbs. They are optional on purpose: the six
+# required verbs are the contract, and a module that declares none of these still works — it just
+# lands in the `standard` profile with no printed cost. Defaults are chosen so that silence is
+# never dangerous: an undeclared module is NOT in `lite`, so a module nobody has priced can never
+# arrive by default on a stranger's machine.
+#
+#   what_<m>      one line: what you get
+#   cost_<m>      one line: disk, minutes, and the human gestures it will ask for
+#   profile_<m>   lite | standard | full   (the smallest profile that includes it)
+#   needs_<m>     space-separated module names this one requires to be meaningful
+mb_meta() {                                     # mb_meta <module-file> <module> <field> <default>
+  local out
+  if mb_has_verb "$1" "$2" "$3"; then
+    out="$(mb_call "$1" "$2" "$3" 2>/dev/null)" || out=""
+    [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  fi
+  printf '%s' "$4"
+}
+
+# Notes from inside a command substitution. stdout belongs to the caller's capture.
+mb_note_out() { printf '%s\n' "$*" >&2; }
+
+mb_profile_rank() {                             # lite=1 standard=2 full=3, anything else=2
+  case "$1" in lite) printf 1 ;; standard) printf 2 ;; full) printf 3 ;; all) printf 9 ;; *) printf 2 ;; esac
+}
+
+# The selected set, in manifest order. Precedence, and it is deliberate:
+#   --only wins outright (an explicit list is an explicit list)
+#   otherwise: the profile, then --except subtracts, then needs_ adds back OUT LOUD.
+# A dependency is never added silently and never turns into a failure: the one thing worse than
+# installing something the user did not ask for is refusing to explain why it is needed.
+mb_select() {
+  local m f p want rank sel="" add chg guard bad=""
+  rank="$(mb_profile_rank "${MB_PROFILE:-$MB_PROFILE_DEFAULT}")"
+
+  # A name that is in no manifest is a typo. Selecting nothing and exiting 0 would report a clean
+  # run over an empty set — the false-green shape this driver already had to have removed twice.
+  for m in $MB_ONLY $MB_EXCEPT; do
+    case " $MB_MANIFEST " in *" $m "*) : ;; *) bad="$bad $m" ;; esac
+  done
+  if [ -n "$bad" ]; then
+    mb_note_out "bootstrap: no such module:$bad"
+    mb_note_out "           known modules: $MB_MANIFEST"
+    return 1
+  fi
+
+  if [ -n "$MB_ONLY" ]; then
+    for m in $MB_MANIFEST; do
+      case " $MB_ONLY " in *" $m "*) sel="$sel $m" ;; esac
+    done
+  else
+    for m in $MB_MANIFEST; do
+      # An UNRESOLVABLE module is INCLUDED, never skipped. Dropping it here would delete it from
+      # the selection the verdict is scored over, and the run would report success having silently
+      # lost a module it was asked for — measured: PB_MODULES with a ghost name exited 0. Included,
+      # it reaches mb_run_module, records SKIPPED, and SKIPPED maps to 30.
+      if ! f="$(mb_module_file "$m")"; then sel="$sel $m"; continue; fi
+      p="$(mb_meta "$f" "$m" profile standard)"
+      [ "$(mb_profile_rank "$p")" -le "$rank" ] && sel="$sel $m"
+    done
+  fi
+
+  for m in $MB_EXCEPT; do
+    sel=" $(printf '%s' "$sel" | tr ' ' '\n' | grep -v "^${m}\$" | tr '\n' ' ') "
+  done
+
+  # Close over needs_, bounded by the manifest size so a cycle cannot spin.
+  guard=0
+  while [ "$guard" -lt 16 ]; do
+    guard=$((guard + 1)); chg=0
+    for m in $sel; do
+      f="$(mb_module_file "$m")" || continue
+      for want in $(mb_meta "$f" "$m" needs ""); do
+        case " $sel " in
+          *" $want "*) : ;;
+          *) case " $MB_EXCEPT " in
+               *" $want "*) [ "$guard" = 1 ] && mb_note_out "   note: $m wants $want, but you excluded it — $m will install in a reduced form" ;;
+               *) case " $MB_MANIFEST " in
+                    *" $want "*) sel="$sel $want"; chg=1
+                                 # STDERR, not stdout: this function runs inside $( ), so a note
+                                 # printed to stdout is captured as if it were a module name and
+                                 # then dropped by the rebuild below — invisible, and the reason
+                                 # "adding it out loud" silently became "adding it".
+                                 mb_note_out "   note: $m needs $want — adding it" ;;
+                  esac ;;
+             esac ;;
+        esac
+      done
+    done
+    [ "$chg" = 0 ] && break
+  done
+
+  # Emit in manifest order, deduplicated.
+  add=""
+  for m in $MB_MANIFEST; do
+    case " $sel " in *" $m "*) case " $add " in *" $m "*) : ;; *) add="$add $m" ;; esac ;; esac
+  done
+  printf '%s' "${add# }"
+}
+
+# ── --list ────────────────────────────────────────────────────────────────────────────────────
+mb_cmd_list() {
+  local m f what cost prof needs selected
+  selected=" $(mb_select) " || return 30
+  printf '\n  MODULES — a * marks what THIS invocation would act on (profile: %s)\n\n' "${MB_PROFILE:-$MB_PROFILE_DEFAULT}"
+  for m in $MB_MANIFEST; do
+    f="$(mb_module_file "$m")" || { printf '  ?  %-16s (module file unavailable)\n' "$m"; continue; }
+    what="$(mb_meta "$f" "$m" what "$m")"
+    cost="$(mb_meta "$f" "$m" cost "unpriced")"
+    prof="$(mb_meta "$f" "$m" profile standard)"
+    needs="$(mb_meta "$f" "$m" needs "")"
+    case "$selected" in *" $m "*) printf '  * ' ;; *) printf '    ' ;; esac
+    printf '%-16s [%s]\n' "$m" "$prof"
+    printf '       what : %s\n' "$what"
+    printf '       cost : %s\n' "$cost"
+    [ -n "$needs" ] && printf '       needs: %s\n' "$needs"
+    printf '\n'
+  done
+  printf '  PROFILES\n'
+  printf '    lite      config files only. No Homebrew, no permissions, no Apple ID. THE DEFAULT.\n'
+  printf '    standard  lite + the succession engine and a local rewrite model.\n'
+  printf '    full      standard + the app build and the screenshot pipeline. Apple ID, ~9 GB.\n\n'
+  printf '  SELECT      --profile <name>   --only a,b,c   --except x\n'
+  printf '  INSPECT     --list   --plan   --manifest   --verify\n\n'
+}
+
+# ── --manifest — every file this release would write, and the sha256 of what it writes from. ──
+# The point is diffability: a reader can take this list before and after and see exactly what
+# changed on their machine, without trusting a word we say about it.
+mb_cmd_manifest() {
+  local m f
+  printf '\n  MANIFEST — mac-bootstrap %s, pin %s\n\n' "$MB_VERSION" "$MB_PIN"
+  printf '  Runtime state (never inside the repo):\n'
+  printf '    %s/{receipt.json,receipt.verify.json,bootstrap.log,rows/,backups/,bin/}\n\n' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}"
+  printf '  Module sources and their hashes:\n'
+  for m in $MB_MANIFEST; do
+    f="$(mb_module_file "$m")" || { printf '    %-16s UNAVAILABLE\n' "$m"; continue; }
+    printf '    %-16s %s  %s\n' "$m" "$(shasum -a 256 "$f" 2>/dev/null | cut -c1-16)" "$f"
+  done
+  printf '\n  Assets:\n'
+  for f in "$MB_HERE"/assets/*.sh "$MB_HERE"/assets/*.md "$MB_HERE"/assets/hammerspoon/init.lua; do
+    [ -r "$f" ] || continue
+    printf '    %s  %s\n' "$(shasum -a 256 "$f" 2>/dev/null | cut -c1-16)" "${f#"$MB_HERE"/}"
+  done
+  printf '\n  Nothing above has been written. Run --plan to see what would change.\n\n'
+}
+
+# ── --plan — writes NOTHING. Distinct from the removed --dry-run, which wrote the receipt. ─────
+mb_cmd_plan() {
+  local m f sel st
+  sel="$(mb_select)" || return 30
+  if [ -z "$sel" ]; then
+    mb_note_out "bootstrap: this selection contains no modules — nothing to plan. Try --list."
+    return 30
+  fi
+  printf '\n  PLAN — profile %s. This run writes NOTHING.\n\n' "${MB_PROFILE:-$MB_PROFILE_DEFAULT}"
+  for m in $MB_MANIFEST; do
+    case " $sel " in *" $m "*) : ;; *) printf '    skip  %-16s (not in this selection)\n' "$m"; continue ;; esac
+    f="$(mb_module_file "$m")" || { printf '    ??    %-16s module unavailable\n' "$m"; continue; }
+    if mb_call "$f" "$m" verify >/dev/null 2>&1; then st="already satisfied — would do nothing"
+    elif mb_call "$f" "$m" gate >/dev/null 2>&1; then st="NEEDS YOU: $(mb_note "$f" "$m")"
+    else st="would install: $(mb_meta "$f" "$m" what "$m")"; fi
+    printf '    %-16s %s\n' "$m" "$st"
+  done
+  printf '\n  Nothing above has happened. Run without --plan to act.\n\n'
 }
 
 # ── the self-authorization audit ─────────────────────────────────────────────────────────────
@@ -447,9 +626,14 @@ mb_run_module() {
 # It PRINTS, because mb_verdict is called in a command substitution and a variable assigned in
 # one never escapes it.
 mb_missing_rows() {
-  local m out=""
-  # shellcheck disable=SC2086  # the manifest is a deliberately word-split list
-  for m in $MB_MANIFEST; do
+  local m out="" scope
+  # Scored over the SELECTION, never the manifest. C8's false green was "--only left 7 of 8
+  # unevaluated and exit 0 said every module satisfied"; the cure must not become "a deliberate
+  # --profile lite can never exit 0", which would make the whole selection feature unreachable.
+  # A module the user did not select is not an unevaluated module, it is a declined one — and the
+  # verdict line names the selection, so 0 cannot be read as a claim about the other four.
+  scope="${MB_SELECTED:-$MB_MANIFEST}"
+  for m in $scope; do
     [ -r "$MB_ROWS/$m.state" ] || out="$out $m"
   done
   printf '%s' "${out# }"
@@ -505,8 +689,24 @@ if [ -z "$MB_MANIFEST" ]; then
   MB_ERR="no modules: none beside this script, and pin '$MB_PIN' is not fetchable"
   mb_fail "$MB_ERR"
 else
-  # shellcheck disable=SC2086  # the manifest is a deliberately word-split list
-  for mb_m in $MB_MANIFEST; do mb_run_module "$mb_m"; done
+  # READ-ONLY MODES FIRST. Each writes nothing at all — no receipt, no rows, no backups — so a
+  # stranger can see exactly what this thing would do before letting it do anything. That is the
+  # whole reason they exist, and it is why they exit here rather than falling through.
+  case "$MB_MODE" in
+    list)     mb_cmd_list;     exit $? ;;
+    plan)     mb_cmd_plan;     exit $? ;;
+    manifest) mb_cmd_manifest; exit $? ;;
+  esac
+
+  MB_SELECTED="$(mb_select)"
+  if [ -z "$MB_SELECTED" ]; then
+    MB_ERR="the selection is empty: profile '${MB_PROFILE:-$MB_PROFILE_DEFAULT}'${MB_ONLY:+, --only$MB_ONLY}${MB_EXCEPT:+, --except$MB_EXCEPT} leaves no module to act on. Try --list."
+    mb_fail "$MB_ERR"
+  else
+    [ -z "$MB_ONLY" ] && mb_say "selection: ${MB_PROFILE:-$MB_PROFILE_DEFAULT} -> $(printf '%s' "$MB_SELECTED" | wc -w | tr -d ' ') of $(printf '%s' "$MB_MANIFEST" | wc -w | tr -d ' ') modules  (--list to see the rest)"
+    # shellcheck disable=SC2086  # the selection is a deliberately word-split list
+    for mb_m in $MB_SELECTED; do mb_run_module "$mb_m"; done
+  fi
 fi
 
 case "$MB_MODE" in install|uninstall) mb_prune_rows ;; esac
@@ -549,7 +749,7 @@ if [ "$MB_MODE" != uninstall ] && [ "$MB_MODE" != bench ] && [ -z "$MB_ERR" ]; t
   if [ -n "$MB_UNEVAL" ]; then
     MB_UNEVAL_N=0
     for mb_m in $MB_UNEVAL; do MB_UNEVAL_N=$((MB_UNEVAL_N + 1)); done
-    MB_ERR="this run is NOT a whole-machine verdict: $MB_UNEVAL_N module(s) were never evaluated on this Mac ($MB_UNEVAL). Re-run without --only to get one."
+    MB_ERR="$MB_UNEVAL_N module(s) you selected were never evaluated ($MB_UNEVAL) — so this run is not a verdict about them. That is a defect, not a narrowing: report it."
     mb_fail "$MB_ERR"
   fi
 fi
@@ -582,7 +782,7 @@ mb_say "receipt: $MB_OUT"
 mb_say "log:     $MB_LOG"
 case "$MB_CODE" in
   0)  if [ "$MB_MODE" = uninstall ]; then mb_say "exit 0  — every module removed."
-      else mb_say "exit 0  — every module satisfied."; fi ;;
+      else mb_say "exit 0  — every module in this selection is satisfied ($(printf '%s' "${MB_SELECTED:-$MB_MANIFEST}" | wc -w | tr -d ' ') of $(printf '%s' "$MB_MANIFEST" | wc -w | tr -d ' ') available). Run --list to see what you did not select."; fi ;;
   10) mb_say "exit 10 — satisfied except for the step(s) marked NEEDS_HUMAN in the receipt." ;;
   20) mb_say "exit 20 — something FAILED. Read the log, fix the cause, then re-run --only <module>." ;;
   30) mb_say "exit 30 — precondition error: this run is NOT a verdict about your Mac." ;;

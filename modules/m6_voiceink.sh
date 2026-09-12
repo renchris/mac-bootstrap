@@ -281,6 +281,11 @@ m6_liveness() {
   [ -n "$p1" ] && [ "$p1" = "$p2" ]
 }
 
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m6_voiceink()    { printf '%s' 'a local build of the open-source VoiceInk dictation app, no licence key'; }
+cost_m6_voiceink()    { printf '%s' 'Xcode ~9 GB via the App Store (Apple ID), cmake, two sudo commands, ~10 min of building.'; }
+profile_m6_voiceink() { printf '%s' 'full'; }
+
 verify_m6_voiceink() {
   local app dr leaf rc
   app="$PB_M6_APP"

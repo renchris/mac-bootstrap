@@ -153,6 +153,11 @@ m2i_exec_readback() {
 # The installer copies bytes and calls ln; this compares bytes with cmp, resolves the link, and
 # EXECUTES the helper. Nothing here greps for a string we wrote.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
+# ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
+what_m2_instructions()    { printf '%s' 'a 6 KB repo-agnostic instructions file both agents read, plus a per-repo template'; }
+cost_m2_instructions()    { printf '%s' 'two files and one symlink. No installs, no permissions. Replaceable with your own.'; }
+profile_m2_instructions() { printf '%s' 'lite'; }
+
 verify_m2_instructions() {
   local g t r cop
 
