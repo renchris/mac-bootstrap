@@ -21,6 +21,17 @@ the run exits `10` until a terminal emulator exists. Every other row below is `s
 The driver detects and records each rather than attempting it, so doing them first only saves you a
 re-run — and re-running after one is the recovery procedure, not a repair.
 
+**You can skip all of it and start now.** `m5_panes` is the only lite module that looks for an
+installed app, so on a machine with nothing on it yet:
+
+```bash
+bash bootstrap.sh --profile lite --except m5_panes
+```
+
+exits `0` with the status line, the instructions file and the lifecycle hooks all live — no
+Homebrew, no sudo, no gesture of any kind. Install a terminal emulator whenever you like and
+re-run plain `bash bootstrap.sh` to pick up ⌘⇧E.
+
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
 | **G0** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | m6, m7, m8 — and `node`, therefore Copilot itself |
