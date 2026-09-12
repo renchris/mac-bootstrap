@@ -1,0 +1,107 @@
+#!/bin/bash
+# agent-repo-init — wire ONE repository so that both Claude Code and GitHub Copilot CLI read the
+# same project instructions file.
+#
+#   agent-repo-init [<dir>]        default: the current directory
+#
+# It writes AGENTS.md from the shipped 19-line template when the repo has none, then gives it the
+# second name CLAUDE.md as a SYMLINK — because Claude Code does not read a bare AGENTS.md
+# (measured, with positive and negative controls) while Copilot CLI reads AGENTS.md, CLAUDE.md,
+# symlinks and @imports alike. One authored file, two names, no drift.
+#
+# 🚨 THIS EXISTS BECAUSE THE OBVIOUS ONE-LINER IS BOTH NON-IDEMPOTENT AND DESTRUCTIVE. Measured:
+#       run 1:  ln -s AGENTS.md CLAUDE.md   → rc 0
+#       run 2:  ln -s AGENTS.md CLAUDE.md   → ln: CLAUDE.md: File exists   rc 1
+#    and the natural repair is worse — in a repo that already has a REAL CLAUDE.md,
+#    `ln -sfn AGENTS.md CLAUDE.md` returns rc 0 and the previous contents are simply gone
+#    (measured: `PRECIOUS existing rules` replaced by `# new`). That is a silent overwrite of an
+#    instructions file, committed by the bootstrap itself. Every path below is guarded, and the
+#    refusals PRESERVE what is there.
+#
+# Exit codes — the contract, and it is the same one the measurement established:
+#    0  wired, or already wired (safe to re-run; re-running IS the recovery procedure)
+#    2  refusing: there is no AGENTS.md here and no template to write one from
+#    3  refusing: CLAUDE.md is a symlink pointing somewhere else
+#    4  refusing: CLAUDE.md is a real file — merge it into AGENTS.md yourself first
+#    5  refusing: <dir> is not a directory
+#
+# Nothing here needs git, a network, jq, or any permission.
+
+set -u
+
+ari_self_dir() {
+  local s="${BASH_SOURCE[0]:-$0}" d
+  d="$(cd "$(dirname "$s")" 2>/dev/null && pwd -P)" || d="."
+  printf '%s' "$d"
+}
+
+# The template, in the order a running install actually has it: beside us (bin/ ‥ templates/),
+# then the state dir, then an explicit override. Never a path with a user name in it.
+ari_template() {
+  local c
+  for c in "${PB_REPO_TEMPLATE:-}" \
+           "$(ari_self_dir)/../templates/repo-CLAUDE.md" \
+           "${PB_STATE_DIR:-$HOME/.mac-bootstrap}/templates/repo-CLAUDE.md" \
+           "${PB_ASSETS:-}/repo-CLAUDE.md"; do
+    [ -n "$c" ] || continue
+    [ -r "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+ari_dir="${1:-.}"
+case "$ari_dir" in
+  -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+[ -d "$ari_dir" ] || { printf 'agent-repo-init: not a directory: %s\n' "$ari_dir" >&2; exit 5; }
+
+cd "$ari_dir" 2>/dev/null || { printf 'agent-repo-init: cannot enter %s\n' "$ari_dir" >&2; exit 5; }
+
+# ── 1. REFUSE FIRST, WRITE SECOND ────────────────────────────────────────────────────────────
+# The conflict checks run before anything is created, so a refusal leaves the directory exactly
+# as it found it. (Writing AGENTS.md first and only then discovering a real CLAUDE.md would
+# leave a template file behind in a repo we just declined to wire.)
+ari_link=""
+if [ -L CLAUDE.md ]; then
+  ari_link="$(readlink CLAUDE.md 2>/dev/null)" || ari_link=""
+  if [ "$ari_link" != "AGENTS.md" ]; then
+    printf 'agent-repo-init: refusing — CLAUDE.md is a symlink to %s, not to AGENTS.md.\n' "$ari_link" >&2
+    printf '  Nothing was changed. Decide which one this repo means.\n' >&2
+    exit 3
+  fi
+elif [ -e CLAUDE.md ]; then
+  printf 'agent-repo-init: refusing — CLAUDE.md is a real file here.\n' >&2
+  printf '  Merge it into AGENTS.md yourself, delete it, then re-run this. Nothing was changed.\n' >&2
+  exit 4
+fi
+
+# ── 2. the authored file ─────────────────────────────────────────────────────────────────────
+# An existing AGENTS.md is NEVER touched, not even to "update the template": it is the authored
+# file and its contents are the user's.
+if [ -e AGENTS.md ] || [ -L AGENTS.md ]; then
+  printf 'AGENTS.md: already here, left alone\n'
+else
+  ari_tpl="$(ari_template)" || {
+    printf 'agent-repo-init: refusing — no AGENTS.md here and no template to write one from.\n' >&2
+    printf '  Looked beside this script, in $PB_STATE_DIR/templates, and in $PB_ASSETS.\n' >&2
+    exit 2; }
+  # temp + mv, so an interrupted copy can never leave a half-written instructions file behind
+  if ! { cp "$ari_tpl" "AGENTS.md.ari-tmp.$$" 2>/dev/null &&
+         mv -f "AGENTS.md.ari-tmp.$$" AGENTS.md 2>/dev/null; }; then
+    rm -f "AGENTS.md.ari-tmp.$$" 2>/dev/null
+    printf 'agent-repo-init: could not write AGENTS.md here\n' >&2
+    exit 2
+  fi
+  printf 'AGENTS.md: written from the template — fill in the <angle brackets>\n'
+fi
+
+# ── 3. the second name ───────────────────────────────────────────────────────────────────────
+if [ "$ari_link" = "AGENTS.md" ]; then
+  printf 'CLAUDE.md: already wired -> AGENTS.md\n'
+  exit 0
+fi
+ln -s AGENTS.md CLAUDE.md 2>/dev/null || {
+  printf 'agent-repo-init: could not create the CLAUDE.md symlink here\n' >&2
+  exit 2; }
+printf 'CLAUDE.md: wired -> AGENTS.md  (git stores it as a symlink, mode 120000)\n'
+exit 0

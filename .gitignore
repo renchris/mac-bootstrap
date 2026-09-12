@@ -1,0 +1,38 @@
+# Runtime state NEVER lives in this repo. Everything the driver writes goes to
+# $HOME/.mac-bootstrap/ — receipt.json, receipt.verify.json, bootstrap.log, rows/,
+# backups/, and the fetched copies of the modules. These rules exist so that a stray
+# copy in a working tree can never be committed.
+receipt.json
+receipt.verify.json
+bootstrap.log
+/rows/
+/backups/
+
+# Backups and half-written files made by the one settings writer.
+*.pb-bak.*
+*.pb-tmp.*
+*.part
+
+# Anything that would carry this machine's specifics into a public repo.
+*.local
+.env
+.env.*
+secrets.*
+
+# macOS and editors.
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp
+*~
+
+# Agent session state written INTO a working tree by the agent's own hooks. On this
+# repo that is a publish hazard, not a nuisance: the task mirror is a render of the
+# authoring machine's private task store and carries internal paths, session ids and
+# third-party project names. It is regenerated at every session start, so deleting it
+# once is not enough — it must never be committable. The canonical store lives under
+# the agent config dir, so ignoring these loses nothing.
+.claude-tasks/
+.claude-plans/
+.claude/settings.local.json

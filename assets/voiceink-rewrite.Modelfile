@@ -1,0 +1,54 @@
+# voiceink-rewrite.Modelfile — the derived ollama model VoiceInk's AI enhancement calls.
+#
+# `ollama create voiceink-rewrite -f <this file>`.  m7_model renders a copy of this file into
+# $PB_STATE_DIR with the FROM line rewritten to the base its tier rule selected, and creates the
+# model from THAT copy.  Nothing is ever written inside the repo.  Edit the PARAMETER lines here
+# and every tier inherits the change; edit FROM here only if you are changing the default base.
+#
+# ── WHY A DERIVED MODEL AT ALL, AND NOT JUST PICKING `qwen3:8b` IN VOICEINK'S PICKER ──────────
+#
+# MEASURED (macOS 15.7.9, M1 Max, ollama 0.33.3), and re-confirmed by an independent second pass
+# with the model unloaded between arms:
+#
+#   VoiceInk sends `temperature` at the TOP LEVEL of POST /api/generate
+#   (LLMkit OllamaClient.swift:77-83, called from VoiceInk OllamaService.swift:93-101).
+#   Ollama takes sampling parameters under `options`, and SILENTLY DROPS an unknown top-level
+#   key.  A/B on one model, one endpoint, one variable, read out of ollama's own sampler log:
+#
+#     top-level   "temperature":0.05   ->  sampler: temp = 0.600   (the tag's own default)
+#     options  {"temperature":0.05}    ->  sampler: temp = 0.050
+#
+#   So the Ollama provider runs at whatever temperature the tag ships with — 0.6-0.8 for most —
+#   on a task whose failure mode is INVENTION.  There is no environment variable for it
+#   (`ollama serve --help` lists every one; temperature is not among them).  A Modelfile is the
+#   only lever, because PARAMETER defaults are applied server-side to a request that omits them.
+#
+#   The asymmetry is field-specific, not "ollama ignores top-level keys": `think` IS a real field
+#   of ollama's GenerateRequest and IS honored (think:false -> thinking null, eval_count 58;
+#   think:true -> thinking present, eval_count 713).
+#
+# ── WHY num_ctx 4096 — READ THIS BEFORE "FIXING" IT ───────────────────────────────────────────
+#
+# NOT because "VoiceInk sends no num_ctx so ollama allocates the model's full declared context".
+# That was the original finding and it is REFUTED.  ollama 0.33.3 picks its default context from
+# TOTAL VRAM, and says so itself:  `ollama serve --help` -> "default: 4k/32k/256k based on VRAM",
+# server log `msg="vram-based default context" total_vram="48.0 GiB" default_num_ctx=262144`,
+# upstream routes.go thresholds >=47 GiB -> 262144, >=23 GiB -> 32768, else 4096.  A controlled
+# A/B (same binary, same VoiceInk-shaped body, only OLLAMA_CONTEXT_LENGTH changed) measured
+# 3.18 GB @ ctx 4096 against 24.41 GB @ ctx 262144 for the same 4 B model.  Every Mac at or below
+# ~32 GB unified memory already gets 4096 unprompted; the blow-up exists only on 64 GB+ boxes.
+#
+# num_ctx 4096 is therefore DETERMINISM INSURANCE, not a rescue: it pins one context across
+# ollama's three VRAM tiers, so the model behaves identically on an 8 GB Air and a 64 GB Studio.
+# 4096 is the right number because the assembled system prompt is ~1,250-1,300 prompt tokens
+# measured (prompt_eval_count 1,244-1,294 across the fixtures) and dictation is 10-200 words.
+#
+# top_k 20 / top_p 0.9 / repeat_penalty 1.0 are qwen3's own published sampling settings, restated
+# here rather than inherited so a different FROM base gets them too.
+
+FROM qwen3:8b
+PARAMETER num_ctx 4096
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+PARAMETER top_k 20
+PARAMETER repeat_penalty 1.0

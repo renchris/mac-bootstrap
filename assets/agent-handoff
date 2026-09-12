@@ -1,0 +1,1350 @@
+#!/bin/bash
+# agent-handoff — the portable succession primitive for a terminal coding agent.
+#
+#   agent-handoff capture "<the ONE next step>"   freeze / refresh this repo's bridge file
+#   agent-handoff status                          bridge path + context fill + the last succession
+#   agent-handoff path                            print the bridge path and exit
+#   agent-handoff fire [options]                  RUN THE SUCCESSION, end to end, no human
+#   agent-handoff resume [<id>]                   re-enter a killed succession at its recorded phase
+#   agent-handoff doctor                          can this machine do it, and what is still human
+#   agent-handoff recycle-due <session-id>        the Stop-hook predicate (see § THE STOP ARM)
+#   agent-handoff selftest                        the shipped fixtures, incl. every negative arm
+#
+# ═══ WHAT `fire` DOES ════════════════════════════════════════════════════════════════════════
+# It closes the agent out, re-opens it with the right command and parameters, inserts the initial
+# prompt AND the goal prompt, autonomously, fault-tolerantly, with zero human in the loop:
+#
+#   preflight -> seed -> launch (argv) -> PROVE the successor engaged -> retire the predecessor
+#
+# ONE-TIME setup gestures exist and `doctor` names them (one OAuth login per config-dir path; on
+# iTerm2, one macOS Automation consent click). There is NO per-recycle gesture.
+#
+# 🚨 THE INVARIANT. Everything else is subordinate to it:
+#    THE PREDECESSOR RETIRES ONLY AFTER THE ORACLE PROVES THE SUCCESSOR ENGAGED. On timeout the
+#    predecessor SURVIVES, says what happened, and leaves a resumable on-disk state.
+#    The two errors are not the same size: retiring too early destroys a context that cannot be
+#    rebuilt, and retiring too late costs ONE IDLE PANE. An asymmetric loss function with an
+#    unbounded arm and a one-pane arm has exactly one defensible bias — and its corollary is the
+#    part people get wrong: UNKNOWN resolves to the SAFE side, never to the cheap side.
+#
+# ═══ THE TWO BELIEFS THAT USED TO MAKE THIS FILE PRINT A PASTE LINE, BOTH REFUTED ════════════
+# 1. "The engagement detector cannot say NO." TRUE of the detector that existed — run against a
+#    pane parked on the first-run THEME PICKER it returned ENGAGED. That is a property of THAT
+#    detector, not of the problem. `assets/succession/oracle.sh` says NO on eight negative
+#    configurations, including a live agent on a modal, a successor that received nothing, and —
+#    the one every cheaper oracle fails — a successor that received the prompt and CANNOT
+#    AUTHENTICATE, which writes a real `user` record AND a real content-bearing `assistant` turn.
+#    Its negative arms ship as a runnable selftest, so the claim is re-derivable, not quotable.
+# 2. "`claude \"<prompt>\"` auto-submit is REFUTED on a fresh Mac." The refutation was entirely
+#    two absent JSON booleans. Seed `hasCompletedOnboarding` and
+#    `projects[<abs cwd>].hasTrustDialogAccepted` before the first launch and a brand-new config
+#    dir under a brand-new $HOME accepts a positional prompt and auto-submits it, zero keystrokes.
+#    Onboarding is a ONE-TIME state, so seeding it is what makes the refutation stop applying.
+#
+# ═══ THE BRIEF NEVER TRAVELS AS KEYSTROKES ═══════════════════════════════════════════════════
+# A tty line discipline in canonical mode buffers 1024 bytes and past that does not truncate — it
+# DELETES the line, and the sender still gets rc 0. Bisected: 1023 bytes + Enter arrive as 1024;
+# 1024 bytes + Enter arrive as ZERO. A 3 KB brief typed into a cold shell is gone while every
+# signal the driver has says success. So the brief is written to a FILE, a generated launcher
+# reads that file, and the launcher's absolute path is all the terminal driver is ever handed.
+# Measured byte-identical end to end, inside Claude Code's own transcript.
+#
+# ═══ WHY THERE IS NO python3 IN THIS FILE ════════════════════════════════════════════════════
+# The design this replaces used python3 in three places. MEASURED on macOS 15.7.9 (24G830):
+#     /usr/bin/python3  inode 1152921500312523020  links 78
+#     /usr/bin/git      inode 1152921500312523020  links 78      <- THE SAME FILE
+# Both are the Command Line Tools stub multiplexer. On a Mac without the CLT, python3 does not
+# run Python: it requests the CLT install, which on a GUI session is a DIALOG. A bootstrap
+# primitive that pops an install dialog while reading a file is not a primitive. Everything here
+# uses awk, sed, cksum and date, each of which is a distinct real binary in the base system.
+# The same fact gates git: see ah_git_ok.
+#
+# ═══ THE STOP ARM ════════════════════════════════════════════════════════════════════════════
+# `recycle-due` exists so the Stop hook does not have to carry this logic. At Stop, a
+# `systemMessage` reaches the OPERATOR and never the model, so a context advisory rendered there
+# cannot make a session recycle ITSELF; only `decision:"block"` reaches the model. This verb is
+# the predicate for that block: it prints the reason and exits 0 when a recycle is genuinely due,
+# and exits 1 — silently — on every kind of ignorance. It NEVER blocks on not-knowing.
+#
+# set -u, and deliberately NOT set -e and NOT pipefail: `$?` after a pipe is the LAST stage's
+# status, and a primitive that dies mid-way leaves a half-written bridge.
+set -u
+
+AH_VERSION=2
+# Resolved ONCE, before any command can cd. MEASURED DEFECT: this was `dirname "$0"` evaluated
+# lazily inside the library search, and $0 is RELATIVE when the script is invoked as
+# `assets/agent-handoff` — so the first `cd` in any code path silently repointed the search at a
+# directory that does not exist, pb-lib was never found, and every context read answered UNKNOWN.
+# The symptom is indistinguishable from "no statusline installed", which is the one answer that
+# must never be produced by a bug.
+AH_SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)" || AH_SELF_DIR=""
+AH_SELF="${AH_SELF_DIR:-.}/$(basename "$0")"
+# PHYSICAL vs LOGICAL, and it is not theoretical: `git rev-parse --show-toplevel` answers with the
+# PHYSICAL path while $HOME is the LOGICAL one. On macOS /tmp is a symlink to /private/tmp and
+# /Users can appear under /System/Volumes/Data, so a bare `case "$root" in "$HOME"/*)` matches
+# NOTHING on exactly those machines and the substitution silently does not happen — measured here:
+# HOME=/var/folders/…/proj vs root=/private/var/folders/…/proj, zero hits. Both spellings are
+# carried, and the first one that matches wins.
+AH_HOME_P="$(cd "$HOME" 2>/dev/null && pwd -P)" || AH_HOME_P="$HOME"
+PB_STATE_DIR="${PB_STATE_DIR:-$HOME/.mac-bootstrap}"
+AH_DIR="$PB_STATE_DIR/handoff"
+AGENT_LAUNCH="${AGENT_LAUNCH:-claude}"
+PB_CTX_T="${PB_CTX_T:-70}"
+PB_PLUTIL=/usr/bin/plutil
+
+ah_say()  { printf '%s\n' "$*"; }
+ah_err()  { printf '%s\n' "$*" >&2; }
+
+# ── pb-lib, if it is reachable. ──────────────────────────────────────────────────────────────
+# The context-fill RULES (600 s freshness, a null is not 0, a float truncates, an absent window
+# is never imputed) live in pb_ctx_pct and are NOT re-implemented here. Two implementations of
+# one rule is two rules. If the library cannot be found, `status` says UNKNOWN and names that as
+# the reason — which is the honest answer, not a degraded guess.
+AH_LIB=""
+ah_load_lib() {
+  [ -n "$AH_LIB" ] && return 0
+  local c d
+  d="${AH_SELF_DIR:-.}"
+  for c in "${PB_LIB:-}" "$PB_STATE_DIR/assets/hooks/pb-lib.sh" \
+           "$d/../assets/hooks/pb-lib.sh" "$d/hooks/pb-lib.sh" "$d/pb-lib.sh"; do
+    [ -n "$c" ] && [ -r "$c" ] || continue
+    # shellcheck disable=SC1090  # resolved at runtime by design
+    . "$c" >/dev/null 2>&1 || continue
+    command -v pb_ctx_pct >/dev/null 2>&1 || continue
+    AH_LIB="$c"; return 0
+  done
+  return 1
+}
+
+# ── ah_plist_raw <file> <key> — one scalar out of a JSON file, via plutil. ───────────────────
+# MEASURED TRAP: `plutil -extract` writes its FAILURE MESSAGE TO STDOUT, so a reader that
+# forwards stdout without checking the rc hands its caller an error sentence where a value
+# belongs. Output is emitted ONLY on rc 0.
+ah_plist_raw() {
+  local out rc
+  [ -f "${1:-}" ] || return 1
+  out="$("$PB_PLUTIL" -extract "${2:-}" raw -o - "$1" 2>/dev/null)"
+  rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s' "$out"
+}
+
+# ── ah_git_ok — is there a git that will actually RUN? ───────────────────────────────────────
+# /usr/bin/git is the CLT stub (proved by inode above). Invoking it without the tools installed
+# requests an install — a GUI dialog raised by what the caller thinks is a read. So: a git that
+# is NOT /usr/bin/git is real; /usr/bin/git is trusted only when a developer dir is selected,
+# which `xcode-select -p` answers without ever touching the stub.
+ah_git_ok() {
+  [ "${AH_NO_GIT:-0}" = 1 ] && return 1
+  local g
+  g="$(command -v git 2>/dev/null)" || return 1
+  [ -n "$g" ] || return 1
+  case "$g" in
+    /usr/bin/git) /usr/bin/xcode-select -p >/dev/null 2>&1 || return 1 ;;
+  esac
+  return 0
+}
+ah_git() { local d="${1:-.}"; shift 2>/dev/null || true; ah_git_ok || return 1; git -C "$d" "$@" 2>/dev/null; }
+
+# ── the bridge path ─────────────────────────────────────────────────────────────────────────
+# cksum, not shasum: shasum is a PERL SCRIPT and perl is on Apple's deprecation list, while
+# cksum is a real base-system binary. A repo key needs to be stable and collision-cheap, not
+# cryptographic — and the basename rides alongside it, so a human can read the filename.
+ah_root() {
+  local r
+  r="$(ah_git "$PWD" rev-parse --show-toplevel)" || r=""
+  [ -n "$r" ] || r="$PWD"
+  printf '%s' "$r"
+}
+ah_key() {
+  local root="$1" sum base
+  sum="$(printf '%s' "$root" | cksum 2>/dev/null)" || sum=""
+  sum="${sum%% *}"
+  case "${sum:-}" in ''|*[!0-9]*) sum=0 ;; esac
+  base="$(basename "$root" 2>/dev/null)" || base="repo"
+  base="$(printf '%s' "$base" | LC_ALL=C sed 's/[^A-Za-z0-9._-]/-/g')"
+  [ -n "$base" ] || base="repo"
+  printf '%s-%s' "$base" "$sum"
+}
+ah_bridge() { printf '%s/%s.md' "$AH_DIR" "$(ah_key "$(ah_root)")"; }
+
+# ── the context fill. One number, one owner, or the literal UNKNOWN. ─────────────────────────
+# Returns "pct<TAB>sid<TAB>age" on rc 0, or one word of REASON on rc 1. It NEVER returns 0 for
+# "I do not know": a missing denominator read as safe is the failure this whole axis exists to
+# avoid. The session id is printed WITH the number, because with several sessions alive the
+# newest telemetry row is not necessarily this session's, and a number no one can attribute is
+# a number no one should act on.
+ah_fill() {
+  local want="${1:-}" dir f sid pct now mtime age n=0 newest=""
+  ah_load_lib || { printf 'no-pb-lib'; return 1; }
+  dir="${PB_TELEMETRY_DIR:-/tmp/pb-telemetry}"
+  [ -d "$dir" ] || { printf 'no-telemetry-dir'; return 1; }
+  if [ -n "$want" ]; then
+    [ -f "$dir/$want.json" ] || { printf 'no-row-for-session'; return 1; }
+    newest="$dir/$want.json"
+  else
+    for f in "$dir"/*.json; do
+      [ -r "$f" ] || continue
+      n=$((n + 1))
+      [ -z "$newest" ] && newest="$f"
+      [ "$f" -nt "$newest" ] && newest="$f"
+    done
+    [ -n "$newest" ] || { printf 'no-telemetry-rows'; return 1; }
+  fi
+  sid="${newest##*/}"; sid="${sid%.json}"
+  pct="$(pb_ctx_pct "$sid")" || pct=""
+  [ -n "$pct" ] || { printf 'stale-absent-or-null'; return 1; }
+  now="$(date +%s 2>/dev/null)" || now=0
+  mtime="$(ah_mtime "$newest")"
+  age=$((now - mtime)); [ "$age" -lt 0 ] && age=0
+  printf '%s\t%s\t%s\t%s' "$pct" "$sid" "$age" "$n"
+  return 0
+}
+ah_mtime() {  # stat -f is BSD; there is no GNU stat here and coreutils is not assumed
+  local m
+  m="$(stat -f %m "${1:-}" 2>/dev/null)" || m=0
+  case "${m:-}" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+# capture — IDEMPOTENT. Re-running is the recovery procedure, not a way to grow the file.
+#
+# The design this replaces stacked one `## Next` entry per call, newest-first, with no pruning,
+# against its own instruction that `## Next` is "the ONE next step". After three recycles that
+# section is an ambiguous reverse-chronological stack and the successor cannot tell which line
+# is live. Here `## Next` holds EXACTLY ONE item; the one it displaces moves to
+# `## Previously next`, capped, so the history survives without competing with the instruction.
+# Everything a human wrote is preserved: this only ever rewrites the machine-known branch line
+# and the two Next sections.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+cmd_capture() {
+  local next="${1:-}" b root rootdisp branch sha dirty stateline tmp
+  b="$(ah_bridge)"
+  mkdir -p "$AH_DIR" 2>/dev/null || { ah_err "!! cannot create $AH_DIR"; return 2; }
+  root="$(ah_root)"
+  # $HOME-relative, deliberately. The bridge's whole job is to be READ somewhere else — pasted
+  # into another pane, into a chat, into an issue — and a home path carries a username. A
+  # successor resolves $HOME itself; a reader of a leaked bridge learns nothing.
+  rootdisp="$root"
+  case "$root" in
+    "$HOME"/*)      rootdisp="\$HOME${root#"$HOME"}" ;;
+    "$AH_HOME_P"/*) rootdisp="\$HOME${root#"$AH_HOME_P"}" ;;
+  esac
+  branch="$(ah_git "$root" rev-parse --abbrev-ref HEAD)" || branch=""
+  sha="$(ah_git "$root" rev-parse --short HEAD)" || sha=""
+  if ah_git_ok; then
+    dirty="$(ah_git "$root" status --porcelain | grep -c . 2>/dev/null)" || true
+    case "${dirty:-}" in ''|*[!0-9]*) dirty=0 ;; esac
+  else
+    branch="UNKNOWN (git is not installed on this machine)"; sha=""; dirty="?"
+  fi
+  [ -n "$branch" ] || branch="UNKNOWN (not a git repository)"
+  if [ -n "$sha" ]; then
+    stateline="- branch: $branch @ $sha ($dirty uncommitted file(s))"
+  else
+    stateline="- branch: $branch"
+  fi
+
+  if [ ! -f "$b" ]; then
+    cat > "$b" <<EOF
+# HANDOFF BRIDGE — $(basename "$root")
+You are the successor session. Read this file first, then continue. Do not re-derive anything
+that is written here, and do not re-walk anything under "Do not re-walk".
+
+Scope (frozen): <one line: the contract this work is measured against>
+
+## State
+- repo: $rootdisp
+$stateline
+- gate: <the one command that proves this work is green>
+
+## Done
+- <what is finished AND verified, with the evidence — a sha, a gate's own output>
+
+## Next
+- ${next:-<the one next step, as an imperative with a path>}
+
+## Key files
+- <path:line — why it matters>   (five at most)
+
+## Do not re-walk
+- <every dead end, with the reason it is dead — this is the section that pays for the handoff>
+EOF
+    printf '%s\n' "$b"
+    return 0
+  fi
+
+  tmp="$b.ah-tmp.$$"
+  # ONE awk pass, and the section structure is NORMALISED rather than patched: the Next block is
+  # always `## Next / - <one item> / <blank>`, and whatever it displaced is carried in
+  # `## Previously next`, capped at five. Normalising is what makes the second identical capture
+  # a BYTE no-op — a patch-in-place loses the blank line between sections and the file drifts by
+  # one byte per run, which reads as "not idempotent" and is impossible to attribute later.
+  # An EMPTY next step is handled INSIDE the pass: the live item is re-printed unchanged. A
+  # primitive whose recovery procedure is re-running it must not blank the one field that matters
+  # when it is run with no argument.
+  awk -v stateline="$stateline" -v nextstep="${next:-}" -v hasnext="$([ -n "$next" ] && echo 1 || echo 0)" '
+    function emit_prev(   i, n) {
+      if (prevdone) return
+      prevdone = 1
+      n = 0
+      if (oldnext != "" && oldnext != nextitem && oldnext !~ /^<.*>$/) { n++; keep[n] = oldnext }
+      for (i = 1; i <= pcount && n < 5; i++) { n++; keep[n] = prev[i] }
+      if (n == 0) return
+      print ""
+      print "## Previously next"
+      for (i = 1; i <= n; i++) print "- " keep[i]
+    }
+    BEGIN { innext = 0; inprev = 0; pcount = 0; sawnext = 0; prevdone = 0
+            nextitem = nextstep }
+    !donestate && /^- branch: / { print stateline; donestate = 1; next }
+    /^## Next[ \t]*$/ {
+      innext = 1; inprev = 0; sawnext = 1
+      print "## Next"
+      if (hasnext) print "- " nextstep
+      next
+    }
+    /^## Previously next[ \t]*$/ { innext = 0; inprev = 1; next }
+    /^## / {
+      if (innext || inprev) { innext = 0; inprev = 0; emit_prev(); print "" }
+      print; next
+    }
+    innext {
+      if (oldnext == "" && substr($0,1,2) == "- ") {
+        oldnext = substr($0,3)
+        if (!hasnext) { print "- " oldnext; nextitem = oldnext }
+      }
+      next
+    }
+    inprev {
+      if (substr($0,1,2) == "- ") { pcount++; prev[pcount] = substr($0,3) }
+      next
+    }
+    { print }
+    END {
+      if (innext || inprev) emit_prev()
+      if (!sawnext) { print ""; print "## Next"; print "- " nextstep }
+    }
+  ' "$b" > "$tmp" 2>/dev/null
+
+  # A rewrite that produced nothing must never land: an empty bridge is worse than a stale one,
+  # and it is the one outcome a successor cannot recover from.
+  if [ ! -s "$tmp" ]; then
+    rm -f "$tmp" 2>/dev/null
+    ah_err "!! the rewrite produced an empty file — $b is unchanged"
+    return 2
+  fi
+  mv -f "$tmp" "$b" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; ah_err "!! could not replace $b"; return 2; }
+  printf '%s\n' "$b"
+  return 0
+}
+
+cmd_status() {
+  local b out pct sid age n
+  b="$(ah_bridge)"
+  if [ -f "$b" ]; then ah_say "bridge   : $b"
+  else ah_say "bridge   : $b  (NOT YET CAPTURED)"; fi
+  if out="$(ah_fill "${1:-}")"; then
+    pct="${out%%	*}"; out="${out#*	}"
+    sid="${out%%	*}"; out="${out#*	}"
+    age="${out%%	*}"; n="${out##*	}"
+    if [ "$pct" -ge "$PB_CTX_T" ]; then
+      ah_say "context  : ${pct}%  ->  RECYCLE NOW (>= ${PB_CTX_T}%) — capture, then fire"
+    else
+      ah_say "context  : ${pct}%  ->  keep working (threshold ${PB_CTX_T}%)"
+    fi
+    # The count is printed ONLY when it carries information. With one session there is nothing to
+    # disambiguate, and an explicit --session read never counts at all — it printed "0 session(s)
+    # reporting" beside a number it had just successfully read, which reads as a contradiction.
+    if [ "${n:-0}" -gt 1 ]; then
+      ah_say "           source: session $sid, ${age}s old — NEWEST of $n reporting; pass the session id if that is not this one"
+    else
+      ah_say "           source: session $sid, ${age}s old"
+    fi
+  else
+    ah_say "context  : UNKNOWN ($out) — the threshold cannot fire; you judge. This is NOT 0%."
+  fi
+  # The LAST succession, if there is one, so `status` answers "where did my handoff get to".
+  local sdir last ph
+  last="$(ls -t "$AH_SUCC_ROOT" 2>/dev/null | while IFS= read -r x; do
+            [ -f "$AH_SUCC_ROOT/$x/state.json" ] && { printf '%s' "$x"; break; }; done)"
+  if [ -n "${last:-}" ]; then
+    sdir="$AH_SUCC_ROOT/$last"; ph="$(ah_phase "$sdir")"
+    case "${ph:-}" in
+      DONE)             ah_say "handoff  : $last — DONE (successor proven, predecessor retired)" ;;
+      ENGAGED|RETIRED)  ah_say "handoff  : $last — $ph, finish it: agent-handoff resume $last" ;;
+      TIMEOUT_UNPROVEN) ah_say "handoff  : $last — NOT PROVEN, this pane is still yours. Re-check: agent-handoff resume $last" ;;
+      FAILED_*)         ah_say "handoff  : $last — $ph ($(ah_state_get "$sdir" note))" ;;
+      '')               : ;;
+      *)                ah_say "handoff  : $last — $ph (agent-handoff resume $last)" ;;
+    esac
+  fi
+  ah_say "fire     : runs the succession end to end; \`agent-handoff doctor\` says if this box can"
+  return 0
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+# THE SUCCESSION ENGINE
+#
+# State lives on DISK, never in this process, so a `kill -9` mid-flight loses nothing:
+#   $PB_STATE_DIR/handoff/<id>/
+#     state.json     phase + every resolved input   (atomic: temp + rename(2))
+#     brief.md       the frozen brief, sha'd at plan and RE-VERIFIED immediately before launch
+#     prompt.txt     brief + the succession handshake — what the successor actually receives
+#     launch.sh      the generated launcher: env scrub, cd, read the prompt from a FILE, exec
+#     handle         the driver's opaque handle for the successor
+#     ack            the successor's proof-of-tool-use, if it gets that far
+#     pred-pane      the predecessor's own pane identity, written BEFORE the retire
+#     run.lock.d/    O_EXCL (mkdir) + holder pid — one driver per id
+#     launch.lock.d/ O_EXCL (mkdir)              — one successor per id, ever
+#     log            append-only
+#
+#   PLANNED -> SEEDED -> LAUNCHING -> LAUNCHED -> ENGAGED -> RETIRED -> DONE
+#   terminals that are NOT failures of the invariant:
+#     FAILED_PREFLIGHT   nothing irreversible happened; the predecessor never moved
+#     FAILED_SEED        same
+#     FAILED_LAUNCH      the successor never started; the predecessor is untouched
+#     TIMEOUT_UNPROVEN   a successor may be alive but is NOT PROVEN; the predecessor SURVIVES
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+AH_SUCC_ROOT="$AH_DIR"
+AH_ENTRY="${AH_ENTRY:-fire}"   # which verb entered ah_succ_run — a fire may not re-attach, a resume must
+
+# ── ah_part — find a shipped succession part. Same three-place search as the module's. ───────
+ah_part() {
+  local rel="${1:-}" c d
+  d="${AH_SELF_DIR:-.}"
+  for c in "${AH_SUCCESSION_DIR:-}/$rel" "$PB_STATE_DIR/succession/$rel" \
+           "$PB_STATE_DIR/assets/succession/$rel" "$d/../assets/succession/$rel" \
+           "$d/succession/$rel" "$d/../succession/$rel"; do
+    case "$c" in /*) : ;; *) continue ;; esac
+    [ -r "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+# Drivers are ALWAYS invoked as `/bin/bash <driver>`. That is not style: macOS TCC keys Automation
+# consent on the (client binary, target app) PAIR and attributes to the nearest non-platform
+# binary in the responsibility chain, so changing the calling binary — wrapping it in `timeout`,
+# say — creates a NEW pair and therefore a NEW consent modal on the target machine.
+ah_run_part() { local p; p="$(ah_part "${1:-}")" || return 127; shift; /bin/bash "$p" "$@"; }
+
+# ── flat-JSON state. One key per line, all values strings, rewritten whole and renamed in. ────
+# plutil READS it back (a different code path than the printf that wrote it), and plutil also
+# validates the staged copy before it lands — a half-written state.json is the one thing that
+# could make `resume` do the wrong thing.
+ah_j() { printf '%s' "${1:-}" | LC_ALL=C tr '\n\r\t' '   ' | LC_ALL=C sed 's/\\/\\\\/g; s/"/\\"/g'; }
+ah_state_put() {
+  local d="${1:-}" k="${2:-}" v="${3:-}" f kv tmp
+  [ -n "$d" ] && [ -n "$k" ] || return 1
+  mkdir -p "$d" 2>/dev/null || return 1
+  f="$d/state.json"; kv="$d/.kv.$$"; tmp="$d/.state.$$"
+  { [ -f "$f" ] && LC_ALL=C grep '^  "' "$f" 2>/dev/null | LC_ALL=C grep -v "^  \"$k\": " | LC_ALL=C sed 's/,$//'
+    printf '  "%s": "%s"\n' "$k" "$(ah_j "$v")"; } > "$kv" 2>/dev/null || { rm -f "$kv"; return 1; }
+  { printf '{\n'
+    LC_ALL=C awk 'NR>1{print p ","} {p=$0} END{if(NR)print p}' "$kv"
+    printf '}\n'; } > "$tmp" 2>/dev/null || { rm -f "$kv" "$tmp"; return 1; }
+  rm -f "$kv"
+  "$PB_PLUTIL" -convert json -o /dev/null -- "$tmp" >/dev/null 2>&1 \
+    || { rm -f "$tmp"; ah_err "!! state.json would not parse — refusing to land it"; return 1; }
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  return 0
+}
+ah_state_get() { ah_plist_raw "${1:-}/state.json" "${2:-}"; }
+ah_phase()     { ah_state_get "${1:-}" phase; }
+ah_log() {
+  local d="${1:-}"; shift 2>/dev/null || true
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$*" >> "$d/log" 2>/dev/null
+  return 0
+}
+ah_put_phase() {
+  local d="${1:-}" p="${2:-}"
+  ah_state_put "$d" phase "$p" || return 1
+  ah_state_put "$d" updated "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" >/dev/null 2>&1
+  ah_log "$d" "phase=$p"
+  return 0
+}
+
+# ── locks. mkdir is the atomic primitive that exists everywhere; `set -C` redirection is not ──
+# reliable across the shells this may be sourced from. A lock whose holder pid is dead is STOLEN,
+# because the common case is a driver that was killed, not a driver that is still working.
+ah_lock_take() {
+  local d="${1:-}" n="${2:-}" p
+  if mkdir "$d/$n.lock.d" 2>/dev/null; then printf '%s' "$$" > "$d/$n.lock.d/pid" 2>/dev/null; return 0; fi
+  p="$(cat "$d/$n.lock.d/pid" 2>/dev/null)" || p=""
+  case "${p:-}" in ''|*[!0-9]*) p="" ;; esac
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then printf '%s' "$p"; return 1; fi
+  rm -rf "$d/$n.lock.d" 2>/dev/null
+  mkdir "$d/$n.lock.d" 2>/dev/null || { printf 'unknown'; return 1; }
+  printf '%s' "$$" > "$d/$n.lock.d/pid" 2>/dev/null
+  return 0
+}
+ah_lock_free() { rm -rf "${1:-}/${2:-}.lock.d" 2>/dev/null; return 0; }
+# 🚨 A LOCK MAY BE STOLEN ONLY WHEN WHAT IT GUARDS DIES WITH ITS HOLDER. run.lock.d guards a
+# MUTABLE exclusion — one driver at a time — so a dead driver's lock must be stolen or a killed
+# driver would block its own recovery forever. launch.lock.d guards a ONE-SHOT-EVER effect: the
+# spawned successor OUTLIVES the driver that spawned it, so stealing that one authorises a SECOND
+# successor over a live first. MEASURED: kill -9 the driver inside cmd_spawn's own 2-second
+# re-read window and `resume` stole the launch lock, tried to spawn again, was saved only by
+# tmux refusing a duplicate session NAME, and then recorded FAILED_LAUNCH — "the successor did
+# not start" — over a successor that had started, engaged and written a transcript.
+ah_lock_take_once() {
+  local d="${1:-}" n="${2:-}" p
+  if mkdir "$d/$n.lock.d" 2>/dev/null; then printf '%s' "$$" > "$d/$n.lock.d/pid" 2>/dev/null; return 0; fi
+  p="$(cat "$d/$n.lock.d/pid" 2>/dev/null)" || p=""
+  printf '%s' "${p:-unknown}"
+  return 1
+}
+
+
+ah_uuid() { /usr/bin/uuidgen 2>/dev/null | LC_ALL=C tr 'A-Z' 'a-z'; }
+ah_sha()  { local s; s="$(cksum < "${1:-/dev/null}" 2>/dev/null)" || s=""; printf '%s' "${s%% *}"; }
+
+# ── driver selection. Detect, then let the env override, then PROVE the choice works. ─────────
+ah_detect_driver() {
+  [ -n "${AH_DRIVER:-}" ] && { printf '%s' "$AH_DRIVER"; return 0; }
+  [ -n "${TMUX:-}" ]              && { printf 'tmux';   return 0; }
+  [ -n "${KITTY_LISTEN_ON:-}${KITTY_WINDOW_ID:-}" ] && { printf 'kitty'; return 0; }
+  [ -n "${ITERM_SESSION_ID:-}" ]  && { printf 'iterm2'; return 0; }
+  case "${TERM_PROGRAM:-}" in iTerm.app) printf 'iterm2'; return 0 ;; esac
+  # Nothing recognised the HOST terminal. tmux can still be the substrate — the successor simply
+  # has no viewport until somebody attaches, which is a cosmetic loss, not a functional one.
+  command -v "${AH_TMUX_BIN:-tmux}" >/dev/null 2>&1 && { printf 'tmux'; return 0; }
+  printf 'none'; return 1
+}
+ah_driver_file() { ah_part "driver-${1:-}.sh"; }
+
+# ── the successor's prompt: the brief, plus the handshake the oracle needs. ───────────────────
+# The MARKER goes FIRST so it lands in the transcript's `user` record; the NONCE instruction goes
+# LAST. Two tokens, not one: a transcript quotes its own input in queue-operation and attachment
+# rows, so a single token would let the harness's own bookkeeping satisfy the proof.
+# The `[handoff …]` prefix also guarantees the prompt does not START with `/` — a leading slash
+# makes the positional argument a SLASH COMMAND, which is a real primitive (`claude "/status"`
+# renders the Status panel) and would silently swallow a brief.
+ah_write_prompt() {
+  local d="${1:-}" brief="${2:-}" marker="${3:-}" nonce="${4:-}" ack="${5:-}"
+  {
+    printf '[handoff %s] ' "$marker"
+    cat "$brief"
+    printf '\n\n--- succession handshake: your predecessor is holding its context until it sees this ---\n'
+    printf 'FIRST, before anything else, print this token on a line of its own, exactly:\n\n    %s\n\n' "$nonce"
+    [ -n "$ack" ] && printf 'Then run this, so the handshake survives even if the screen does not:\n\n    printf %s > %s\n\n' "'%s\\n' '$nonce'" "'$ack'"
+    printf 'Then start on the brief above. Nothing else in this handshake needs an answer.\n'
+  } > "$d/prompt.txt" 2>/dev/null || return 1
+  return 0
+}
+
+# ── the generated launcher. ONE file, so the env scrub lives in ONE place whatever the driver. ─
+# Four properties, each bought with a measurement:
+#   env -i      `open -a iTerm` from inside an agent's Bash tool propagates 21 CLAUDE_*/ANTHROPIC_*
+#               variables into the app on COLD LAUNCH and EVERY session it spawns thereafter
+#               inherits them. Observed: a successor rendering "⚠ Transcript saving is off —
+#               inherited CLAUDE_CODE_CHILD_SESSION marker" and writing ZERO transcripts, i.e. a
+#               healthy agent the oracle must report DEAD. The scrub is mandatory, not hygiene.
+#   absolute    the spawned command inherits the TERMINAL APP's PATH, which came from whoever
+#               cold-launched it; a Dock launch gives the launchd environment and `claude` is not
+#               found. Absolute interpreter, absolute binary.
+#   explicit cd the command starts in the PROFILE's directory ($HOME), not the caller's — and the
+#               trust seed is keyed on the ABSOLUTE cwd, so inheriting the wrong one re-opens the
+#               modal whose default is "No, exit".
+#   read -d ''  the prompt is read from a FILE, byte-exact including any trailing newline.
+#               `"$(cat f)"` is one byte shorter — command substitution strips the trailing
+#               newline — which is harmless for a brief and wrong for a byte-fidelity claim.
+ah_write_launcher() {
+  local d="${1:-}" cfg="${2:-}" cwd="${3:-}" bin="${4:-}" agent="${5:-}" sid="${6:-}" resume="${7:-}"
+  local f="$d/launch.sh" envf="$d/env" v
+  : > "$envf" 2>/dev/null; chmod 600 "$envf" 2>/dev/null
+  for v in ${AH_PASS_ENV:-}; do
+    case "$v" in
+      CLAUDE_CODE_*|ANTHROPIC_*|CLAUDE_CONFIG_DIR)
+        ah_err "!! AH_PASS_ENV refuses $v — forwarding it is the poisoning vector this scrub exists to stop"
+        return 2 ;;
+      ''|*[!A-Za-z0-9_]*) ah_err "!! AH_PASS_ENV: not a variable name: $v"; return 2 ;;
+    esac
+    eval "printf 'export %s=%s\n' \"\$v\" \"\$(printf %q \"\${$v:-}\")\"" >> "$envf" 2>/dev/null
+  done
+  {
+    printf '#!/bin/bash\n'
+    printf '# GENERATED by agent-handoff — do not edit. Re-run `agent-handoff fire` instead.\n'
+    printf 'if [ -z "${AH_SCRUBBED:-}" ]; then\n'
+    printf '  exec /usr/bin/env -i \\\n'
+    printf '    HOME=%s PATH=%s TERM=%s LANG=%s SHELL=/bin/bash \\\n' \
+      "$(printf %q "$HOME")" "$(printf %q "${AH_PATH:-/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}")" \
+      "$(printf %q "${AH_TERM:-xterm-256color}")" "$(printf %q "${LANG:-en_US.UTF-8}")"
+    # 🚨 USER IS PART OF THE CREDENTIAL LOOKUP, NOT A CONVENIENCE OF THE ENVIRONMENT.
+    # MEASURED on 2.1.269 — one variable, four cells, and a second account as a replication:
+    #   full env, no tmux -> loggedIn true  |  env -i, no tmux -> loggedIn FALSE
+    #   full env, in tmux -> loggedIn true  |  env -i, in tmux -> loggedIn FALSE
+    # and inside the scrub: +USER -> true, +LOGNAME -> false, +USER=nosuchuser -> FALSE.
+    # A WRONG value fails exactly like an absent one, so USER is a LOOKUP KEY (the Keychain
+    # item carries the account name), not a decoration. Without it a perfectly logged-in config
+    # dir reports "Not logged in · Please run /login", the successor writes an api-error record,
+    # the oracle returns AUTHFAIL, and EVERY succession HOLDs — the invariant keeps the
+    # predecessor alive so nothing is lost, but the zero-human claim is dead on arrival.
+    # This does not weaken the scrub, which exists to stop CLAUDE_CODE_*/ANTHROPIC_* inheritance;
+    # USER and LOGNAME are neither. The previous wave's one authenticated end-to-end arm ran on
+    # Copilot, whose credential is an ENV token — which is exactly why this stayed invisible
+    # until a real Claude Code succession was run against a Keychain login.
+    printf '    USER=%s LOGNAME=%s \\\n' \
+      "$(printf %q "${USER:-$(/usr/bin/id -un 2>/dev/null)}")" \
+      "$(printf %q "${LOGNAME:-${USER:-$(/usr/bin/id -un 2>/dev/null)}}")"
+    printf '    CLAUDE_CONFIG_DIR=%s DISABLE_AUTOUPDATER=1 AH_SCRUBBED=1 \\\n' "$(printf %q "$cfg")"
+    # COPILOT_HOME is a PATH, not a secret, and it is what relocates Copilot's whole state dir
+    # (trust, session store, logs). A TOKEN is never forwarded automatically — AH_PASS_ENV is the
+    # only route, and it refuses the CLAUDE_CODE_* family outright.
+    [ "$agent" = copilot ] && [ -n "${COPILOT_HOME:-}" ] && \
+      printf '    COPILOT_HOME=%s \\\n' "$(printf %q "$COPILOT_HOME")"
+    printf '    /bin/bash "$0"\n'
+    printf 'fi\n'
+    printf '[ -s %s ] && . %s\n' "$(printf %q "$envf")" "$(printf %q "$envf")"
+    printf 'cd %s || exit 78\n' "$(printf %q "$cwd")"
+    printf 'AH_PROMPT=""\n'
+    printf 'IFS= read -r -d "" AH_PROMPT < %s || :\n' "$(printf %q "$d/prompt.txt")"
+    printf 'set -- %s\n' "$(printf %q "$bin")"
+    [ -n "${AH_MODEL:-}" ]  && printf 'set -- "$@" --model %s\n'  "$(printf %q "$AH_MODEL")"
+    [ -n "${AH_EFFORT:-}" ] && printf 'set -- "$@" --effort %s\n' "$(printf %q "$AH_EFFORT")"
+    case "$agent" in
+      copilot)
+        for v in ${AH_AGENT_FLAGS:-}; do printf 'set -- "$@" %s\n' "$(printf %q "$v")"; done
+        printf 'set -- "$@" -i "$AH_PROMPT"\n' ;;
+      *)
+        # --resume <seeded sid> when a goal was seeded (the restore happens during session init,
+        # so the goal is armed BEFORE turn 1 and the brief rides the same exec);
+        # --session-id <sid> otherwise, so the transcript is findable BY NAME and the oracle needs
+        # no project-slug arithmetic at all.
+        if [ "$resume" = 1 ]; then printf 'set -- "$@" --resume %s\n' "$(printf %q "$sid")"
+        else                       printf 'set -- "$@" --session-id %s\n' "$(printf %q "$sid")"; fi
+        for v in ${AH_AGENT_FLAGS:-}; do printf 'set -- "$@" %s\n' "$(printf %q "$v")"; done
+        printf 'set -- "$@" "$AH_PROMPT"\n' ;;
+    esac
+    printf 'exec "$@"\n'
+  } > "$f" 2>/dev/null || return 1
+  chmod 755 "$f" 2>/dev/null
+  /bin/bash -n "$f" 2>/dev/null || { ah_err "!! the generated launcher does not parse"; return 1; }
+  return 0
+}
+
+# ── ah_bounded <secs> <cmd…> — a timeout that does not need coreutils. ───────────────────────
+# `timeout` is GNU coreutils and is NOT on a stock macOS PATH, so a driver that calls it on an
+# unattended path dies with "command not found" rather than bounding anything. This bounds by
+# polling a pid WE started and killing THAT pid — never a pattern, never a process group we do
+# not own. rc 124 = it ran out of time, which the callers treat as "unknown", never as a failure
+# of the thing being measured.
+# Why it exists: the preflight and the version read both EXECUTE THE AGENT BINARY, and a wedged
+# binary makes `fire` hang forever with no output. Measured: a stub agent that ignores its argv
+# and sleeps left `fire` stopped at phase PLANNED with two lines printed and no error, which
+# reads exactly like a crash.
+ah_bounded() {
+  local secs="${1:-15}" tf pid i rc
+  shift 2>/dev/null || return 2
+  tf="$(mktemp "${TMPDIR:-/tmp}/ah-b.XXXXXX")" || return 2
+  "$@" > "$tf" 2>/dev/null &
+  pid=$!
+  i=0
+  while [ "$i" -lt "$((secs * 4))" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.25
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null; sleep 0.5; kill -KILL "$pid" 2>/dev/null
+    rm -f "$tf"; return 124
+  fi
+  wait "$pid" 2>/dev/null; rc=$?
+  cat "$tf" 2>/dev/null; rm -f "$tf"
+  return $rc
+}
+
+ah_bin_version() {
+  local out
+  out="$(ah_bounded 15 "${1:-}" --version)" || return 1
+  printf '%s' "$out" | LC_ALL=C awk '{for(i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) {print $i; exit}}'
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+# fire — the whole succession. Every irreversible act is AFTER a preflight that could refuse.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+cmd_fire() {
+  local id="" goal="" cwd="" cfg="" drv="" bar="" budget="${AH_BUDGET:-180}" bin=""
+  local agent="${AH_AGENT:-claude}" dry=0 retire=1 ack=1 briefarg=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id)          id="${2:-}"; shift 2 ;;
+      --goal)        goal="${2:-}"; shift 2 ;;
+      --no-goal)     goal=""; shift ;;
+      --require-goal) AH_REQUIRE_GOAL=1; export AH_REQUIRE_GOAL; shift ;;
+      --cwd)         cwd="${2:-}"; shift 2 ;;
+      --config-dir)  cfg="${2:-}"; shift 2 ;;
+      --driver)      drv="${2:-}"; shift 2 ;;
+      --agent)       agent="${2:-}"; shift 2 ;;
+      --bin)         bin="${2:-}"; shift 2 ;;
+      --brief)       briefarg="${2:-}"; shift 2 ;;
+      --budget)      budget="${2:-}"; shift 2 ;;
+      --bar)         bar="${2:-}"; shift 2 ;;
+      --no-ack)      ack=0; shift ;;
+      --no-retire)   retire=0; shift ;;
+      --skip-auth-check) AH_SKIP_AUTH_CHECK=1; shift ;;
+      --dry-run|--dry) dry=1; shift ;;
+      -h|--help)     ah_say "fire [--goal C] [--cwd D] [--config-dir D] [--driver tmux|kitty|iterm2]"
+                     ah_say "     [--agent claude|copilot] [--bin PATH] [--brief FILE] [--budget S]"
+                     ah_say "     [--bar ARRIVED|SPEAKING|ACTED] [--no-ack] [--no-retire] [--dry-run]"
+                     return 0 ;;
+      *) ah_err "!! unknown fire option: $1"; return 2 ;;
+    esac
+  done
+
+  # ── 1. RESOLVE. Nothing here touches anything outside our own state directory. ──────────────
+  local brief; brief="${briefarg:-$(ah_bridge)}"
+  [ -f "$brief" ] || { ah_err "!! no bridge at $brief"
+                       ah_err "!! run: agent-handoff capture \"<the one next step>\""; return 2; }
+  [ -s "$brief" ] || { ah_err "!! the bridge at $brief is empty"; return 2; }
+  [ -n "$cwd" ] || cwd="$(ah_root)"
+  case "$cwd" in /*) : ;; *) cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || { ah_err "!! bad --cwd"; return 2; } ;; esac
+  [ -n "$cfg" ] || cfg="${AH_SUCC_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+  case "$cfg" in /*) : ;; *) ah_err "!! --config-dir must be absolute"; return 2 ;; esac
+  [ -n "$bin" ] || bin="$(command -v "${AGENT_LAUNCH:-$agent}" 2>/dev/null)" || bin=""
+  [ -n "$bin" ] || { ah_err "!! cannot find the agent binary (${AGENT_LAUNCH:-$agent}); pass --bin /abs/path"; return 2; }
+  case "$bin" in /*) : ;; *) bin="$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")" ;; esac
+  [ -n "$drv" ] || drv="$(ah_detect_driver)"
+  [ -n "$bar" ] || case "$agent" in
+      copilot) bar=ACTED ;;      # Copilot's store is not readable pre-auth, so the ack IS the oracle
+      *)       bar=SPEAKING ;;
+    esac
+  [ "$bar" = ACTED ] && ack=1
+  case "${budget:-}" in ''|*[!0-9]*) budget=180 ;; esac
+  [ -n "$id" ] || id="$(date +%Y%m%d-%H%M%S 2>/dev/null)-$$"
+  id="$(printf '%s' "$id" | LC_ALL=C sed 's/[^A-Za-z0-9._-]/-/g')"
+
+  local d; d="$AH_SUCC_ROOT/$id"
+  mkdir -p "$d" 2>/dev/null || { ah_err "!! cannot create $d"; return 1; }
+
+  # ONE DRIVER PER ID. A second driver over one state file is how a live succession gets its
+  # phase overwritten with somebody else's timeout.
+  local holder
+  if ! holder="$(ah_lock_take "$d" run)"; then
+    ah_err "!! ANOTHER DRIVER (pid $holder) owns succession $id — refusing to touch its state."
+    return 5
+  fi
+  # shellcheck disable=SC2064
+  trap "ah_lock_free '$d' run" EXIT INT TERM
+
+  local sid marker nonce ackf
+  sid="$(ah_uuid)"; [ -n "$sid" ] || sid="$(date +%s)-$$-ah"
+  marker="AHM-$id-$sid"; nonce="AHN-$sid"
+  ackf=""; [ "$ack" = 1 ] && ackf="$d/ack"
+
+  cp -f "$brief" "$d/brief.md" 2>/dev/null || { ah_err "!! cannot freeze the brief"; return 1; }
+  ah_state_put "$d" id "$id"
+  ah_state_put "$d" created "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  ah_state_put "$d" agent "$agent";   ah_state_put "$d" bin "$bin"
+  ah_state_put "$d" driver "$drv";    ah_state_put "$d" cfg "$cfg"
+  ah_state_put "$d" cwd "$cwd";       ah_state_put "$d" sid "$sid"
+  ah_state_put "$d" marker "$marker"; ah_state_put "$d" nonce "$nonce"
+  ah_state_put "$d" ack "$ackf";      ah_state_put "$d" bar "$bar"
+  ah_state_put "$d" budget "$budget"; ah_state_put "$d" goal "$goal"
+  ah_state_put "$d" brief "$brief";   ah_state_put "$d" brief_sha "$(ah_sha "$d/brief.md")"
+  ah_state_put "$d" retire "$retire"
+  ah_put_phase "$d" PLANNED
+  ah_say "handoff  : $id"
+  ah_say "state    : $d/state.json"
+  AH_ENTRY=fire
+
+  # ── 2. PREFLIGHT — BEFORE the first irreversible step, never after. A refusal here costs
+  #       nothing; a refusal after the session has moved is a worse husk than no feature at all.
+  local pf rc
+  if ! pf="$(ah_succ_preflight "$d" "$drv" "$cfg" "$cwd" "$bin" "$agent" "$goal")"; then
+    printf '%s\n' "$pf" >&2
+    ah_put_phase "$d" FAILED_PREFLIGHT
+    ah_err "!! PREFLIGHT REFUSED — nothing was launched and this pane is untouched."
+    return 2
+  fi
+  [ -n "$pf" ] && printf '%s\n' "$pf"
+
+  # ── 3. SEED + WRITE. Still reversible; still nothing of the predecessor's has moved. ────────
+  local resume=0 ver
+  ver="$(ah_bin_version "$bin")" || ver="2.1.260"
+  if [ "$agent" = copilot ]; then
+    if [ "${AH_SEED_TRUST:-1}" != 0 ] && [ -n "${COPILOT_HOME:-$HOME/.copilot}" ]; then
+      ah_run_part seed.sh copilot-trust "${COPILOT_HOME:-$HOME/.copilot}" "$cwd" || {
+        ah_put_phase "$d" FAILED_SEED
+        ah_err "!! could not seed Copilot folder trust for $cwd — the successor would park on the"
+        ah_err "!! 'Confirm folder trust' modal."; return 2; }
+    fi
+  else
+    ah_run_part seed.sh onboarding "$cfg" || { ah_put_phase "$d" FAILED_SEED; ah_err "!! could not seed onboarding"; return 2; }
+    if [ "${AH_SEED_TRUST:-1}" != 0 ]; then
+      ah_run_part seed.sh trust "$cfg" "$cwd" || { ah_put_phase "$d" FAILED_SEED
+        ah_err "!! could not seed workspace trust for $cwd — the successor would park on a modal whose"
+        ah_err "!! DEFAULT SELECTION IS 'No, exit', i.e. a blind Enter closes it."; return 2; }
+    fi
+  fi
+  if [ -n "$goal" ] && [ "$agent" != copilot ]; then
+    ah_run_part seed.sh goal "$cfg" "$cwd" "$sid" "$goal" "$ver" >/dev/null || {
+      ah_put_phase "$d" FAILED_SEED; ah_err "!! could not seed the goal"; return 2; }
+    resume=1
+    ah_state_put "$d" goal_seeded 1
+  fi
+  ah_write_prompt "$d" "$d/brief.md" "$marker" "$nonce" "$ackf" \
+    || { ah_put_phase "$d" FAILED_SEED; ah_err "!! cannot write the prompt"; return 1; }
+  ah_write_launcher "$d" "$cfg" "$cwd" "$bin" "$agent" "$sid" "$resume" \
+    || { ah_put_phase "$d" FAILED_SEED; ah_err "!! cannot write the launcher"; return 1; }
+  ah_put_phase "$d" SEEDED
+
+  if [ "$dry" = 1 ]; then
+    ah_say ""
+    ah_say "DRY RUN — nothing launched, nothing retired. Resolved plan:"
+    ah_say "  driver   : $drv"
+    ah_say "  agent    : $agent ($bin ${ver:-?})"
+    ah_say "  cwd      : $cwd"
+    ah_say "  config   : $cfg"
+    ah_say "  session  : $sid   (goal seeded: $resume)"
+    ah_say "  bar      : $bar   budget ${budget}s"
+    ah_say "  launcher : $d/launch.sh"
+    ah_say "  prompt   : $d/prompt.txt   ($(wc -c < "$d/prompt.txt" | tr -d ' ') bytes, argv — never keystrokes)"
+    return 0
+  fi
+
+  ah_succ_run "$d"
+}
+
+# ── preflight: prints warnings on stdout, the REASON on stdout and rc 2 when it refuses. ─────
+ah_succ_preflight() {
+  local d="${1:-}" drv="${2:-}" cfg="${3:-}" cwd="${4:-}" bin="${5:-}" agent="${6:-}" goal="${7:-}"
+  local df out rc
+  ah_part oracle.sh >/dev/null 2>&1 || { printf 'the succession parts are not installed (oracle.sh not found)\n'; return 2; }
+  ah_part seed.sh   >/dev/null 2>&1 || { printf 'the succession parts are not installed (seed.sh not found)\n'; return 2; }
+  [ "$drv" = none ] && { printf 'no terminal driver: not inside tmux, kitty or iTerm2, and tmux is not installed.\n'; return 2; }
+  df="$(ah_driver_file "$drv")" || { printf 'no such driver: %s\n' "$drv"; return 2; }
+  [ -d "$cwd" ] || { printf 'the successor cwd does not exist: %s\n' "$cwd"; return 2; }
+  [ -x "$bin" ] || { printf 'the agent binary is not executable: %s\n' "$bin"; return 2; }
+
+  # The driver must PROVE it can do this here — including that its liveness oracle can say NO.
+  out="$(ah_bounded 45 /bin/bash "$df" preflight 2>&1)"; rc=$?
+  [ "$rc" -eq 124 ] && { printf 'driver %s preflight did not finish in 45s\n' "$drv"; return 2; }
+  [ "$rc" -eq 0 ] || { printf 'driver %s refused: %s\n' "$drv" "$out"; return 2; }
+  [ -n "$out" ] && printf '%s\n' "$out"
+
+  # A driver that cannot retire the predecessor is NOT a refusal — the portable retire is the
+  # predecessor exiting itself, and `fire` says so at the end rather than pretending otherwise.
+  out="$(/bin/bash "$df" capabilities 2>/dev/null)"
+  case "$out" in *close-self=no*) printf 'NOTE: this driver cannot close the predecessor pane from here; after the successor is proven, THIS session must exit itself.\n' ;; esac
+  case "$out" in *survives-app-death=no*) printf 'NOTE: driver %s mode is direct — the successor DIES if the terminal app quits. Install tmux for the fault-tolerant path.\n' "$drv" ;; esac
+
+  ah_run_part seed.sh hooks-ok "$cfg" || { printf 'refusing: this config disables hooks, which disables /goal.\n'; return 2; }
+  if [ -n "$goal" ] && [ "${#goal}" -gt 4000 ]; then
+    printf 'the goal condition is %s characters; the product refuses over 4000 and the file path would silently accept it. Shorten it.\n' "${#goal}"; return 2
+  fi
+  if [ "$agent" != copilot ]; then
+    out="$(ah_bounded 30 ah_run_part seed.sh auth "$cfg" "$bin" 2>&1)"; rc=$?
+    [ "$rc" -eq 124 ] && { rc=3; out="unknown: the login check did not answer in 30s — proceeding; the oracle still refuses to retire on an AUTHFAIL."; }
+    if [ "$rc" -eq 2 ]; then
+      # --skip-auth-check exists so the DOWNSTREAM path can be measured against a config dir that
+      # provably cannot log in (which is the only kind a test may safely create). It costs a
+      # wasted launch and NOTHING ELSE: the oracle's AUTHFAIL tier is terminal, fires in about a
+      # second, and lands on HOLD — so the invariant is untouched by skipping this check.
+      if [ "${AH_SKIP_AUTH_CHECK:-0}" = 1 ]; then
+        printf 'WARNING: --skip-auth-check — launching against a config dir that reports NOT LOGGED IN.\n'
+        printf '         The successor will produce an AUTHFAIL and the predecessor will be HELD.\n'
+      else
+        printf '%s\n' "$out"; return 2
+      fi
+    fi
+    [ "$rc" -eq 3 ] && printf '%s\n' "$out"
+  fi
+  return 0
+}
+
+# ── the phase machine. `fire` and `resume` both enter here; it re-enters at the recorded phase. ─
+ah_succ_run() {
+  local d="${1:-}" ph drv df cfg cwd sid marker nonce ackf bar budget retire goal
+  ph="$(ah_phase "$d")"; drv="$(ah_state_get "$d" driver)"; cfg="$(ah_state_get "$d" cfg)"
+  cwd="$(ah_state_get "$d" cwd)";  sid="$(ah_state_get "$d" sid)"
+  marker="$(ah_state_get "$d" marker)"; nonce="$(ah_state_get "$d" nonce)"
+  ackf="$(ah_state_get "$d" ack)"; bar="$(ah_state_get "$d" bar)"
+  budget="$(ah_state_get "$d" budget)"; retire="$(ah_state_get "$d" retire)"
+  goal="$(ah_state_get "$d" goal)"
+  df="$(ah_driver_file "$drv")" || { ah_err "!! no driver $drv"; return 2; }
+  case "${budget:-}" in ''|*[!0-9]*) budget=180 ;; esac
+
+  case "$ph" in
+    ''|PLANNED|FAILED_PREFLIGHT|FAILED_SEED)
+      ah_err "!! phase $ph is not resumable — re-run \`agent-handoff fire\`"; return 2 ;;
+    FAILED_LAUNCH)
+      # Not resumable, and it must SAY so: falling through to the bottom returned 0, which reads
+      # as "resumed successfully" over a succession that never launched.
+      ah_err "!! phase FAILED_LAUNCH — the successor never started for this id."
+      ah_err "!! A relaunch under the same id is refused by design; fire again with a NEW --id."
+      return 4 ;;
+    DONE) ah_say "already DONE."; return 0 ;;
+  esac
+
+  # ── LAUNCH ────────────────────────────────────────────────────────────────────────────────
+  if [ "$ph" = SEEDED ] || [ "$ph" = LAUNCHING ]; then
+    # The bridge's sha is frozen at plan and RE-VERIFIED here: never launch a stale brief.
+    local want got; want="$(ah_state_get "$d" brief_sha)"; got="$(ah_sha "$d/brief.md")"
+    [ "$want" = "$got" ] || { ah_put_phase "$d" FAILED_LAUNCH
+      ah_err "!! the frozen brief changed since plan (sha $want -> $got) — refusing to launch it"; return 4; }
+    if ! ah_lock_take_once "$d" launch >/dev/null; then
+      # The lock is held or was held. NEVER launch a second successor for one id — and "the
+      # holder is dead" is not evidence the successor is, because the successor outlives it.
+      # The handle is written by the driver immediately after the spawn succeeds, so its
+      # presence is the on-disk record that a successor was created; the ORACLE, not this
+      # branch, then decides whether that successor is alive and engaged.
+      if [ "${AH_ENTRY:-fire}" = fire ]; then
+        # A FRESH fire over an id that already launched is an ID COLLISION, not a recovery: the
+        # new sid/marker/nonce name a successor that was never started, so the oracle could only
+        # ever spend the whole budget and HOLD. Refuse at once and name the cause.
+        ah_err "!! id $id has already launched a successor — an id is spent once used."
+        ah_err "!! Nothing was launched and nothing was retired. Use a NEW --id, or:"
+        ah_err "!!   agent-handoff resume $id"
+        ah_put_phase "$d" TIMEOUT_UNPROVEN
+        return 5
+      fi
+      if [ -f "$d/handle" ]; then
+        ah_say "launched : a successor already exists for $id — RE-ATTACHING, not launching a second."
+        ah_put_phase "$d" LAUNCHED
+        ph=LAUNCHED
+      else
+        ah_put_phase "$d" TIMEOUT_UNPROVEN
+        ah_err "!! a launch for $id was started and its driver died before the successor was recorded."
+        ah_err "!! Refusing to launch a second one: this pane is untouched and nothing was retired."
+        ah_err "!! Look for a stray successor, then fire again with a NEW --id."
+        return 3
+      fi
+    else
+      ah_put_phase "$d" LAUNCHING
+      # launched_at is stamped BEFORE the spawn, not after: the driver's spawn deliberately waits
+      # two seconds to re-read liveness, and a successor can legitimately write its first transcript
+      # bytes inside that window. Anything on disk BEFORE this instant cannot be this successor's,
+      # which is exactly the property the staleness guard needs.
+      ah_state_put "$d" launched_at "$(date +%s 2>/dev/null)"
+      if ! /bin/bash "$df" spawn "$d/handle" "$cwd" "$(basename "$d")" /bin/bash "$d/launch.sh"; then
+        ah_put_phase "$d" FAILED_LAUNCH
+        ah_err "!! FAILED_LAUNCH — the successor did not start. This pane is untouched."
+        return 4
+      fi
+      ah_put_phase "$d" LAUNCHED
+      ah_say "launched : successor is up (driver $drv)"
+      ph=LAUNCHED
+    fi
+  fi
+
+  # ── PROVE ─────────────────────────────────────────────────────────────────────────────────
+  if [ "$ph" = LAUNCHED ] || [ "$ph" = TIMEOUT_UNPROVEN ]; then
+    local alive out rc
+    alive="$(/bin/bash "$df" alive-cmd "$d/handle" 2>/dev/null)" || alive=""
+    ah_say "proving  : bar=$bar budget=${budget}s  (the predecessor does not move until this passes)"
+    out="$(ah_run_part oracle.sh decide --cfg "$cfg" --sid "$sid" --cwd "$cwd" \
+             --marker "$marker" --nonce "$nonce" ${ackf:+--ack "$ackf"} \
+             ${alive:+--alive-cmd "$alive"} --budget "$budget" --bar "$bar" \
+             --since "$(ah_state_get "$d" launched_at)" 2>&1)"
+    rc=$?
+    printf '%s\n' "$out"
+    ah_log "$d" "oracle: $out"
+    if [ "$rc" -ne 0 ]; then
+      ah_put_phase "$d" TIMEOUT_UNPROVEN
+      ah_state_put "$d" note "$(printf '%s' "$out" | head -1)"
+      ah_err ""
+      ah_err "⛔ ENGAGEMENT NOT PROVEN. THE PREDECESSOR IS NOT RETIRED and this pane is still yours."
+      ah_err "   Look at the successor:   $( /bin/bash "$df" attach "$d/handle" 2>/dev/null || printf '(no viewport)' )"
+      ah_err "   Re-check when it wakes:  agent-handoff resume $(basename "$d")"
+      return 3
+    fi
+    ah_put_phase "$d" ENGAGED
+    ph=ENGAGED
+  fi
+
+  # ── GOAL READ-BACK. Never a gate by default: a healthy successor with an un-armed goal still
+  #    holds the brief, and refusing to retire over it would strand two live sessions. But an
+  #    armed goal can be DISARMED moments later — a launch-time error writes a second
+  #    goal_status with met:true and prints "Goal cleared after an unrecoverable error" — so it
+  #    is read back AFTER engagement, never assumed at arming.
+  if [ "$ph" = ENGAGED ] && [ -n "$goal" ]; then
+    local g
+    g="$(ah_run_part oracle.sh probe --cfg "$cfg" --sid "$sid" --cwd "$cwd" --marker "$marker" --nonce "$nonce" 2>/dev/null)"
+    case "$g" in
+      *GOAL=live*) ah_say "goal     : ARMED and live"; ah_state_put "$d" goal_state live ;;
+      *GOAL=done*) # ARMED WITH NO KEYSTROKES, AND THE EVALUATOR HAS ALREADY RULED. Telling the
+                   # operator to re-arm this by hand is the one thing that is certainly wrong:
+                   # measured on a real authenticated run, the seeded goal was restored at launch
+                   # and the Stop evaluator met it 15 s later ("Goal achieved (13s / 1 turn)"),
+                   # and the engine answered "NOT live … arm it by hand".
+                   ah_say "goal     : armed, and already met or cleared by the successor — nothing to re-arm"
+                   ah_state_put "$d" goal_state done ;;
+      *)           ah_say "goal     : NOT live — the successor is engaged and has the brief, but the"
+                   ah_say "           Stop condition is not armed. Arm it by hand in that pane with:"
+                   ah_say "             /goal $goal"
+                   ah_state_put "$d" goal_state absent
+                   if [ "${AH_REQUIRE_GOAL:-0}" = 1 ]; then
+                     ah_put_phase "$d" TIMEOUT_UNPROVEN
+                     ah_err "!! --require-goal was set: holding the predecessor."; return 3
+                   fi ;;
+    esac
+  fi
+
+  # ── RETIRE. The terminal phase is written BEFORE the pane dies, because the driver's close
+  #    kills THIS process: a state machine that writes its record afterwards is stranded at
+  #    ENGAGED with nothing after it ever landing. `resume` heals that; ordering prevents it.
+  if [ "$ph" = ENGAGED ]; then
+    if [ "${retire:-1}" != 1 ]; then
+      ah_say "done     : successor PROVEN engaged. --no-retire, so this pane stays."
+      ah_put_phase "$d" DONE; ah_lock_free "$d" run; return 0
+    fi
+    ah_put_phase "$d" RETIRED
+    ah_lock_free "$d" run
+    ah_say ""
+    ah_say "✅ successor PROVEN engaged — retiring this pane now."
+    # THE REAPER. The close is expected to kill THIS process, so the last phase we could ever
+    # write from here is RETIRED — which is honest but leaves a perfectly successful succession
+    # recorded as unfinished, and nobody runs `resume` over a pane that is already gone. A
+    # detached, SIGHUP-immune child does the read-back we cannot: it waits for the pane to
+    # actually disappear and writes DONE. Measured need: the first end-to-end run landed on
+    # RETIRED with "Hangup" in the log, exactly as designed and exactly as un-finishable.
+    ( nohup /bin/bash "$AH_SELF" __reap "$d" >/dev/null 2>&1 & ) >/dev/null 2>&1
+    /bin/bash "$df" close-self "$d" 2>/dev/null; rc=$?
+    ph=RETIRED
+  fi
+
+  # Reaching here means the close did not take (it is expected to kill us). Verify and say so.
+  if [ "$ph" = RETIRED ]; then
+    /bin/bash "$df" prove-pred-gone "$d" >/dev/null 2>&1; rc=$?
+    ah_put_phase "$d" DONE
+    case "$rc" in
+      0) ah_say "retired  : the predecessor pane is gone." ;;
+      1) ah_say ""
+         ah_say "The successor is proven and the succession is DONE, but this pane is still open —"
+         ah_say "this terminal's close verb did not take. Exit it yourself; nothing is lost either way." ;;
+      *) ah_say "retired  : issued (this terminal cannot verify its own pane's death from inside it)." ;;
+    esac
+    return 0
+  fi
+  # Defensive: every phase above either returns or falls through as a KNOWN terminal state.
+  # Reaching here means the state machine met a phase it does not handle, and rc 0 would report
+  # that as a success.
+  ah_err "!! unhandled phase: $ph — nothing was retired."
+  return 6
+}
+
+# ── __reap — the detached read-back that turns RETIRED into DONE. Never called by a human. ────
+# It is its own process, SIGHUP-immune, and it only ever asks ONE question: is the predecessor's
+# pane actually gone. It never launches, never retires, and never touches the successor.
+cmd_reap() {
+  local d="${1:-}" df i rc
+  [ -f "$d/state.json" ] || return 1
+  df="$(ah_driver_file "$(ah_state_get "$d" driver)")" || return 1
+  i=0
+  while [ "$i" -lt 15 ]; do
+    /bin/bash "$df" prove-pred-gone "$d" >/dev/null 2>&1; rc=$?
+    [ "$rc" -eq 0 ] && { ah_state_put "$d" retire_verified yes; ah_put_phase "$d" DONE; return 0; }
+    sleep 2; i=$((i + 1))
+  done
+  # Still there after 30 s: the close verb did not take. Say so on the record rather than
+  # promoting it to DONE — two independent measurements of iTerm2's `close` disagree, so a
+  # driver's rc is not evidence and neither is our optimism.
+  ah_state_put "$d" retire_verified no
+  ah_state_put "$d" note "close-self was issued but the predecessor pane is still present"
+  return 1
+}
+
+# ── resume — re-enter a succession the driver was killed out of. ─────────────────────────────
+cmd_resume() {
+  local id="${1:-}" d holder
+  if [ -z "$id" ]; then
+    id="$(ls -t "$AH_SUCC_ROOT" 2>/dev/null | while IFS= read -r x; do
+            [ -f "$AH_SUCC_ROOT/$x/state.json" ] && { printf '%s' "$x"; break; }; done)"
+    [ -n "$id" ] || { ah_err "!! no succession to resume under $AH_SUCC_ROOT"; return 2; }
+  fi
+  d="$AH_SUCC_ROOT/$id"
+  [ -f "$d/state.json" ] || { ah_err "!! no succession $id"; return 2; }
+  if ! holder="$(ah_lock_take "$d" run)"; then
+    ah_err "!! ANOTHER DRIVER (pid $holder) owns succession $id — refusing to touch its state."; return 5
+  fi
+  # shellcheck disable=SC2064
+  trap "ah_lock_free '$d' run" EXIT INT TERM
+  ah_say "resuming : $id at phase $(ah_phase "$d")"
+  AH_ENTRY=resume
+  ah_succ_run "$d"
+}
+
+# ── doctor — "can this machine do it, and what is still human". Read-only. ────────────────────
+cmd_doctor() {
+  local drv df cfg cwd bin out rc bad=0
+  drv="$(ah_detect_driver)"; cfg="${AH_SUCC_CONFIG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+  cwd="$(ah_root)"; bin="$(command -v "${AGENT_LAUNCH:-claude}" 2>/dev/null)" || bin=""
+  ah_say "agent-handoff doctor"
+  ah_say "  host terminal : ${TERM_PROGRAM:-?}  -> driver $drv"
+  ah_say "  agent binary  : ${bin:-NOT FOUND}   ${bin:+($(ah_bin_version "$bin" 2>/dev/null || printf '?'))}"
+  ah_say "  config dir    : $cfg"
+  ah_say "  successor cwd : $cwd"
+  ah_say ""
+  if ! df="$(ah_driver_file "$drv")"; then ah_say "  DRIVER        : MISSING ($drv)"; bad=1
+  else
+    out="$(/bin/bash "$df" capabilities 2>&1)"
+    printf '  capabilities  : %s\n' "$(printf '%s' "$out" | tr '\n' ' ')"
+    out="$(/bin/bash "$df" preflight 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then ah_say "  driver        : OK"; [ -n "$out" ] && printf '                  %s\n' "$out"
+    else ah_say "  driver        : REFUSED"; printf '                  %s\n' "$out"; bad=1; fi
+  fi
+  out="$(ah_run_part seed.sh check "$cfg" "$cwd" 2>&1)"; rc=$?
+  printf '%s\n' "$out" | while IFS= read -r l; do printf '  seed          : %s\n' "$l"; done
+  [ "$rc" -eq 0 ] || ah_say "                  (fire seeds these automatically; this is what it will write)"
+  out="$(ah_run_part seed.sh auth "$cfg" "${bin:-claude}" 2>&1)"; rc=$?
+  case "$rc" in
+    0) ah_say "  login         : OK" ;;
+    2) ah_say "  login         : ⛔ THE ONE HUMAN GESTURE"; printf '%s\n' "$out" | while IFS= read -r l; do printf '                  %s\n' "$l"; done; bad=1 ;;
+    *) ah_say "  login         : unknown (one-armed instrument — see seed.sh auth)" ;;
+  esac
+  ah_say ""
+  ah_say "  one-time human gestures on a NEW Mac, and there are no others:"
+  ah_say "    1. one OAuth login per config-dir PATH: CLAUDE_CONFIG_DIR=$cfg ${bin:-claude} auth login"
+  ah_say "       (the Keychain item is keyed on that absolute path — moving the dir logs it out silently)"
+  ah_say "    2. iTerm2 driver only: one macOS Automation consent click, per (calling binary, iTerm2):"
+  ah_say "       osascript -e 'tell application \"iTerm2\" to count windows'"
+  ah_say "    3. kitty driver only, and only if kitty is the viewport: allow_remote_control socket-only"
+  ah_say "       + listen_on unix:/tmp/kitty-{kitty_pid} in kitty.conf, then RESTART kitty."
+  # 🚨 THE FOURTH GESTURE, AND IT IS THE ONE A CLEAN-INSTALL MAC ACTUALLY HITS. macOS ships no
+  # tmux, and this repo's own README rules a multiplexer out of scope ("a workflow opinion, not a
+  # bootstrap requirement"). But the succession's FAULT TOLERANCE *is* the tmux substrate: with
+  # tmux the successor's server is ppid 1 and survives the terminal app dying; without it the
+  # iTerm2 and kitty drivers fall back to `direct`, where the successor is a child of the
+  # terminal and dies with it, and close-self cannot be verified. The preflight already prints a
+  # NOTE, but a NOTE is the wrong rung for the difference between "fault-tolerant" and "not".
+  if ! command -v "${AH_TMUX_BIN:-tmux}" >/dev/null 2>&1; then
+    ah_say "    4. ⚠ NO TMUX HERE, so the succession falls back to DIRECT mode: the successor DIES"
+    ah_say "       if the terminal app quits, and the retire cannot be verified. The AUTOMATIC path"
+    ah_say "       still works; the FAULT-TOLERANT one needs:   brew install tmux"
+  fi
+  ah_say "  There is NO per-recycle gesture."
+  ah_say ""
+  ah_run_part oracle.sh selftest >/dev/null 2>&1 && ah_say "  oracle selftest: PASS (its negative arms ran)" \
+    || { ah_say "  oracle selftest: FAIL — run: $(ah_part oracle.sh) selftest"; bad=1; }
+  ah_run_part seed.sh selftest >/dev/null 2>&1 && ah_say "  seed selftest  : PASS" \
+    || { ah_say "  seed selftest  : FAIL — run: $(ah_part seed.sh) selftest"; bad=1; }
+  [ "$bad" = 0 ] && { ah_say ""; ah_say "READY: \`agent-handoff fire\` will run a succession with no human in the loop."; return 0; }
+  ah_say ""
+  ah_say "NOT READY — the lines above marked REFUSED / ⛔ are what is missing."
+  return 1
+}
+
+# ── recycle-due <sid> — the Stop-hook predicate. Prints the reason; rc 0 iff genuinely due. ──
+# Every kind of ignorance exits 1 in silence. It latches per session id, so a session is asked
+# to hand itself off AT MOST ONCE however many times the Stop hook calls this.
+cmd_recycle_due() {
+  local sid="${1:-}" out pct latch
+  [ "${AH_RECYCLE:-1}" = 1 ] || return 1
+  [ -n "$sid" ] || return 1
+  out="$(ah_fill "$sid")" || return 1
+  pct="${out%%	*}"
+  case "${pct:-}" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pct" -ge "$PB_CTX_T" ] || return 1
+  latch="$AH_DIR/recycle-latch.$(printf '%s' "$sid" | LC_ALL=C sed 's/[^A-Za-z0-9._-]/-/g')"
+  [ -f "$latch" ] && return 1
+  mkdir -p "$AH_DIR" 2>/dev/null || return 1
+  : > "$latch" 2>/dev/null || return 1
+  printf 'Context is at %s%%, past the %s%% line. Persist what this context holds that the disk does not — a rejected approach and why, a measurement that contradicts the obvious reading — then run: agent-handoff capture "<the one next step>", edit the bridge it prints, and run agent-handoff fire. If you have already handed off or this is deliberate, say so in your closing message and stop. This fires at most once per session.' "$pct" "$PB_CTX_T"
+  return 0
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+# selftest — the fixtures. Every positive arm is paired with the negative that gives it meaning.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+ah__t=0; ah__f=0
+ah_ok()  { ah__t=$((ah__t+1)); printf '  ok   %s\n' "$1"; }
+ah_bad() { ah__t=$((ah__t+1)); ah__f=$((ah__f+1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
+ah_is()  { if [ "$2" = "$3" ]; then ah_ok "$1"; else ah_bad "$1" "want [$3] got [$2]"; fi; }
+
+cmd_selftest() {
+  local T b n1 n2 A B out rc sid sd
+  T="$(mktemp -d -t ahself)" || return 30
+  printf 'agent-handoff selftest · bash %s\n' "${BASH_VERSION:-?}"
+  # HOME is sandboxed: the $HOME-relative paste line is a PROPERTY UNDER TEST, and against the
+  # real home the arm silently passes for the wrong reason (the bridge lands in /var/folders, the
+  # $HOME branch is never taken, and the assertion measures mktemp rather than the substitution).
+  HOME="$T/home"; export HOME
+  PB_STATE_DIR="$HOME/.mac-bootstrap"; AH_DIR="$PB_STATE_DIR/handoff"
+  PB_TELEMETRY_DIR="$T/tel"; export PB_TELEMETRY_DIR
+  mkdir -p "$HOME/work" "$PB_TELEMETRY_DIR"
+  cd "$HOME/work" || return 30
+
+  # 1. capture creates, and the bridge carries the sections a successor needs.
+  b="$(AH_NO_GIT=1 cmd_capture "STEP-ONE")"
+  ah_is "capture prints a path under the state dir" "${b#"$AH_DIR"/}" "$(basename "$b")"
+  [ -f "$b" ] && ah_ok "capture created the bridge" || ah_bad "capture created no file"
+  for s in "Scope (frozen):" "## Done" "## Next" "## Key files" "## Do not re-walk"; do
+    if grep -qF -- "$s" "$b"; then ah_ok "bridge carries '$s'"; else ah_bad "bridge is missing '$s'"; fi
+  done
+  ah_is "the next step landed" "$(awk '/^## Next/{getline; print; exit}' "$b")" "- STEP-ONE"
+  if grep -q '^- repo: \$HOME/' "$b"; then ah_ok "the repo line is \$HOME-relative — no username in the bridge"
+  else ah_bad "the bridge wrote a resolved home path" "$(grep '^- repo:' "$b")"; fi
+
+  # 2. IDEMPOTENT: the same capture twice changes nothing at all.
+  A="$(cksum < "$b")"
+  AH_NO_GIT=1 cmd_capture "STEP-ONE" >/dev/null
+  B="$(cksum < "$b")"
+  ah_is "re-capturing the SAME step is a byte no-op" "$A" "$B"
+
+  # 3. ## Next holds exactly ONE item after three captures, and the history is kept.
+  AH_NO_GIT=1 cmd_capture "STEP-TWO" >/dev/null
+  AH_NO_GIT=1 cmd_capture "STEP-THREE" >/dev/null
+  n1="$(awk '/^## Next[ \t]*$/{f=1;next} /^## /{f=0} f && substr($0,1,2)=="- "{c++} END{print c+0}' "$b")"
+  ah_is "## Next holds exactly one step after 3 captures" "$n1" "1"
+  ah_is "…and it is the newest" "$(awk '/^## Next[ \t]*$/{getline; print; exit}' "$b")" "- STEP-THREE"
+  n2="$(awk '/^## Previously next[ \t]*$/{f=1;next} /^## /{f=0} f && substr($0,1,2)=="- "{c++} END{print c+0}' "$b")"
+  ah_is "the two displaced steps are kept, not lost" "$n2" "2"
+  if grep -qF -- "- STEP-ONE" "$b"; then ah_ok "the oldest step survives in Previously next"
+  else ah_bad "STEP-ONE was destroyed by a later capture"; fi
+
+  # 4. a human's own prose survives a capture — the whole point of INTEGRATE-never-overwrite.
+  printf '%s\n' '- a dead end nobody should re-walk' >> "$b"
+  AH_NO_GIT=1 cmd_capture "STEP-FOUR" >/dev/null
+  if grep -qF -- "a dead end nobody should re-walk" "$b"; then ah_ok "hand-written prose survives capture"
+  else ah_bad "capture destroyed hand-written content"; fi
+
+  # 5. capture with NO step must not blank the live one (the empty-argument trap).
+  AH_NO_GIT=1 cmd_capture "" >/dev/null
+  ah_is "capture with no argument leaves ## Next intact" "$(awk '/^## Next[ \t]*$/{getline; print; exit}' "$b")" "- STEP-FOUR"
+
+  # 6. CONTEXT — every negative arm. UNKNOWN must never render as a number.
+  out="$(cmd_status 2>&1)"
+  case "$out" in *"context  : UNKNOWN"*) ah_ok "no telemetry ⇒ the literal UNKNOWN (never 0%)" ;;
+                 *) ah_bad "no telemetry did not read UNKNOWN" "$out" ;; esac
+  sid="AHSELFTEST-SID"
+  printf '{"ts":%s,"used_pct":82}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid.json"
+  out="$(cmd_status "$sid" 2>&1)"
+  case "$out" in *"82%"*RECYCLE*) ah_ok "82% reads RECYCLE NOW and names its session" ;;
+                 *) ah_bad "82% did not read RECYCLE" "$out" ;; esac
+  printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid.json"
+  out="$(cmd_status "$sid" 2>&1)"
+  case "$out" in *"12%"*"keep working"*) ah_ok "12% reads keep working" ;;
+                 *) ah_bad "12% did not read keep working" "$out" ;; esac
+  case "$out" in *"session(s) reporting"*|*"0 reporting"*)
+      ah_bad "an explicit session read printed a session COUNT it never took" "$out" ;;
+    *)  ah_ok "an explicit session read prints no count (it counted nothing)" ;; esac
+  printf '{"ts":%s,"used_pct":33}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid-2.json"
+  out="$(cmd_status 2>&1)"
+  case "$out" in *"NEWEST of 2 reporting"*) ah_ok "two live sessions: the scan says WHICH it read and that it guessed" ;;
+                 *) ah_bad "an ambiguous scan did not disclose the ambiguity" "$out" ;; esac
+  rm -f "$PB_TELEMETRY_DIR/$sid-2.json"
+
+  # 7. recycle-due — the predicate that gates a Stop BLOCK. It must be able to say NO.
+  printf '{"ts":%s,"used_pct":82}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid.json"
+  out="$(cmd_recycle_due "$sid")"; rc=$?
+  if [ "$rc" = 0 ] && [ -n "$out" ]; then ah_ok "recycle-due fires at 82% and prints a reason"
+  else ah_bad "recycle-due did not fire at 82%" "rc=$rc out=[$out]"; fi
+  out="$(cmd_recycle_due "$sid")"; rc=$?
+  ah_is "recycle-due LATCHES — it cannot fire twice for one session" "$rc" "1"
+  ah_is "…and says nothing when it does not fire" "$out" ""
+  printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid-low.json"
+  out="$(cmd_recycle_due "$sid-low")"; rc=$?
+  ah_is "NEG: recycle-due is silent at 12%" "$rc" "1"
+  printf '{"ts":1,"used_pct":95}\n' > "$PB_TELEMETRY_DIR/$sid-stale.json"
+  out="$(cmd_recycle_due "$sid-stale")"; rc=$?
+  ah_is "NEG: STALE telemetry at 95% still does not fire" "$rc" "1"
+  printf '{"ts":%s,"used_pct":null}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid-null.json"
+  out="$(cmd_recycle_due "$sid-null")"; rc=$?
+  ah_is "NEG: a null fill is not read as 0 and does not fire" "$rc" "1"
+  out="$(cmd_recycle_due "NO-SUCH-SESSION-ANYWHERE")"; rc=$?
+  ah_is "NEG: an unknown session id is silent" "$rc" "1"
+  out="$(cmd_recycle_due "")"; rc=$?
+  ah_is "NEG: no session id at all is silent" "$rc" "1"
+
+  # 8. THE SUCCESSION ENGINE. Every arm here is about the INVARIANT: nothing irreversible before
+  #    a preflight that can refuse, and no retire before a proof.
+  rm -f "$b"
+  out="$(cmd_fire 2>&1)"; rc=$?
+  ah_is "NEG: fire with no bridge refuses (rc 2)" "$rc" "2"
+  case "$out" in *"agent-handoff capture"*) ah_ok "…and names the command that fixes it" ;;
+                 *) ah_bad "the refusal did not name the fix" "$out" ;; esac
+  AH_NO_GIT=1 cmd_capture "STEP-FIVE" >/dev/null
+
+  # the flat-JSON state store: written by printf, READ BACK by plutil, and it must survive a
+  # value carrying the metacharacters a real brief path or goal condition will contain.
+  sd="$T/sd"
+  ah_state_put "$sd" phase LAUNCHED
+  ah_state_put "$sd" goal 'land it and print "git log -1" \ now'
+  ah_is "state: a key reads back"            "$(ah_state_get "$sd" phase)" "LAUNCHED"
+  ah_is "state: a quoted/backslashed value round-trips" \
+        "$(ah_state_get "$sd" goal)" 'land it and print "git log -1" \ now'
+  ah_state_put "$sd" phase ENGAGED
+  ah_is "state: overwriting a key keeps ONE copy" "$(grep -c '"phase"' "$sd/state.json")" "1"
+  ah_is "state: the other key survived the rewrite" \
+        "$(ah_state_get "$sd" goal)" 'land it and print "git log -1" \ now'
+  "$PB_PLUTIL" -convert json -o /dev/null -- "$sd/state.json" >/dev/null 2>&1 \
+    && ah_ok "state: the file is valid JSON" || ah_bad "state: the file is not valid JSON"
+
+  # the run lock — one driver per id, and a DEAD holder is stolen rather than obeyed forever.
+  ah_lock_take "$sd" run >/dev/null && ah_ok "lock: taken" || ah_bad "lock: could not take"
+  out="$(ah_lock_take "$sd" run)"; rc=$?
+  ah_is "NEG: a second driver is refused while we hold it" "$rc" "1"
+  ah_is "…and the refusal names the live holder" "$out" "$$"
+  printf '999999' > "$sd/run.lock.d/pid"
+  ah_lock_take "$sd" run >/dev/null && ah_ok "lock: a DEAD holder's lock is stolen" \
+                                     || ah_bad "lock: a dead holder blocked us forever"
+  ah_lock_free "$sd" run
+
+  # the successor's prompt: both tokens present, and it can never begin with a slash (a leading
+  # '/' makes the positional argument a SLASH COMMAND, which would swallow the whole brief).
+  printf 'line one\nline two\n' > "$T/bf.md"
+  ah_write_prompt "$T" "$T/bf.md" MRK NCE "$T/ackf"
+  case "$(head -c 1 "$T/prompt.txt")" in '/') ah_bad "the prompt begins with a slash" ;;
+                                          *) ah_ok "the prompt can never begin with a slash" ;; esac
+  grep -qF 'MRK' "$T/prompt.txt" && ah_ok "the prompt carries the marker" || ah_bad "no marker in the prompt"
+  grep -qF 'NCE' "$T/prompt.txt" && ah_ok "the prompt carries the nonce" || ah_bad "no nonce in the prompt"
+  grep -qF 'line two' "$T/prompt.txt" && ah_ok "the prompt carries the brief" || ah_bad "the brief is missing"
+
+  # the generated launcher: it must PARSE, scrub the environment, and read the prompt from a FILE.
+  ah_write_launcher "$T" "$T/cfg" "$T" /bin/echo claude SIDX 0
+  /bin/bash -n "$T/launch.sh" 2>/dev/null && ah_ok "launcher: parses" || ah_bad "launcher: does not parse"
+  grep -q 'env -i' "$T/launch.sh" && ah_ok "launcher: scrubs the environment (env -i)" \
+                                  || ah_bad "launcher: no env scrub — a successor would inherit CLAUDE_CODE_CHILD_SESSION"
+  grep -q 'read -r -d "" AH_PROMPT' "$T/launch.sh" && ah_ok "launcher: reads the prompt from a FILE" \
+                                  || ah_bad "launcher: the prompt does not come from a file"
+  grep -q -- '--session-id' "$T/launch.sh" && ah_ok "launcher: names the session id (no slug arithmetic in the trust path)" \
+                                  || ah_bad "launcher: no --session-id"
+  ah_write_launcher "$T" "$T/cfg" "$T" /bin/echo claude SIDX 1
+  grep -q -- '--resume SIDX' "$T/launch.sh" && ah_ok "launcher: a seeded goal launches with --resume" \
+                                  || ah_bad "launcher: a seeded goal did not use --resume"
+  out="$( AH_PASS_ENV=CLAUDE_CODE_SESSION_ID ah_write_launcher "$T" "$T/cfg" "$T" /bin/echo claude SIDX 0 2>&1 )"; rc=$?
+  ah_is "NEG: AH_PASS_ENV refuses to forward a CLAUDE_CODE_* variable" "$rc" "2"
+
+  # the launcher actually RUNS and delivers the prompt — the whole reason the brief never travels
+  # as keystrokes. /bin/echo stands in for the agent.
+  printf 'quotes "d" and '"'"'s'"'"', $VAR, `tick`, a tab\tand — ✓ 日本語\nsecond line\n' > "$T/bf2.md"
+  ah_write_prompt "$T" "$T/bf2.md" MRK2 NCE2 ""
+  ah_write_launcher "$T" "$T/cfg" "$T" /bin/echo claude SIDX 0
+  "$T/launch.sh" > "$T/delivered" 2>/dev/null
+  n1="$(wc -c < "$T/prompt.txt" | tr -d ' ')"; n2="$(wc -c < "$T/delivered" | tr -d ' ')"
+  if grep -qF '日本語' "$T/delivered" && grep -qF 'NCE2' "$T/delivered" && grep -qF '`tick`' "$T/delivered"; then
+    ah_ok "launcher: the prompt arrives with unicode and metacharacters intact ($n1 -> $n2 bytes)"
+  else ah_bad "launcher: the prompt did not survive transit" "$n1 -> $n2"; fi
+
+  cd / 2>/dev/null || true
+  rm -rf "$T" 2>/dev/null
+  printf '\n%s/%s cases passed.\n' "$((ah__t - ah__f))" "$ah__t"
+  [ "$ah__f" = 0 ] && return 0
+  return 1
+}
+
+cmd_usage() {
+  ah_err 'usage: agent-handoff capture "<next step>" | status [session-id] | path'
+  ah_err '                     | fire [--goal "<condition>"] [--cwd D] [--config-dir D]'
+  ah_err '                            [--driver tmux|kitty|iterm2] [--agent claude|copilot]'
+  ah_err '                            [--budget S] [--bar SPEAKING] [--no-retire] [--dry-run]'
+  ah_err '                     | resume [<id>] | doctor | recycle-due <session-id> | selftest'
+  return 2
+}
+
+case "${1:-status}" in
+  capture)     shift; cmd_capture "${1:-}" ;;
+  status)      shift 2>/dev/null || true; cmd_status "${1:-}" ;;
+  path)        ah_bridge; printf '\n' ;;
+  fire)        shift; cmd_fire "$@" ;;
+  resume)      shift; cmd_resume "${1:-}" ;;
+  doctor)      cmd_doctor ;;
+  __reap)      shift; cmd_reap "${1:-}" ;;
+  recycle-due) shift; cmd_recycle_due "${1:-}" ;;
+  selftest)    cmd_selftest ;;
+  --version)   ah_say "agent-handoff $AH_VERSION" ;;
+  -h|--help)   cmd_usage; exit 0 ;;
+  *)           cmd_usage ;;
+esac
