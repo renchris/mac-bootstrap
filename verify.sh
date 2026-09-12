@@ -17,7 +17,7 @@
 # and this file adds the two things a wrapper can add honestly:
 #
 #   1. A POSITIVE CONTROL ON THE INSTRUMENT, run BEFORE the verdict. `bootstrap-lib.sh --selftest`
-#      exercises the shared library's own fixtures — including the C1 pre-fix arm, which asserts
+#      exercises the shared library's own fixtures — including the empty-root-dict pre-fix arm, which asserts
 #      that `plutil -replace` against an empty root dict still FAILS. If the instrument cannot
 #      reproduce the defect it repairs, a green verdict from it means nothing, so this exits 30
 #      (precondition) rather than reporting a machine state it is not entitled to report.

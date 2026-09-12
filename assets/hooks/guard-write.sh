@@ -195,7 +195,7 @@ hook_selftest() {
   T="$(mktemp -d -t pbgw)" || return 30
   mkdir -p "$T/state"
   printf 'line1\nline2\n' > "$T/plan.md"
-  printf 'pb-guard-write selftest · bash %s\n' "${BASH_VERSION:-?}"
+  printf 'guard-write selftest · bash %s\n' "${BASH_VERSION:-?}"
   _ok()  { n=$((n+1)); printf '  ok   %s\n' "$1"; }
   _bad() { n=$((n+1)); bad=$((bad+1)); printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; }
   _fire() {   # _fire <tool_name> <file> → stdout of the hook
@@ -293,7 +293,7 @@ XIN
   # …and a patch that only ADDS a file that does not exist has nothing to destroy.
   before="$(_count)"
   BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" >/dev/null 2>&1 <<'XIN'
-{"tool_name":"Edit","tool_input":"*** Begin Patch\n*** Add File: /nonexistent/pb/nope.md\n+hi\n*** End Patch\n"}
+{"tool_name":"Edit","tool_input":"*** Begin Patch\n*** Add File: /nonexistent/fixture/nope.md\n+hi\n*** End Patch\n"}
 XIN
   after="$(_count)"
   n=$((n+1))

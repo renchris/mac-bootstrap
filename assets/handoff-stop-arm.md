@@ -70,7 +70,7 @@ if [ -x "$AH" ] && [ "$CNT" -lt "$MAX" ] \
    && R_REASON="$("$AH" recycle-due "$SID" 2>/dev/null)" && [ -n "$R_REASON" ]; then
   printf '%s %s' "$SID" "$(( CNT + 1 ))" > "$CNT_F" 2>/dev/null || true
   printf '%s\n' "$RUNG $LEDGER" > "$BOOTSTRAP_STATE_DIR/last-ledger" 2>/dev/null || true
-  R_SYS="⟳ pb-stop [$(( CNT + 1 ))/$MAX]: context past ${BOOTSTRAP_CONTEXT_THRESHOLD_PCT:-70}% — handing off. $RUNG${LEDGER:+ — $LEDGER}"
+  R_SYS="⟳ mac-bootstrap [$(( CNT + 1 ))/$MAX]: context past ${BOOTSTRAP_CONTEXT_THRESHOLD_PCT:-70}% — handing off. $RUNG${LEDGER:+ — $LEDGER}"
   # The reason text CONTAINS DOUBLE QUOTES (it quotes the capture command back at the model), so
   # the no-jq arm must escape rather than interpolate. A Stop hook that emits malformed JSON has
   # its whole chain ignored, silently — and the one message that most needs to survive a missing
@@ -103,26 +103,26 @@ awk 'BEGIN{n=0} /^```bash$/{n++; if(n==2){f=1}; next} /^```$/{f=0} f' assets/han
 
 | # | case | want | got |
 |---|---|---|---|
-| R1 | 82 % fresh, first stop | `decision:"block"`, reason names the fill and the command | ✅ blocked; `⟳ pb-stop [1/3]` |
-| R2 | same session, second stop | **no `decision` key** (the latch) | ✅ `{"systemMessage":"(no block)"}` |
-| R3 | `stop_hook_active:true` | total silence, rc 0 | ✅ |
-| R4 | **NEG** 12 % fill | no block | ✅ |
-| R5 | **NEG** stale telemetry at 95 % | no block | ✅ |
-| R6 | **NEG** `used_pct: null` | no block — a null is not 0 % | ✅ |
-| R7 | **NEG** `agent-handoff` absent | rc 0, no block | ✅ |
-| R8 | **NEG** budget already at 3/3 | no block | ✅ |
-| R9 | no jq, reason contains `"` | still **valid JSON**, quotes intact | ✅ `decision=block`, `"<the one next step>"` survived |
+| **fires** | 82 % fresh, first stop | `decision:"block"`, reason names the fill and the command | ✅ blocked; `⟳ mac-bootstrap [1/3]` |
+| **latches** | same session, second stop | **no `decision` key** (the latch) | ✅ `{"systemMessage":"(no block)"}` |
+| re-entry | `stop_hook_active:true` | total silence, rc 0 | ✅ |
+| NEG low fill | **NEG** 12 % fill | no block | ✅ |
+| NEG stale | **NEG** stale telemetry at 95 % | no block | ✅ |
+| NEG null | **NEG** `used_pct: null` | no block — a null is not 0 % | ✅ |
+| NEG no binary | **NEG** `agent-handoff` absent | rc 0, no block | ✅ |
+| NEG budget spent | **NEG** budget already at 3/3 | no block | ✅ |
+| no jq | no jq, reason contains `"` | still **valid JSON**, quotes intact | ✅ `decision=block`, `"<the one next step>"` survived |
 
-Observed R1 output, verbatim:
+Observed **fires** output, verbatim:
 
 ```
 reason:  Context is at 82%, past the 70% line. Persist what this context holds that the disk does not…
-sysmsg:  ⟳ pb-stop [1/3]: context past 70% — handing off. CLEAN — clean, nothing unpushed on main
+sysmsg:  ⟳ mac-bootstrap [1/3]: context past 70% — handing off. CLEAN — clean, nothing unpushed on main
 ```
 
 Six of the nine are negative arms on purpose. The refuted design in this corpus failed precisely
 because its detector could only ever say *yes*; an arm that forces a turn has to be able to say no
-about each of its inputs separately, and R4–R8 are those inputs one at a time.
+about each of its inputs separately, and the five NEG rows are those inputs one at a time.
 
 ## What this arm still cannot do
 

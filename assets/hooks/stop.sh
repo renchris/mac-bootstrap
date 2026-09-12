@@ -12,7 +12,7 @@
 # `git status` calls per turn boundary, and only one of them can usefully block — so their order
 # would be load-bearing and undocumented. Merged, the order is visible in this file.
 #
-# ═══ C3 — THE DEFECT THIS FILE EXISTS TO NOT REPEAT ══════════════════════════════════════════
+# ═══ THE CONTEXT ADVISORY — THE DEFECT THIS FILE EXISTS TO NOT REPEAT ══════════════════════════════════════════
 # The researcher's version rendered arm B INSIDE `if [ -n "$LEDGER" ]`, and LEDGER was set only
 # inside `if [ -n "$ROOT" ]`. So the fill was computed and then SILENTLY DISCARDED whenever the
 # cwd was not a git repo, or git was not on PATH. Both are the target machine's day-one state:
@@ -61,7 +61,7 @@ set -u
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || HOOK_DIR="."
 # ABSOLUTE, because the selftest re-executes this file from other directories: a relative $0
 # stops resolving the moment anything cds, and `bash <missing file>` prints to stderr and yields
-# an EMPTY stdout — which a fixture asserting silence reads as a PASS. (Measured here: C3/4 and
+# an EMPTY stdout — which a fixture asserting silence reads as a PASS. (Measured here: advisory/4 and
 # B1 both went green while the subject had not run at all.)
 HOOK_SELF="$HOOK_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
 # shellcheck source=bootstrap-lib.sh disable=SC1091
@@ -139,7 +139,7 @@ hook_block() {
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # SHIPPED FIXTURES —  bash stop.sh --selftest
-# The C3 four-case matrix is the point: a fix with no negative control is a claim. Case 2 and 4
+# The four-case advisory matrix is the point: a fix with no negative control is a claim. Case 2 and 4
 # (12% SILENT) are what make cases 1, 3 and 5 mean something.
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 hook_selftest() {
@@ -147,7 +147,7 @@ hook_selftest() {
   T="$(mktemp -d -t pbstop)" || return 30
   mkdir -p "$T/tel" "$T/state" "$T/bare"
   sid="STOPTEST-SID"
-  printf 'pb-stop selftest · bash %s\n' "${BASH_VERSION:-?}"
+  printf 'stop selftest · bash %s\n' "${BASH_VERSION:-?}"
 
   _tel() {   # _tel <pct>  — fresh telemetry at that fill
     printf '{"ts":%s,"session_id":"%s","window":1000000,"used_pct":%s}\n' \
@@ -178,11 +178,11 @@ XIN
     esac
   }
 
-  # ── C3/0 — THE PRE-FIX (RED) ARM, so the repair stays attributable to a measured defect. ────
+  # ── advisory/0 — THE PRE-FIX (RED) ARM, so the repair stays attributable to a measured defect. ────
   # This is the researcher's render gate, verbatim in shape: `if [ -n "$LEDGER" ]`, where LEDGER
   # is set only inside `if [ -n "$ROOT" ]`. Fed the SAME fresh 82% telemetry in a directory that
   # is not a repo, it must print NOTHING. If this ever speaks, the gate was never the defect and
-  # this file's C3 section is no longer evidence of anything.
+  # this file's advisory section is no longer evidence of anything.
   _tel 82
   out="$( cd "$T/bare" && BOOTSTRAP_TELEMETRY_DIR="$T/tel" /bin/bash -c '
       . "$1/bootstrap-lib.sh" || exit 0
@@ -191,24 +191,24 @@ XIN
       CTX="$(bootstrap_ctx_advisory "$2")"
       if [ -n "$LEDGER" ]; then printf "%s%s\n" "$LEDGER" "$CTX"; fi
     ' _ "$HOOK_DIR" "$sid" 2>/dev/null )"
-  _is "C3/0 PRE-FIX arm is RED: the nested gate swallows an 82% advisory outside a repo" "$out" EMPTY
+  _is "advisory/0 PRE-FIX arm is RED: the nested gate swallows an 82% advisory outside a repo" "$out" EMPTY
 
-  # ── C3, four cases: {12%, 82%} × {git repo, bare dir} ───────────────────────────────────────
+  # ── THE ADVISORY, four cases: {12%, 82%} × {git repo, bare dir} ───────────────────────────────────────
   repo=""
   if command -v git >/dev/null 2>&1 && git init -q "$T/repo" >/dev/null 2>&1; then
     repo="$T/repo"
-    ( cd "$repo" && git config user.email pb@example.invalid && git config user.name pb \
+    ( cd "$repo" && git config user.email fixture@example.invalid && git config user.name fixture \
       && : > keep.txt && git add keep.txt && git commit -qm init ) >/dev/null 2>&1
   fi
   if [ -n "$repo" ]; then
-    _tel 82; out="$(_run "$repo" "")"; _is "C3/1 git repo    @82% SPEAKS"  "$out" "CONTEXT 82%"
-    _tel 12; out="$(_run "$repo" "")"; _isnt "C3/2 git repo    @12% says NOTHING about context" "$out" "CONTEXT"
+    _tel 82; out="$(_run "$repo" "")"; _is "advisory/1 git repo    @82% SPEAKS"  "$out" "CONTEXT 82%"
+    _tel 12; out="$(_run "$repo" "")"; _isnt "advisory/2 git repo    @12% says NOTHING about context" "$out" "CONTEXT"
   else
-    printf '  --   [C3/1,2 skipped: no usable git — which is itself the fresh-Mac state]\n'
+    printf '  --   [advisory/1,2 skipped: no usable git — which is itself the fresh-Mac state]\n'
   fi
-  _tel 82; out="$(_run "$T/bare" "")"; _is "C3/3 bare tmpdir @82% SPEAKS"  "$out" "CONTEXT 82%"
-  _tel 12; out="$(_run "$T/bare" "")"; _is "C3/4 bare tmpdir @12% SILENT"  "$out" EMPTY
-  # ── C3/5-6: THE FRESH-MAC DAY-ONE STATE, reproduced rather than described. /usr/bin/git is an
+  _tel 82; out="$(_run "$T/bare" "")"; _is "advisory/3 bare tmpdir @82% SPEAKS"  "$out" "CONTEXT 82%"
+  _tel 12; out="$(_run "$T/bare" "")"; _is "advisory/4 bare tmpdir @12% SILENT"  "$out" EMPTY
+  # ── advisory/5-6: THE FRESH-MAC DAY-ONE STATE, reproduced rather than described. /usr/bin/git is an
   #    inert xcrun shim until a human installs the Command Line Tools: it exists, it is on PATH,
   #    and every invocation fails. So arm A is dead and arm B must still speak.
   mkdir -p "$T/shim"
@@ -223,9 +223,9 @@ XIN
     )
   }
   _tel 82; out="$(_shimrun "${repo:-$T/bare}")"
-  _is "C3/5 git present but INERT (xcrun shim) @82% SPEAKS" "$out" "CONTEXT 82%"
+  _is "advisory/5 git present but INERT (xcrun shim) @82% SPEAKS" "$out" "CONTEXT 82%"
   _tel 12; out="$(_shimrun "${repo:-$T/bare}")"
-  _isnt "C3/6 git present but INERT (xcrun shim) @12% says NOTHING about context" "$out" "CONTEXT"
+  _isnt "advisory/6 git present but INERT (xcrun shim) @12% says NOTHING about context" "$out" "CONTEXT"
 
   # ── B1: the harness's re-entrancy flag ⇒ total silence, whatever else is true ───────────────
   _tel 82
@@ -252,7 +252,7 @@ XIN
 {"session_id":"$sid","cwd":"$T/bare","stop_hook_active":false}
 XIN
        )"
-  _is "C3  the advisory still SPEAKS with no jq (plutil arm)" "$out" "CONTEXT 82%"
+  _is "advisory: still SPEAKS with no jq (plutil arm)" "$out" "CONTEXT 82%"
 
   # ── B2: arm C blocks at most BOOTSTRAP_STOP_MAX times, and abstains on someone else's file ────────
   if [ -n "$repo" ] && bootstrap_have_jq; then
@@ -344,7 +344,7 @@ if [ -n "$ROOT" ]; then
   fi
 fi
 
-# ── ARM B: the context advisory. UNCONDITIONAL, AND IT READS NO GIT. (C3) ────────────────────
+# ── ARM B: THE CONTEXT ADVISORY. UNCONDITIONAL, AND IT READS NO GIT. ────────────────────
 CTX="$(bootstrap_ctx_advisory "$SID")"
 
 # ── ARM C: bounded auto-continue on THIS SESSION's own uncommitted work ───────────────────────
@@ -368,7 +368,7 @@ hook_mine_dirty() {
   # transcript records the path as the tool was GIVEN it — logically. On macOS /tmp is a symlink
   # to /private/tmp and /Users can appear under /System/Volumes/Data, so a literal string compare
   # matches NOTHING and the arm reports "no writes of mine" over a tree full of them. (Measured:
-  # ROOT=/private/tmp/pb-repo vs transcript /tmp/pb-repo/mine.txt — zero hits.) Fix: match the
+  # ROOT=/private/tmp/fixture-repo vs transcript /tmp/fixture-repo/mine.txt — zero hits.) Fix: match the
   # repo-relative SUFFIX, then PROVE the prefix is this repo by resolving it with `cd -P`. The
   # suffix alone would false-match another checkout's identically-named file.
   # RESIDUAL, stated rather than papered over: a RENAME renders as `R  old -> new`; we take the
@@ -417,12 +417,12 @@ if [ -n "$MINE" ] && [ "$CNT" -lt "$MAX" ]; then
   printf '%s %s' "$SID" "$((CNT + 1))" > "$CNT_F" 2>/dev/null || true
   hook_block "$AGENT" \
     "Files you edited this turn are still uncommitted:$MINE. Run the project's gate, commit with explicit paths, then push. If this is deliberately parked, or is not your work, say so in your closing message and stop — this nudge fires at most $MAX times per session." \
-    "pb-stop [$((CNT + 1))/$MAX]: $RUNG — $LEDGER${CTX:+ · $CTX}"
+    "mac-bootstrap [$((CNT + 1))/$MAX]: $RUNG — $LEDGER${CTX:+ · $CTX}"
   exit 0
 fi
 
 # ── no block: render whatever there is to say, and NEVER extend the turn ─────────────────────
-# The render condition is `LEDGER or CTX`, never `LEDGER` alone — that gate is C3, and it is the
+# The render condition is `LEDGER or CTX`, never `LEDGER` alone — that gate is the advisory's, and it is the
 # whole reason the advisory reaches a session standing in a directory that is not a repo.
 LINE=""
 [ -n "$LEDGER" ] && LINE="$RUNG — $LEDGER"

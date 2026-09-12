@@ -153,7 +153,7 @@ fi
 . "$BOOTSTRAP_LIB" || { printf 'bootstrap: bootstrap-lib.sh did not load\n' >&2; exit 30; }
 export BOOTSTRAP_LIB="$BOOTSTRAP_LIB"
 
-# ── THE ENVIRONMENT CONTRACT (C10). A sourced module cannot take flags, so parameters arrive
+# ── THE ENVIRONMENT CONTRACT (CONTRACT.md §5). A sourced module cannot take flags, so parameters arrive
 #    as exported variables. These names are the contract; CONTRACT.md is their documentation.
 export BOOTSTRAP_MODE="$BOOTSTRAP_MODE"
 export BOOTSTRAP_MODEL="$BOOTSTRAP_MODEL"
@@ -572,7 +572,7 @@ driver_run_module() {
     return 0
   done
 
-  # D3: gate_ is evaluated BEFORE any early return, so a gated module is always reported —
+  # gate-before-verify: gate_ is evaluated BEFORE any early return, so a gated module is always reported —
   # whatever mode we are in and whatever verify_ says next.
   driver_call "$mf" "$m" gate >/dev/null 2>&1 && gated=1
 
@@ -645,7 +645,7 @@ driver_run_module() {
 }
 
 # ── the aggregate verdict ────────────────────────────────────────────────────────────────────
-# C8 — THE FOUR MEASURED FALSE SIGNALS THIS FUNCTION EXISTS TO KILL. Each was reproduced on this
+# THE FOUR MEASURED FALSE SIGNALS THIS FUNCTION EXISTS TO KILL. Each was reproduced on this
 # machine against the version that shipped before it, and each one now has a fixture below.
 #
 #   1. `--only handoff` on a FRESH Mac exited 0 and printed "every module satisfied", with
@@ -666,7 +666,7 @@ driver_run_module() {
 # one never escapes it.
 driver_missing_rows() {
   local m out="" scope
-  # Scored over the SELECTION, never the manifest. C8's false green was "--only left 7 of 8
+  # Scored over the SELECTION, never the manifest. The false green was "--only left 7 of 8
   # unevaluated and exit 0 said every module satisfied"; the cure must not become "a deliberate
   # --profile lite can never exit 0", which would make the whole selection feature unreachable.
   # A module the user did not select is not an unevaluated module, it is a declined one — and the
@@ -779,7 +779,7 @@ if [ -n "$BOOTSTRAP_ONLY" ]; then
   done
 fi
 
-# C8 — NAME THE MODULES THIS RUN NEVER JUDGED, so the 30 driver_verdict returns for them carries its
+# NAME THE MODULES THIS RUN NEVER JUDGED, so the 30 driver_verdict returns for them carries its
 # reason. Measured before this existed: `--only handoff` on a fresh Mac printed "exit 0 — every
 # module satisfied" with seven deliverables never evaluated and no statusline on disk at all.
 # bench is excluded because it exits below without ever consulting the verdict.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # bootstrap-lib.sh — the ONLY shared code in mac-bootstrap.
 #
-# Sourced by BOTH the lifecycle hooks (session-start.sh, stop.sh, pb-guard-*.sh) and the
+# Sourced by BOTH the lifecycle hooks (session-start.sh, stop.sh, guard-*.sh) and the
 # installer modules (modules/mN_*.sh) and the driver (bootstrap.sh). One copy, one set of rules.
 #
 # THE FIVE PROPERTIES, each of which cost a measured defect somewhere in this corpus:
@@ -24,7 +24,7 @@
 # itself. The SHA pin on the fetched tree is the only real integrity control. This is
 # defence-in-depth against our own mistakes and is documented as exactly that.
 #
-# Self-test:  bash bootstrap-lib.sh --selftest      (runs the shipped fixtures, including the C1 red arm)
+# Self-test:  bash bootstrap-lib.sh --selftest      (runs the shipped fixtures, including the empty-root-dict red arm)
 
 # ── Seams. Every one has a default; none is required. ────────────────────────────────────────
 BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"
@@ -40,12 +40,12 @@ BOOTSTRAP_PLUTIL=/usr/bin/plutil
 
 # ── bootstrap_warn <text> — stderr + the log. NEVER stdout: a hook's stdout is parsed as JSON. ──────
 bootstrap_warn() {
-  printf 'pb: %s\n' "$*" >&2
+  printf 'mac-bootstrap: %s\n' "$*" >&2
   [ -n "${BOOTSTRAP_LOG:-}" ] && printf '%s bootstrap-lib.sh %s\n' "$(date -u +%FT%TZ)" "$*" >>"$BOOTSTRAP_LOG" 2>/dev/null
   return 0
 }
 
-# ── bootstrap_jq — prints an ABSOLUTE jq path, or returns 1. Absolute first (§C2): a PATH lookup in a
+# ── bootstrap_jq — prints an ABSOLUTE jq path, or returns 1. Absolute first (the one-writer rule): a PATH lookup in a
 #    hook inherits whatever the agent's environment happens to be. BOOTSTRAP_NO_JQ=1 forces the plutil
 #    arm, which is how the no-jq degrade is actually tested rather than asserted. ─────────────
 bootstrap_jq() {
@@ -61,7 +61,7 @@ bootstrap_jq() {
 bootstrap_have_jq() { bootstrap_jq >/dev/null 2>&1; }
 
 # ── bootstrap_json_escape <text> — make text safe inside a JSON string literal. ─────────────────────
-# D4: the receipt was printf'd with no escaping, and one double quote in a gesture string made
+# THE RECEIPT-ESCAPING DEFECT: the receipt was printf'd with no escaping, and one double quote in a gesture string made
 # the file the agent is TOLD to parse unparseable. Backslash must be escaped before quote.
 # Control characters are removed rather than \u-encoded: this text is prose for a human, and a
 # lone control byte in it is never information.
@@ -82,8 +82,8 @@ bootstrap_json_escape() {
 # `{}` passes only because `{}` is also a valid EMPTY OPENSTEP dictionary — which is why a
 # reader who tests -lint on `{}` concludes it works. The delivery spec's "plutil -lint the
 # receipt as the last act of every run" would therefore have been a permanent false red on a
-# perfectly good receipt, and D4's own transcript shows that same error over a receipt whose
-# only fault was an unescaped quote — so D4's CONCLUSION (escape it) is right and its
+# perfectly good receipt, and that defect's own transcript shows that same error over a receipt whose
+# only fault was an unescaped quote — so its CONCLUSION (escape it) is right and its
 # INSTRUMENT was blind. `plutil -convert json -o /dev/null` is the arm that works, two-state:
 #     good.json convert rc=0   ·   bad.json convert rc=1   (jq agrees: rc=0 / rc=5)
 # It does not mutate the file (sha256 identical before and after, measured).
@@ -243,7 +243,7 @@ bootstrap_settings_refuse() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-# bootstrap_settings_merge — THE ONE SETTINGS WRITER (C2). Nothing else in this repo writes a JSON
+# bootstrap_settings_merge — THE ONE SETTINGS WRITER (the one-writer rule). Nothing else in this repo writes a JSON
 # settings file. statusline (statusLine) and hooks (hooks) both come through here, and so does every
 # Copilot file: ~/.copilot/settings.json and ~/.copilot/hooks/00-lifecycle.json.
 #
@@ -258,9 +258,9 @@ bootstrap_settings_refuse() {
 #   BACKED UP   <file>.mac-bootstrap-backup.<utc> once per process.
 #   DEGRADING   jq when present, plutil when not. NEVER returns non-zero merely for no jq.
 #
-# 🚨 C1, and it is the whole reason this function exists. plutil -replace AND -insert BOTH exit 1
+# 🚨 THE EMPTY-ROOT-DICT DEFECT, and it is the whole reason this function exists. plutil -replace AND -insert BOTH exit 1
 #    against an EMPTY ROOT DICT — the fresh-Mac case, and it RECURS whenever uninstall_ removes
-#    the last key (C11 item 2). Measured, macOS 15.7.9:
+#    the last key (CONTRACT.md §7 item 2). Measured, macOS 15.7.9:
 #        $ printf '{}\n' > a.json
 #        $ plutil -replace statusLine -json '{…}' a.json   →  a.json: <unknown error>   rc=1
 #        $ plutil -insert  statusLine -json '{…}' a.json   →  a.json: <unknown error>   rc=1
@@ -317,7 +317,7 @@ bootstrap_settings_merge() {
   fi
 
   if [ -z "$jq" ]; then                                        # ── the plutil arm ──
-    # C1 seed dance: an empty root dict is the one shape plutil refuses to modify.
+    # the seed dance: an empty root dict is the one shape plutil refuses to modify.
     if [ "$(bootstrap_json_norm "$(cat "$tmp" 2>/dev/null)" 2>/dev/null)" = "{}" ]; then
       printf '%s\n' '{"_pbseed":1}' > "$tmp"; seeded=1
     fi
@@ -511,7 +511,7 @@ bootstrap_copilot_hook_wire() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-# CONTEXT FILL — C3. The advisory that makes self-recycle automatic.
+# CONTEXT FILL. The advisory that makes self-recycle automatic.
 #
 # 🚨 These two functions read NO git, NO repo root and NO ledger, and that is the entire point.
 # The shipped Stop hook computed the fill and then rendered it INSIDE `if [ -n "$LEDGER" ]`,
@@ -631,7 +631,7 @@ bootstrap_trunk() {
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # SHIPPED FIXTURES —  bash bootstrap-lib.sh --selftest
 #
-# Not decoration. C1's own correction says: "Add the {} case as a shipped fixture … with the
+# Not decoration. The empty-root-dict correction says: "Add the {} case as a shipped fixture … with the
 # pre-fix arm asserted red — otherwise the repair is unattributed." Case 1 IS that pre-fix arm:
 # it runs the UNREPAIRED command and REQUIRES it to fail. If macOS ever fixes plutil, case 1
 # goes red and tells you the repair is no longer attributable — which is information, not a bug.
@@ -647,18 +647,18 @@ bootstrap_selftest() {
   T="$(mktemp -d -t pbself)" || return 30
   printf 'bootstrap-lib.sh selftest · bash %s · %s %s\n' "${BASH_VERSION:-?}" "$(sw_vers -productVersion 2>/dev/null)" "$(uname -m)"
 
-  # ── 1. C1 PRE-FIX (RED) ARM. The unrepaired command against a literal {}. ──────────────────
+  # ── 1. EMPTY-ROOT-DICT PRE-FIX (RED) ARM. The unrepaired command against a literal {}. ──────────────────
   printf '{}\n' > "$T/c1.json"
   "$BOOTSTRAP_PLUTIL" -replace statusLine -json '{"type":"command","command":"/x.sh"}' "$T/c1.json" >/dev/null 2>&1
   rc=$?
   if [ "$rc" = 0 ]; then
-    bootstrap_bad "C1 pre-fix arm is RED (plutil -replace refuses an empty root dict)" \
+    bootstrap_bad "empty-root-dict pre-fix arm is RED (plutil -replace refuses an empty root dict)" \
            "plutil now ACCEPTS it — the seed dance is no longer attributable to a measured defect."
   else
-    bootstrap_ok "C1 pre-fix arm is RED (plutil -replace on {} exits $rc — the defect the seed dance repairs)"
+    bootstrap_ok "empty-root-dict pre-fix arm is RED (plutil -replace on {} exits $rc — the defect the seed dance repairs)"
   fi
   "$BOOTSTRAP_PLUTIL" -insert statusLine -json '{"a":1}' "$T/c1.json" >/dev/null 2>&1
-  [ $? -ne 0 ] && bootstrap_ok "C1 pre-fix arm: -insert is NOT the fix either" || bootstrap_bad "C1: -insert unexpectedly worked"
+  [ $? -ne 0 ] && bootstrap_ok "empty-root-dict pre-fix arm: -insert is NOT the fix either" || bootstrap_bad "empty-root-dict: -insert unexpectedly worked"
 
   # ── 2-6. run the whole settings block on BOTH engines ─────────────────────────────────────
   for arm in jq nojq; do
@@ -666,11 +666,11 @@ bootstrap_selftest() {
     if [ "$arm" = jq ] && ! bootstrap_have_jq; then printf '  --   [jq arm skipped: no jq on this box]\n'; continue; fi
     BOOTSTRAP_BACKED_UP=""
 
-    # 2. C1 POST-FIX: the same empty root dict, through the one writer.
+    # 2. empty-root-dict POST-FIX: the same empty root dict, through the one writer.
     printf '{}\n' > "$T/s.json"
     bootstrap_settings_merge "$T/s.json" statusLine '{"type":"command","command":"/tmp/sl.sh"}'
-    bootstrap_is "[$arm] C1 green: merge into a literal {} succeeds" "$?" "0"
-    bootstrap_is "[$arm] C1 green: read-back through plutil" "$(bootstrap_settings_get "$T/s.json" statusLine.command raw)" "/tmp/sl.sh"
+    bootstrap_is "[$arm] empty-root-dict green: merge into a literal {} succeeds" "$?" "0"
+    bootstrap_is "[$arm] empty-root-dict green: read-back through plutil" "$(bootstrap_settings_get "$T/s.json" statusLine.command raw)" "/tmp/sl.sh"
     bootstrap_is "[$arm] seed key removed" "$(bootstrap_settings_get "$T/s.json" _pbseed raw 2>/dev/null)" ""
 
     # 3. IDEMPOTENT: the second identical call must not touch the file at all.
@@ -687,30 +687,30 @@ bootstrap_selftest() {
 
     # 5. HOOKS: user's existing hook stays FIRST, ours is appended, and re-wiring is a no-op.
     printf '%s\n' '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/mine/existing.sh"}]}]}}' > "$T/h.json"
-    bootstrap_hook_wire "$T/h.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" Stop "" "/fixture/stop.sh" >/dev/null 2>&1
     bootstrap_is "[$arm] hook: user's hook still first" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.0.command raw)" "/mine/existing.sh"
-    bootstrap_is "[$arm] hook: ours appended into the same matcher group" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.1.command raw)" "/pb/stop.sh"
+    bootstrap_is "[$arm] hook: ours appended into the same matcher group" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.1.command raw)" "/fixture/stop.sh"
     A="$(shasum -a 256 "$T/h.json" | cut -d' ' -f1)"
-    bootstrap_hook_wire "$T/h.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" Stop "" "/fixture/stop.sh" >/dev/null 2>&1
     B="$(shasum -a 256 "$T/h.json" | cut -d' ' -f1)"
     bootstrap_is "[$arm] hook: re-wiring is a no-op" "$A" "$B"
-    bootstrap_hook_wire "$T/h.json" PreToolUse "Write|MultiEdit" "/pb/guard-write.sh" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" PreToolUse "Write|MultiEdit" "/fixture/guard-write.sh" >/dev/null 2>&1
     bootstrap_is "[$arm] hook: a new event is created as an ARRAY, not a dict" "$(bootstrap_settings_type "$T/h.json" hooks.PreToolUse)" "array"
     bootstrap_is "[$arm] hook: new matcher group carries the matcher" "$(bootstrap_settings_get "$T/h.json" hooks.PreToolUse.0.matcher raw)" "Write|MultiEdit"
-    bootstrap_hook_wire "$T/h.json" Stop "OTHER" "/pb/other.sh" >/dev/null 2>&1
-    bootstrap_is "[$arm] hook: a different matcher makes a NEW group" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.1.hooks.0.command raw)" "/pb/other.sh"
-    bootstrap_hook_unwire "$T/h.json" "/pb/" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" Stop "OTHER" "/fixture/other.sh" >/dev/null 2>&1
+    bootstrap_is "[$arm] hook: a different matcher makes a NEW group" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.1.hooks.0.command raw)" "/fixture/other.sh"
+    bootstrap_hook_unwire "$T/h.json" "/fixture/" >/dev/null 2>&1
     bootstrap_is "[$arm] unwire: ours gone" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.1.command raw 2>/dev/null)" ""
     bootstrap_is "[$arm] unwire: the user's survives" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.0.command raw)" "/mine/existing.sh"
 
     # 6. COPILOT: a fresh envelope on a machine with no ~/.copilot at all.
     rm -rf "$T/copilot"
-    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
+    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/fixture/stop.sh" >/dev/null 2>&1
     bootstrap_is "[$arm] copilot: version pinned" "$(bootstrap_settings_get "$T/copilot/hooks/00-lifecycle.json" version raw)" "1"
-    bootstrap_is "[$arm] copilot: bash key, not command" "$(bootstrap_settings_get "$T/copilot/hooks/00-lifecycle.json" hooks.Stop.0.bash raw)" "/pb/stop.sh"
+    bootstrap_is "[$arm] copilot: bash key, not command" "$(bootstrap_settings_get "$T/copilot/hooks/00-lifecycle.json" hooks.Stop.0.bash raw)" "/fixture/stop.sh"
     bootstrap_is "[$arm] copilot: event is an ARRAY" "$(bootstrap_settings_type "$T/copilot/hooks/00-lifecycle.json" hooks.Stop)" "array"
     A="$(shasum -a 256 "$T/copilot/hooks/00-lifecycle.json" | cut -d' ' -f1)"
-    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
+    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/fixture/stop.sh" >/dev/null 2>&1
     B="$(shasum -a 256 "$T/copilot/hooks/00-lifecycle.json" | cut -d' ' -f1)"
     bootstrap_is "[$arm] copilot: re-wiring is a no-op" "$A" "$B"
 
@@ -740,7 +740,7 @@ bootstrap_selftest() {
   done
   unset BOOTSTRAP_NO_JQ
 
-  # ── 9. C3: the context advisory, with NO git anywhere on PATH and cwd not a repo. ──────────
+  # ── 9. THE CONTEXT ADVISORY, with NO git anywhere on PATH and cwd not a repo. ──────────
   mkdir -p "$T/nogit/bin" "$T/notarepo"
   # a PATH holding ONLY what the advisory legitimately needs — and pointedly no git.
   [ -x /bin/date ] && ln -sf /bin/date "$T/nogit/bin/date"
@@ -750,31 +750,31 @@ bootstrap_selftest() {
   printf '{"ts":%s,"session_id":"%s","window":1000000,"used_pct":82,"input_tokens":820000}\n' "$(date +%s)" "$sid" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
   out="$( cd "$T/notarepo" && PATH="$T/nogit/bin" bootstrap_ctx_advisory "$sid" )"
   case "$out" in
-    CONTEXT\ 82%*) bootstrap_ok "C3: 82% advisory FIRES with no git on PATH and cwd not a repo" ;;
-    *)             bootstrap_bad "C3: 82% advisory lost outside a git repo" "got [$out]" ;;
+    CONTEXT\ 82%*) bootstrap_ok "advisory: 82% advisory FIRES with no git on PATH and cwd not a repo" ;;
+    *)             bootstrap_bad "advisory: 82% advisory lost outside a git repo" "got [$out]" ;;
   esac
   printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
   out="$( cd "$T/notarepo" && PATH="$T/nogit/bin" bootstrap_ctx_advisory "$sid" )"
-  bootstrap_is "C3 polarity: 12% stays SILENT" "$out" ""
+  bootstrap_is "advisory polarity: 12% stays SILENT" "$out" ""
   printf '{"ts":1,"used_pct":82}\n' > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
-  bootstrap_is "C3: stale telemetry stays SILENT" "$(bootstrap_ctx_advisory "$sid")" ""
+  bootstrap_is "advisory: stale telemetry stays SILENT" "$(bootstrap_ctx_advisory "$sid")" ""
   printf '{"ts":%s,"used_pct":null}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
-  bootstrap_is "C3: a null used_pct is NOT read as 0%" "$(bootstrap_ctx_advisory "$sid")" ""
+  bootstrap_is "advisory: a null used_pct is NOT read as 0%" "$(bootstrap_ctx_advisory "$sid")" ""
   printf '{"ts":%s,"used_pct":45.7}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
-  bootstrap_is "C3: a FLOAT fill truncates rather than being discarded" "$(bootstrap_ctx_pct "$sid")" "45"
+  bootstrap_is "advisory: a FLOAT fill truncates rather than being discarded" "$(bootstrap_ctx_pct "$sid")" "45"
   rm -f "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
-  bootstrap_is "C3: absent telemetry stays SILENT" "$(bootstrap_ctx_advisory "$sid")" ""
-  bootstrap_is "C3: no session id stays SILENT" "$(bootstrap_ctx_advisory "")" ""
+  bootstrap_is "advisory: absent telemetry stays SILENT" "$(bootstrap_ctx_advisory "$sid")" ""
+  bootstrap_is "advisory: no session id stays SILENT" "$(bootstrap_ctx_advisory "")" ""
 
-  # ── 10. D4: escaping. The exact shape that made the receipt unparseable. ──────────────────
+  # ── 10. RECEIPT ESCAPING. The exact shape that made the receipt unparseable. ──────────────────
   out="$(bootstrap_json_escape 'kitty says "unknown action" and exits 0 \ ok')"
   printf '{"note":"%s"}\n' "$out" > "$T/d4.json"
-  if bootstrap_json_ok "$T/d4.json"; then bootstrap_ok "D4: a quoted+backslashed note still yields valid JSON"
-  else bootstrap_bad "D4: escaping failed" "$(cat "$T/d4.json")"; fi
-  bootstrap_is "D4: the note round-trips through plutil unchanged" \
+  if bootstrap_json_ok "$T/d4.json"; then bootstrap_ok "receipt-escaping: a quoted+backslashed note still yields valid JSON"
+  else bootstrap_bad "receipt-escaping: escaping failed" "$(cat "$T/d4.json")"; fi
+  bootstrap_is "receipt-escaping: the note round-trips through plutil unchanged" \
         "$(bootstrap_settings_get "$T/d4.json" note raw)" 'kitty says "unknown action" and exits 0 \ ok'
   printf '{"note":"he said "hi""}\n' > "$T/d4bad.json"
-  if bootstrap_json_ok "$T/d4bad.json"; then bootstrap_bad "D4 control: the validator passed MALFORMED json"; else bootstrap_ok "D4 control: the validator rejects an unescaped quote"; fi
+  if bootstrap_json_ok "$T/d4bad.json"; then bootstrap_bad "receipt-escaping control: the validator passed MALFORMED json"; else bootstrap_ok "receipt-escaping control: the validator rejects an unescaped quote"; fi
 
   # ── 11. bootstrap_count: exactly one integer, even on empty input. ───────────────────────────────
   bootstrap_is "bootstrap_count on empty stdin prints exactly one 0" "$(printf '' | bootstrap_count)" "0"

@@ -16,7 +16,7 @@
 #
 # ── THE THREE CORRECTIONS THIS MODULE SHIPS. Do not "fix" any of them back. ──────────────────
 #
-# R1  AN EMPTY STRING DOES CLEAR AN INCUMBENT BINDING. The original design displaced
+# EMPTY-STRING-CLEARS  AN EMPTY STRING DOES CLEAR AN INCUMBENT BINDING. The original design displaced
 #     `Show Timestamps` onto Ctrl+Cmd+E because it had measured `""` as inert. That measurement
 #     does not reproduce: writing {Arrange Split Panes Evenly: "@$e", Show Timestamps: ""} in
 #     one dict write and restarting yields the binding live, with Use Selection for Find (E/0),
@@ -25,7 +25,7 @@
 #     chord. verify_ accepts ANY value there except "@$e", so an operator who prefers to keep a
 #     shortcut on Show Timestamps (say "@^e", separately proven to work) is not fought with.
 #
-# R2  THE CAPABILITY PROBE MAY NOT USE `strings`. /usr/bin/strings shares an inode with
+# NO-STRINGS-BINARY  THE CAPABILITY PROBE MAY NOT USE `strings`. /usr/bin/strings shares an inode with
 #     /usr/bin/nm and is the xcode-select SHIM: on a Mac with no Xcode and no Command Line
 #     Tools — i.e. the target — it pops the "install the command line developer tools" GUI
 #     dialog or fails, and a probe that then reports "this iTerm2 has no such menu item" is a
@@ -34,7 +34,7 @@
 #     NEGATIVE arm is re-run inside verify_ on every call, so the instrument must prove it can
 #     still say no before its yes is believed.
 #
-# R3  THE KITTY OPTION IS `equalize_on_window_close`, NOT `equalize_on_close`. kitty 0.48.2's
+# EQUALIZE-ON-WINDOW-CLOSE  THE KITTY OPTION IS `equalize_on_window_close`, NOT `equalize_on_close`. kitty 0.48.2's
 #     own shipped layouts.rst.txt names the wrong one, and kitty accepts the bad spelling with
 #     NO config error while leaving the option off — a silent no-op.
 #
@@ -46,7 +46,7 @@
 #    equalizes. We DETECT and REPORT that; we never remove it. Which of the two meanings owns
 #    Cmd+Shift+E is the operator's call, not a technical one.
 #
-# ── C5, the two holes this module is required to close ───────────────────────────────────────
+# ── THE TWO HOLES this module is required to close ───────────────────────────────────────────
 #   (a) NOTHING INSTALLS A TERMINAL. A genuinely fresh Mac has Terminal.app and nothing else,
 #       so "configured nothing" must NOT exit 0. With neither kitty nor iTerm2 present, gate_
 #       fires and the receipt carries `brew install --cask iterm2`.
@@ -61,7 +61,7 @@
 # too-old iTerm2 blocks the kitty half too. One module holds one state, so the alternative is
 # to configure what we can and say nothing about the rest, and a silent SATISFIED over a
 # terminal we did not touch is the worst outcome available here. The recovery is one command
-# and one re-run. On the target — a fresh Mac — the only reachable gate is C5(a).
+# and one re-run. On the target — a fresh Mac — the only reachable gate is hole (a).
 #
 # ── WRITERS ──────────────────────────────────────────────────────────────────────────────────
 # `bootstrap_settings_merge` is the one writer for JSON settings files; neither file here is one
@@ -137,7 +137,7 @@ pane_equalize_iterm_app() {                                 # prints the app bun
 pane_equalize_iterm_plist() { printf '%s' "$HOME/Library/Preferences/com.googlecode.iterm2.plist"; }
 pane_equalize_iterm_dyndir() { printf '%s' "$HOME/Library/Application Support/iTerm2/DynamicProfiles"; }
 
-# pane_equalize_iterm_capable <app> — does THIS build ship the menu item? R2: base-system grep only.
+# pane_equalize_iterm_capable <app> — does THIS build ship the menu item? NO-STRINGS-BINARY: base-system grep only.
 # The bogus-selector arm runs every time: if a grep for a selector that cannot exist ever
 # SUCCEEDS, the instrument is broken and its yes means nothing.
 pane_equalize_iterm_capable() {
@@ -232,7 +232,7 @@ pane_equalize_iterm_install() {
   "$PANE_EQUALIZE_PLISTBUDDY" -c "Add :NSUserKeyEquivalents dict" "$p" >/dev/null 2>&1   # rc 1 if it exists
   pane_equalize_plist_set "$p" "$PANE_EQUALIZE_ITERM_ARRANGE" "$PANE_EQUALIZE_KEY_EQUIVALENTS" || {
     bootstrap_warn "pane_equalize: could not write NSUserKeyEquivalents:$PANE_EQUALIZE_ITERM_ARRANGE"; return 1; }
-  # R1: "" vacates the chord. Only write it if the incumbent still holds Cmd+Shift+E — an
+  # EMPTY-STRING-CLEARS: "" vacates the chord. Only write it if the incumbent still holds Cmd+Shift+E — an
   # operator who moved it somewhere else is left alone.
   local cur rc
   cur="$(bootstrap_settings_get "$p" "NSUserKeyEquivalents.$PANE_EQUALIZE_ITERM_TIMESTAMPS" raw)"; rc=$?
@@ -374,7 +374,7 @@ pane_equalize_kitty_probe() {                               # prints the KEY=VAL
   printf '%s' "$out"
 }
 
-# R3: `equalize_on_window_close`, which is what kitty implements. `equalize_on_close` — the
+# EQUALIZE-ON-WINDOW-CLOSE: `equalize_on_window_close`, which is what kitty implements. `equalize_on_close` — the
 # spelling in kitty's own shipped docs — parses with no error and leaves the option OFF.
 pane_equalize_kitty_layout_line() {
   printf 'enabled_layouts splits:equalize_on_window_close=true%s' \
@@ -541,7 +541,7 @@ verify_pane_equalize() {
     pane_equalize_kitty_verify || return 1
     configured=1
   fi
-  [ "$configured" = 1 ] || return 1               # C5(a): configuring nothing is not success
+  [ "$configured" = 1 ] || return 1               # hole (a): configuring nothing is not success
   return 0
 }
 

@@ -15,7 +15,7 @@ and leaves you about four runs and roughly an hour, most of it waiting on Apple.
 
 ## 1. Clear the gates no script may pass for you
 
-`lite` — the default — needs exactly one: **G12′**. An out-of-the-box Mac has only Terminal.app,
+`lite` — the default — needs exactly one: **`terminal-emulator`**. An out-of-the-box Mac has only Terminal.app,
 which has no equalize action, so `pane_equalize` has nothing to bind ⌘⇧E in; it records the gesture and
 the run exits `10` until a terminal emulator exists. Every other row below is `standard` or `full`.
 The driver detects and records each rather than attempting it, so doing them first only saves you a
@@ -32,15 +32,18 @@ exits `0` with the status line, the instructions file and the lifecycle hooks al
 Homebrew, no sudo, no gesture of any kind. Install a terminal emulator whenever you like and
 re-run plain `bash bootstrap.sh` to pick up ⌘⇧E.
 
+Ordered by dependency: Homebrew installs the two below it, and nothing else here depends on
+anything else here.
+
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
-| **G0** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | the VoiceInk build, the local model, the screenshot pipeline — and `node`, therefore Copilot itself |
-| **G0b** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the CLT, all three probed | `brew install cmake` | the VoiceInk build; whisper.cpp will not build |
-| **G0c** | **tmux** — macOS ships none. Without it the drivers fall back to `direct` mode, where the successor dies with the terminal app | `brew install tmux` | 2c's fault tolerance (`agent-handoff doctor` names it) |
-| **G1** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree** | the VoiceInk build, and git everywhere — `/usr/bin/git` is an `xcrun` shim until these exist |
-| **G12′** | **A terminal emulator** — a fresh Mac has Terminal.app and nothing else, so pane-equalize has nothing to bind | `brew install --cask iterm2` (or kitty) | ⌘⇧E pane equalize |
-| **G2** | **Agent installed and logged in.** Copilot is four gestures deep — macOS ships no `node` | Claude Code: `claude` → `/login` → browser OAuth. Copilot: `brew install node` → `npm i -g @github/copilot` → `copilot` → device flow (`gh auth login` also satisfies the last step) | everything on the agent path |
-| **G2′** | ⛔ **A decision, not a gesture: has this Mac a Copilot seat?** Unanswerable from a shell | Only you know. If not, `COPILOT_PROVIDER_BASE_URL` documents *"GitHub authentication is not required"* — an unentitled Mac can still run `copilot` against local Ollama | the Copilot half of every row |
+| **`homebrew`** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | the VoiceInk build, the local model, the screenshot pipeline — and `node`, therefore Copilot itself |
+| **`cmake`** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the CLT, all three probed | `brew install cmake` | the VoiceInk build; whisper.cpp will not build |
+| **`tmux`** | **tmux** — macOS ships none. Without it the drivers fall back to `direct` mode, where the successor dies with the terminal app | `brew install tmux` | `handoff`'s fault tolerance (`agent-handoff doctor` names it) |
+| **`xcode-command-line-tools`** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree** | the VoiceInk build, and git everywhere — `/usr/bin/git` is an `xcrun` shim until these exist |
+| **`terminal-emulator`** | **A terminal emulator** — a fresh Mac has Terminal.app and nothing else, so pane-equalize has nothing to bind | `brew install --cask iterm2` (or kitty) | ⌘⇧E pane equalize |
+| **`agent-logged-in`** | **Agent installed and logged in.** Copilot is four gestures deep — macOS ships no `node` | Claude Code: `claude` → `/login` → browser OAuth. Copilot: `brew install node` → `npm i -g @github/copilot` → `copilot` → device flow (`gh auth login` also satisfies the last step) | everything on the agent path |
+| **`copilot-seat`** | ⛔ **A decision, not a gesture: has this Mac a Copilot seat?** Unanswerable from a shell | Only you know. If not, `COPILOT_PROVIDER_BASE_URL` documents *"GitHub authentication is not required"* — an unentitled Mac can still run `copilot` against local Ollama | the Copilot half of every row |
 
 One question first: clean install, or Migration Assistant? Migration carries existing TCC grants,
 agent config and app secrets across, so the two verify different things — and on a migrated Mac,
@@ -72,7 +75,7 @@ nothing of you and leaves nothing to clean up.
 
 | Profile | You get | It costs |
 |---|---|---|
-| **lite** — the default | status line · instructions file · lifecycle hooks · ⌘⇧E pane equalize | config files only. No Homebrew, no permissions, no Apple ID, no network beyond the fetch — it asks nothing of you *once a terminal emulator is installed*, and records G12′ until one is |
+| **lite** — the default | status line · instructions file · lifecycle hooks · ⌘⇧E pane equalize | config files only. No Homebrew, no permissions, no Apple ID, no network beyond the fetch — it asks nothing of you *once a terminal emulator is installed*, and records `terminal-emulator` until one is |
 | **standard** | + `/handoff` self-recycle · a local speech-rewrite model | Homebrew, tmux, a ~5 GB model download |
 | **full** | + the VoiceInk build · the screenshot pipeline | Xcode ~9 GB and an Apple ID, plus two permission toggles only you can grant |
 
@@ -166,25 +169,28 @@ lets you re-read the exact bytes afterwards.
 `$HOME/.mac-bootstrap/receipt.json` carries every row below with its exact command; the driver
 detected each and attempted none.
 
+Ordered the way the run surfaces them: the VoiceInk build's own chain first, then the
+permission toggles, then the two things only your eyes can settle.
+
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
-| **G3** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | the VoiceInk build |
-| **G4** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | the VoiceInk build |
-| **G4′** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/voiceink-signing-identity.sh` — written for you at the moment this row is recorded | the VoiceInk build |
-| **G5** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | the VoiceInk build |
-| **G6** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | the screenshot pipeline |
-| **G7** | **Accessibility for Hammerspoon** — irreducible: `tccutil` only *resets*, and TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |
-| **G8** | Screen Recording — believed unnecessary, never tested without it | Only if the thumbnail or copy fails after G7: Privacy & Security → **Screen Recording** → enable Hammerspoon → **restart it** | deliverable 5, maybe |
-| **G9** | VoiceInk Microphone + Accessibility | Click **OK** on the Microphone prompt. Then Privacy & Security → Accessibility → **+** → `~/Applications/VoiceInk.app` → toggle on | deliverable 4 |
-| **G10** | Transcription model, ~1.5 GB, in-app, no CLI path | VoiceInk → AI Models → download **parakeet-unified-0.6b** (English, ANE-resident, self-punctuating) or `ggml-large-v3-turbo` | deliverable 4 |
-| **G11** | **Selecting the Ollama provider inside VoiceInk** — GUI-only. A `defaults write` is not sufficient and can be wrong: the provider resolves **per mode**, and the fallback takes the first connected one in declaration order, where a cloud provider sits 10 places ahead of Ollama | VoiceInk → Settings → AI Models → **Ollama → Connect** → pick `voiceink-rewrite`. If any cloud key is still in the keychain, **also** pin Ollama on the active mode: Settings → Modes → *your mode* → AI Provider | deliverable 4's whole point |
-| **G12** | Relaunch iTerm2 — `NSUserKeyEquivalents` takes effect at the next launch | Quit and reopen iTerm2, split twice, drag a divider, press ⌘⇧E | deliverable 3 |
-| **G13** | **Two observations no script can make**, both on Copilot | (a) look at the status line for one second — does a percentage appear? (b) take a ⌘⇧4, then press **Ctrl+V**, not ⌘V, in the agent — does an image attach? | the two UNPROVEN rows below |
+| **`xcode`** | Xcode itself, ~9 GB | App Store → Xcode → **Get** | the VoiceInk build |
+| **`xcode-licence`** | Xcode licence + developer dir | `sudo xcodebuild -license accept`, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` | the VoiceInk build |
+| **`code-signing-identity`** | **A code-signing identity** — a fresh Mac has none. An ad-hoc signature is silently revoked on every rebuild, taking Microphone and Accessibility with it, so the driver refuses to build without one | `bash ~/.mac-bootstrap/voiceink-signing-identity.sh` — written for you at the moment this row is recorded | the VoiceInk build |
+| **`keychain-trust`** | Keychain trust dialog — **may not appear** | If it does, type your login password. Re-running after a cancel is safe | the VoiceInk build |
+| **`gatekeeper-hammerspoon`** | Gatekeeper first launch of Hammerspoon | System Settings → Privacy & Security → scroll to Security → **Open Anyway** → authenticate | the screenshot pipeline |
+| **`accessibility-hammerspoon`** | **Accessibility for Hammerspoon** — irreducible: `tccutil` only *resets*, and TCC writes are SIP-protected | System Settings → Privacy & Security → **Accessibility** → toggle **Hammerspoon** on. If absent: **+** → `/Applications/Hammerspoon.app` → Open | deliverable 5 entirely |
+| **`screen-recording`** | Screen Recording — believed unnecessary, never tested without it | Only if the thumbnail or copy fails after `accessibility-hammerspoon`: Privacy & Security → **Screen Recording** → enable Hammerspoon → **restart it** | deliverable 5, maybe |
+| **`voiceink-permissions`** | VoiceInk Microphone + Accessibility | Click **OK** on the Microphone prompt. Then Privacy & Security → Accessibility → **+** → `~/Applications/VoiceInk.app` → toggle on | deliverable 4 |
+| **`transcription-model`** | Transcription model, ~1.5 GB, in-app, no CLI path | VoiceInk → AI Models → download **parakeet-unified-0.6b** (English, ANE-resident, self-punctuating) or `ggml-large-v3-turbo` | deliverable 4 |
+| **`voiceink-ollama-provider`** | **Selecting the Ollama provider inside VoiceInk** — GUI-only. A `defaults write` is not sufficient and can be wrong: the provider resolves **per mode**, and the fallback takes the first connected one in declaration order, where a cloud provider sits 10 places ahead of Ollama | VoiceInk → Settings → AI Models → **Ollama → Connect** → pick `voiceink-rewrite`. If any cloud key is still in the keychain, **also** pin Ollama on the active mode: Settings → Modes → *your mode* → AI Provider | deliverable 4's whole point |
+| **`relaunch-iterm2`** | Relaunch iTerm2 — `NSUserKeyEquivalents` takes effect at the next launch | Quit and reopen iTerm2, split twice, drag a divider, press ⌘⇧E | deliverable 3 |
+| **`look-and-paste`** | **Two observations no script can make**, both on Copilot | (a) look at the status line for one second — does a percentage appear? (b) take a ⌘⇧4, then press **Ctrl+V**, not ⌘V, in the agent — does an image attach? | the two UNPROVEN rows below |
 
 ## What you get, and the three places Copilot differs
 
 All five work on Claude Code. On Copilot one is degraded and two are unproven — and both unproven
-ones are G13, one second of looking each.
+ones are `look-and-paste`, one second of looking each.
 
 | # | Deliverable | Claude Code | Copilot 1.0.83 | Notes |
 |---|---|---|---|---|
@@ -193,7 +199,7 @@ ones are G13, one second of looking each.
 | **2b** | agent lifecycle hooks | **DELIVERED** | **DELIVERED** | Identical scripts, two wrapper files: Copilot accepts Claude Code's PascalCase event names as a documented compatibility surface. Its `PreToolUse` fails **closed**, so every exit path is an explicit `0`. |
 | **2c** | self-recycle via `/handoff` | **DELIVERED** | **DEGRADED** | The *actuator* is identical and measured on both; the *typed gesture* is not. Copilot has no `/name` registration at all, so it is `/handoff` here and `copilot --agent handoff` there, and only the frontmatter description reaches Copilot's context. |
 | **3** | ⌘⇧E evens out split panes | **DELIVERED** | **DELIVERED** | Terminal-level, no agent involved. kitty gets `equalize_on_window_close` — its own docs name the wrong option, and the wrong spelling is a silent no-op. iTerm2 gets an undocumented native menu item via `NSUserKeyEquivalents`: no Python API, no Hammerspoon, no Accessibility grant. |
-| **4** | local VoiceInk build + rewrite model | **DELIVERED — gated** | same | Agent-independent; gated on Xcode, `cmake`, a codesigning identity and TCC prompts. Fully scriptable **except** G11 — which is the point, because a surviving cloud key otherwise wins the provider race silently. |
+| **4** | local VoiceInk build + rewrite model | **DELIVERED — gated** | same | Agent-independent; gated on Xcode, `cmake`, a codesigning identity and TCC prompts. Fully scriptable **except** `voiceink-ollama-provider` — which is the point, because a surviving cloud key otherwise wins the provider race silently. |
 | **5** | ⌘⇧4 → thumbnail → clipboard → paste | **DELIVERED** | **UNPROVEN** | The ⌘V→⌃V eventtap is required in every design: an image-only clipboard has zero text flavour, so ⌘V is a silent no-op in kitty and iTerm2 alike. On Copilot two dated primary sources point opposite ways and nobody ran the path. |
 
 The design predicted a further 2c degradation — one human paste per recycle — and the oracle refuted

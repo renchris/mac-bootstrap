@@ -44,7 +44,7 @@
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # THE REFUTATIONS THIS FILE CARRIES (the adversarial review wins over the original text)
 #
-# R0  "upstream `make local` + LOCAL_CODESIGN_IDENTITY signs everything" was NEVER EXECUTED by
+# PRIMARY-BUILD  "upstream `make local` + LOCAL_CODESIGN_IDENTITY signs everything" was NEVER EXECUTED by
 #     anyone — every signing measurement in the research used bare `codesign --force --sign`,
 #     which is a different code path, and the only local build that has ever worked on the
 #     source machine deliberately sets CODE_SIGNING_ALLOWED=NO and re-signs inside-out by hand.
@@ -52,26 +52,26 @@
 #     if the designated requirement of the built app does not name our leaf, voiceink_resign_inside_out
 #     runs; if the build itself failed, voiceink_build_unsigned rebuilds with CODE_SIGNING_ALLOWED=NO
 #     first. The DR check decides which branch won, and it decides it from the artifact.
-# R1  Sparkle. `SUEnableAutomaticChecks` is already <false/> at v2.13 and the scheduler-disabling
+# SPARKLE  Sparkle. `SUEnableAutomaticChecks` is already <false/> at v2.13 and the scheduler-disabling
 #     code is UPSTREAM and unconditional there. The `defaults write` is kept, but its reason is
 #     not "it stops a silent Apple-signed binary swap" (that does not happen at v2.13) — it is
 #     that UpdaterViewModel migrates SUEnableAutomaticChecks out of UserDefaults into its own
 #     key VoiceInkChecksForUpdatesOnLaunch, defaulting to true when both are absent.
-# R2  v2.13's Makefile builds `-configuration Debug`; the Release switch is in the 29 commits
+# RELEASE-CONFIG  v2.13's Makefile builds `-configuration Debug`; the Release switch is in the 29 commits
 #     AFTER the tag. This module never banners a configuration it did not produce: it reads the
 #     configuration out of the checked-out Makefile's own `local:` target before building, and
 #     reports the Products/ directory that actually appeared afterwards.
-# R3  `XCV=$(xcodebuild -version | head -1)` SIGPIPEs rc=141 in ~1 of 80 runs under pipefail and
+# NO-PIPE  `XCV=$(xcodebuild -version | head -1)` SIGPIPEs rc=141 in ~1 of 80 runs under pipefail and
 #     then misdiagnoses as an Xcode licence problem. Nothing here pipes a command whose status it
 #     tests; xcodebuild is captured whole and the first line is taken with ${v%%$'\n'*}.
-# R4  The keepalive's lock WAIT was carried without its WRITE half, so a re-run raced launchd
+# TAKE-THE-LOCK  The keepalive's lock WAIT was carried without its WRITE half, so a re-run raced launchd
 #     into a 91 MB bundle move. This module installs NO launchd job at all (the private repo's
 #     keepalive/autoupdate agents are explicitly not reproduced) and still TAKES the lock around
 #     the deploy, because an agent left over from an earlier setup is exactly the case that bites.
-# R5  cmake is the SIXTH human gesture and it was missing from the design: it is in NEITHER
+# CMAKE-MISSING  cmake is the SIXTH human gesture and it was missing from the design: it is in NEITHER
 #     /usr/bin NOR Xcode NOR CommandLineTools, and Homebrew is not on a fresh Mac either. It is
 #     the first row of the human-steps file.
-# R8  `make local`'s `setup: whisper` is guarded by `if [ ! -d "$(FRAMEWORK_PATH)" ]`, so the
+# WHISPER-FIRST  `make local`'s `setup: whisper` is guarded by `if [ ! -d "$(FRAMEWORK_PATH)" ]`, so the
 #     macOS-only framework built in step 2 is NOT clobbered by the 7-platform script. The step
 #     ordering — whisper BEFORE make local — is load-bearing; inverting it costs 15–25 minutes.
 #
@@ -118,7 +118,7 @@ voiceink_sign_script() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstra
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
 # Prints the first line of `xcodebuild -version` on success. On failure prints the combined
-# output so the caller can classify it, and returns 1. R3: no pipe, ever, on this command.
+# output so the caller can classify it, and returns 1. NO-PIPE: no pipe, ever, on this command.
 voiceink_xcodebuild_probe() {
   local out rc
   out="$(/usr/bin/xcodebuild -version 2>&1)"; rc=$?
@@ -136,7 +136,7 @@ voiceink_xcode_app() {
   return 1
 }
 
-# Prints an absolute cmake, or nothing. R5/C4: cmake is in NEITHER /usr/bin NOR Xcode NOR
+# Prints an absolute cmake, or nothing. CMAKE-MISSING: cmake is in NEITHER /usr/bin NOR Xcode NOR
 # CommandLineTools on a stock Mac — all three were probed, with `xcodebuild` present in two of
 # them as the positive control that the probe can say yes.
 voiceink_cmake() {
@@ -333,7 +333,7 @@ voiceink_leaf_matches_valid_identity() {
 # the human gates — DETECTED and RECORDED, never attempted
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
-# Prints one blocker id per line, in the order the human-steps file lists them (R5: cmake first).
+# Prints one blocker id per line, in the order the human-steps file lists them (CMAKE-MISSING: cmake first).
 # Empty output ⇒ nothing here needs a human.
 voiceink_blockers() {
   local out xcapp
@@ -701,7 +701,7 @@ voiceink_preflight() {
   return 0
 }
 
-# R4: TAKE the lock, do not merely wait on one. This module installs no launchd job, but a
+# TAKE-THE-LOCK: TAKE the lock, do not merely wait on one. This module installs no launchd job, but a
 # keepalive agent left from an earlier setup relaunches VoiceInk the instant pkill returns, and
 # it would do so in the middle of a 91 MB bundle move.
 voiceink_lock_take() {
@@ -728,7 +728,7 @@ voiceink_lock_free() {
 
 # Step 2. The macOS-only whisper framework. The stock build-xcframework.sh builds SEVEN platform
 # slices with no flag to restrict them; this is one slice, ~4.6 MB, and it is the layout the
-# pbxproj's $(HOME)-relative file reference expects. Must run BEFORE `make local` (R8): the
+# pbxproj's $(HOME)-relative file reference expects. Must run BEFORE `make local` (WHISPER-FIRST): the
 # Makefile's whisper target is guarded by `if [ ! -d "$(FRAMEWORK_PATH)" ]`, so getting there
 # first is what stops the 7-platform build from running at all.
 voiceink_build_whisper() {
@@ -917,7 +917,7 @@ voiceink_assert_license_bypass() {
   return 1
 }
 
-# R2. Read the configuration out of the Makefile's own `local:` target rather than asserting one.
+# RELEASE-CONFIG. Read the configuration out of the Makefile's own `local:` target rather than asserting one.
 voiceink_make_config() {
   local mk="$BOOTSTRAP_VOICEINK_SRC/Makefile" seg cfg
   [ -r "$mk" ] && {
@@ -951,7 +951,7 @@ voiceink_find_built_app() {
   return 1
 }
 
-# PRIMARY PATH (R0): upstream's own `local` target with LOCAL_CODESIGN_IDENTITY set, which takes
+# PRIMARY PATH (PRIMARY-BUILD): upstream's own `local` target with LOCAL_CODESIGN_IDENTITY set, which takes
 # its SIGNING_REQUIRED=YES branch with no patching of upstream at all. NOBODY HAS EVER EXECUTED
 # THIS. It is not presented as proven; whether it worked is decided afterwards, from the
 # artifact's designated requirement, by install_.
@@ -963,7 +963,7 @@ voiceink_build_primary() {
   ( cd "$BOOTSTRAP_VOICEINK_SRC" && LOCAL_CODESIGN_IDENTITY="$cn" make local )
 }
 
-# FALLBACK BUILD (R0): the shape the only working local build on the source machine actually
+# FALLBACK BUILD (PRIMARY-BUILD): the shape the only working local build on the source machine actually
 # uses — signing turned OFF in xcodebuild, re-signed by hand afterwards. Reached only when the
 # primary path produced no app at all.
 voiceink_build_unsigned() {
@@ -987,7 +987,7 @@ voiceink_build_unsigned() {
       build )
 }
 
-# FALLBACK SIGN (R0), the measured shape: inside-out, deepest nested bundle first, then the app
+# FALLBACK SIGN (PRIMARY-BUILD), the measured shape: inside-out, deepest nested bundle first, then the app
 # with its entitlements and its identifier. `find -depth` generalises the five classes the fork
 # hardcodes (XPCServices/*.xpc, Versions/B/*.app, Frameworks/*.framework, Resources/*.bundle) —
 # verified on the live bundle, where it yields exactly those eight items in nesting order.
@@ -1041,7 +1041,7 @@ voiceink_deploy() {
   return 0
 }
 
-# R1, restated. At v2.13 SUEnableAutomaticChecks is already <false/> in Info.plist and the
+# SPARKLE, restated. At v2.13 SUEnableAutomaticChecks is already <false/> in Info.plist and the
 # scheduler is disabled UPSTREAM and unconditionally, so this write does NOT stop a silent
 # Apple-signed binary swap — that does not happen at this tag. What it does do is set the
 # migration source UpdaterViewModel.initialAutomaticCheckPreference reads out of UserDefaults
@@ -1078,7 +1078,7 @@ install_voiceink() {
 
   voiceink_preflight || return 1
 
-  # 2. whisper BEFORE make local (R8) — the Makefile's whisper target is guarded on this path
+  # 2. whisper BEFORE make local (WHISPER-FIRST) — the Makefile's whisper target is guarded on this path
   #    existing, so arriving first is what prevents the 7-platform build.
   voiceink_build_whisper || return 1
 
@@ -1113,7 +1113,7 @@ install_voiceink() {
       return 1; }
   fi
 
-  # 6. deploy, under the lock (R4)
+  # 6. deploy, under the lock (TAKE-THE-LOCK)
   voiceink_lock_take || return 1
   voiceink_deploy "$built"; rc=$?
   voiceink_lock_free

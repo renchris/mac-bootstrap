@@ -11,7 +11,7 @@
 #   1. the frozen scope, if one was written (.agent/scope.md at cwd or repo root, else state dir)
 #   2. the ledger the previous Stop left behind (dirty / parked / unknown / clean)
 #   3. live git state for this checkout, read NOW, not remembered
-#   4. a PRECONDITION warning when jq is absent — because pb-guard-bash and pb-stop's arm C are
+#   4. a PRECONDITION warning when jq is absent — because guard-bash.sh and stop.sh's arm C are
 #      INERT without it. A guard believed present but inert is worse than one known absent.
 #
 # NEVER BLOCKS. SessionStart has no blocking contract anywhere; this is context injection, exit 0.
@@ -90,7 +90,7 @@ ROOT="$(bootstrap_git "$CWD" rev-parse --show-toplevel)"
 
 MSG=""
 if ! bootstrap_have_jq; then
-  MSG="PRECONDITION: jq is NOT on PATH. Everything in this hook set still works through plutil EXCEPT pb-stop's auto-continue arm, which has to read the JSONL transcript to tell files YOU edited from files someone else left dirty — it abstains rather than guess, so a loose end will not be fed back to you at the turn boundary. macOS 15 ships /usr/bin/jq on the sealed system volume; if it is missing here, something removed it. "
+  MSG="PRECONDITION: jq is NOT on PATH. Everything in this hook set still works through plutil EXCEPT the Stop hook's auto-continue arm, which has to read the JSONL transcript to tell files YOU edited from files someone else left dirty — it abstains rather than guess, so a loose end will not be fed back to you at the turn boundary. macOS 15 ships /usr/bin/jq on the sealed system volume; if it is missing here, something removed it. "
 fi
 
 # Frozen scope. ROOT is empty outside a repo, so it is tested rather than pasted into a path —

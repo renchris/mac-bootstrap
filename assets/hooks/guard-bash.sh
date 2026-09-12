@@ -33,7 +33,7 @@
 #    --recursive --force are ONE command; a literal "-rf" pattern lets the other four through.
 #  · PER-SEGMENT. Split on && || ; | and judge each segment alone. A whole-string flag scan
 #    measured 2 false positives: `git add -A && rm -f /tmp/x` reads as `git add` + `-f`.
-#  · SPLIT FIRST, THEN DROP QUOTE **CHARACTERS**, KEEPING THE BODY. This is the R1 repair. The
+#  · SPLIT FIRST, THEN DROP QUOTE **CHARACTERS**, KEEPING THE BODY. This is the quoted-target repair. The
 #    normaliser is one awk pass that tracks quote state, so `;` and `|` INSIDE a quoted string
 #    are not separators and the path inside the quotes still reaches the patterns.
 #  · A SEGMENT WHOSE COMMAND WORD PRINTS IS NOT RUNNING ANYTHING. `echo "git push --force origin
@@ -259,7 +259,7 @@ hook_verdict() {
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 hook_selftest() {
   local n=0 bad=0 out
-  printf 'pb-guard-bash selftest · bash %s\n' "${BASH_VERSION:-?}"
+  printf 'guard-bash selftest · bash %s\n' "${BASH_VERSION:-?}"
   _deny() {  # _deny <command> — MUST be denied
     n=$((n+1)); out="$(hook_verdict "$1")"
     case "$out" in *'"deny"'*) printf '  ok   DENY   %s\n' "$1" ;;
@@ -334,7 +334,7 @@ hook_selftest() {
   _allow 'echo "git push --force origin main" > notes.txt'
   _allow "printf '%s' \"rm -rf \$HOME\" > note.txt"
   _allow 'echo "rm -rf ~" | tee note.txt'
-  _allow 'rm -rf /tmp/pb-scratch-dir'
+  _allow 'rm -rf /tmp/fixture-scratch-dir'
 
   printf '\n-- PRE-FIX (RED) ARM: the defect this rewrite repairs, still reproducible --\n'
   # The researcher's pre-pass, in shape: delete the quoted BODY, then test class 1's patterns.
@@ -353,7 +353,7 @@ hook_selftest() {
   n=$((n+1))
   if _prefix_would_deny 'rm -rf "$HOME/stuff"'; then
     bad=$((bad+1)); printf '  FAIL PRE-FIX arm went GREEN — quote-body stripping no longer hides the target, so this rewrite is unattributed\n'
-  else printf '  ok   PRE-FIX arm is RED: the old pass ALLOWS the QUOTED form (R1, the whole reason for this file)\n'; fi
+  else printf '  ok   PRE-FIX arm is RED: the old pass ALLOWS the QUOTED form (the quoted target, which is the whole reason for this file)\n'; fi
 
   printf '\n-- INSTRUMENT CONTROLS --\n'
   n=$((n+1))

@@ -31,7 +31,7 @@
 #    arms of exactly those two claims, because an engine that can only say YES is the failure this
 #    module previously chose to avoid by not shipping one.
 #
-# 🚨 WHY THE COPILOT COPY IS AT ~/.copilot AND NOT AT ~/.claude (C6). Copilot CLI 1.0.83 has NO
+# 🚨 WHY THE COPILOT COPY IS AT ~/.copilot AND NOT AT ~/.claude (the Copilot user-tier path). Copilot CLI 1.0.83 has NO
 #    mechanism to register a /name — its slash set is a hardcoded array and `.claude/commands`
 #    appears zero times in its bundle. The discovery that WAS measured (Copilot reading
 #    `.claude/commands/` and `.claude/skills/`) is a REPO-tier result, and the nearest USER-tier

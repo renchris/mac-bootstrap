@@ -7,7 +7,7 @@
 # this module renders it, it does not carry a second copy of it.
 #
 #   session-start.sh  SessionStart  → frozen scope · last ledger · LIVE git read · jq warning
-#   stop.sh           Stop          → ledger · context-fill advisory (C3) · bounded continue
+#   stop.sh           Stop          → ledger · context-fill advisory · bounded continue
 #   guard-write.sh    PreToolUse    → backup + INTEGRATE-never-overwrite advisory
 #   guard-bash.sh     (not wired)   → installed, deliberately unregistered. See below.
 #
@@ -32,7 +32,7 @@
 #
 # ── THE ONE WRITER ───────────────────────────────────────────────────────────────────────────
 # Every settings write goes through bootstrap_hook_wire / bootstrap_copilot_hook_wire / bootstrap_settings_merge.
-# This module contains no plutil and no jq call that writes. That is C2, and it is why a Mac
+# This module contains no plutil and no jq call that writes. That is the one-writer rule, and it is why a Mac
 # without jq gets the same hooks rather than a statusline and no hooks.
 #
 # Contract: six verbs, no top-level side effects, bash 3.2, set -u, never `exit`.
@@ -149,7 +149,7 @@ hooks_file_unusable() {
 #     wired" is unfalsifiable — everything is wired if nothing is checked for absence)
 #   · guard-write.sh FIRED with a real PreToolUse payload actually writes a backup file, and
 #     fired with a tool name that cannot overwrite anything writes nothing
-#   · stop.sh's own fixtures pass — they carry the C3 matrix (12%/82% × repo/bare/inert-git)
+#   · stop.sh's own fixtures pass — they carry the advisory matrix (12%/82% × repo/bare/inert-git)
 #
 # HONEST BOUND, and it is the one thing this verifier cannot do: it does not launch an agent.
 # Registering a hook and having a real agent RUN it are different claims, and the second needs an
@@ -244,7 +244,7 @@ XIN
   [ -z "$out" ] || rc=1
   rm -rf "$T" 2>/dev/null
 
-  # the Stop hook's own fixtures — they carry the C3 matrix and the block bound
+  # the Stop hook's own fixtures — they carry the advisory matrix and the block bound
   /bin/bash "$d/stop.sh" --selftest >/dev/null 2>&1 || rc=1
 
   return "$rc"

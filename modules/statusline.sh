@@ -3,7 +3,7 @@
 #
 # Installs assets/agent-statusline.sh to $BOOTSTRAP_STATE_DIR/bin/ and registers it, by ABSOLUTE path,
 # in $HOME/.claude/settings.json and $HOME/.copilot/settings.json — both through the ONE writer,
-# bootstrap_settings_merge (C2). Nothing here calls plutil or jq to write a settings file.
+# bootstrap_settings_merge (the one-writer rule). Nothing here calls plutil or jq to write a settings file.
 #
 # WHY THE ABSOLUTE PATH: Copilot documents that it expands `~` in statusLine.command; Claude
 # Code's help only *recommends* a `~/…` path and its expansion was never measured. An absolute
@@ -25,12 +25,12 @@ statusline_copilot_settings() { printf '%s' "$HOME/.copilot/settings.json"; }
 # invented: the decoy is a real rate_limits block (a QUOTA number, never a context number), and
 # the Copilot one is the authenticated 1.0.83 shape in which used_percentage is null and the
 # live value sits at current_context_used_percentage.
-STATUSLINE_FIXTURE_CLAUDE='{"session_id":"pb-statusline-probe","cwd":"/tmp/pb-statusline","model":{"display_name":"probe"},"context_window":{"used_percentage":42.7,"remaining_percentage":57.3},"rate_limits":{"five_hour":{"used_percentage":91}}}'
-STATUSLINE_FIXTURE_COPILOT='{"session_id":"pb-statusline-probe2","cwd":"/tmp/pb-statusline","model":{"id":null,"display_name":null},"context_window":{"used_percentage":null,"remaining_percentage":null,"current_context_used_percentage":7}}'
-STATUSLINE_FIXTURE_NEGATIVE='{"session_id":"pb-statusline-probe3","cwd":"/tmp/pb-statusline","model":{"display_name":"probe"},"context_window":{"used_percentage":null,"remaining_percentage":null},"rate_limits":{"five_hour":{"used_percentage":91}}}'
+STATUSLINE_FIXTURE_CLAUDE='{"session_id":"statusline-probe","cwd":"/tmp/statusline-fixture","model":{"display_name":"probe"},"context_window":{"used_percentage":42.7,"remaining_percentage":57.3},"rate_limits":{"five_hour":{"used_percentage":91}}}'
+STATUSLINE_FIXTURE_COPILOT='{"session_id":"statusline-probe2","cwd":"/tmp/statusline-fixture","model":{"id":null,"display_name":null},"context_window":{"used_percentage":null,"remaining_percentage":null,"current_context_used_percentage":7}}'
+STATUSLINE_FIXTURE_NEGATIVE='{"session_id":"statusline-probe3","cwd":"/tmp/statusline-fixture","model":{"display_name":"probe"},"context_window":{"used_percentage":null,"remaining_percentage":null},"rate_limits":{"five_hour":{"used_percentage":91}}}'
 # and the fixture that proves the alternation does not swallow a legitimate reading of ZERO:
 # jq's `//` fires on null and false ONLY, so 0 must survive it and render as 0%.
-STATUSLINE_FIXTURE_ZERO='{"session_id":"pb-statusline-probe4","cwd":"/tmp/pb-statusline","model":{"display_name":"probe"},"context_window":{"used_percentage":0,"remaining_percentage":100}}'
+STATUSLINE_FIXTURE_ZERO='{"session_id":"statusline-probe4","cwd":"/tmp/statusline-fixture","model":{"display_name":"probe"},"context_window":{"used_percentage":0,"remaining_percentage":100}}'
 
 # statusline_source — where the asset bytes come from: the clone, then the state-dir cache, then the
 # pinned raw URL. NOT in bootstrap-lib.sh (the library deliberately does no network), so it lives here.
@@ -130,7 +130,7 @@ verify_statusline() {
   local td pct
   td="$(mktemp -d -t pbm1t)" || return 1
   printf '%s' "$STATUSLINE_FIXTURE_CLAUDE" | BOOTSTRAP_TELEMETRY_DIR="$td" "$sl" >/dev/null 2>&1
-  pct="$(bootstrap_settings_get "$td/pb-statusline-probe.json" used_pct raw 2>/dev/null)" || pct=""
+  pct="$(bootstrap_settings_get "$td/statusline-probe.json" used_pct raw 2>/dev/null)" || pct=""
   rm -rf "$td" 2>/dev/null
   [ "$pct" = "42" ] || return 1
   return 0
