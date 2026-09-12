@@ -50,13 +50,13 @@ It is idempotent. **Re-running it is the recovery procedure.** Nothing is writte
 
 ## Path A — paste this into Claude Code or Copilot CLI
 
-Replace `<SHA>` with the release commit. Never `main`: a `main`-pinned raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured).
+Replace `bd3f74ff41d10aaf285a0846b66d12d7c47b3986` with the release commit. Never `main`: a `main`-pinned raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured).
 
 ```text
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
 
 1. FETCH — never pipe a script into a shell. Save it, then show me its checksum and first lines:
-     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/<SHA>/bootstrap.sh
+     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/bd3f74ff41d10aaf285a0846b66d12d7c47b3986/bootstrap.sh
      shasum -a 256 /tmp/mac-bootstrap.sh && wc -l /tmp/mac-bootstrap.sh && head -20 /tmp/mac-bootstrap.sh
    If the download fails or the file is under 100 lines, stop and tell me. Do not find another source.
 
@@ -108,7 +108,7 @@ Store, an Apple ID), do not attempt it: name the exact gesture and move on.
 The genuine first state of a new Mac has no agent logged in. Then:
 
 ```bash
-curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/<SHA>/bootstrap.sh \
+curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/bd3f74ff41d10aaf285a0846b66d12d7c47b3986/bootstrap.sh \
   && shasum -a 256 /tmp/mac-bootstrap.sh \
   && less /tmp/mac-bootstrap.sh \
   && bash /tmp/mac-bootstrap.sh
