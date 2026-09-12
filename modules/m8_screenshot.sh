@@ -40,7 +40,7 @@
 #     holds the grant. A fresh Mac starts with no grant, so the target machine is the experiment.
 #   * It does not assert the Cmd+V rewrite. No shell command can: it needs a real keypress in a
 #     real TUI. install_ prints the one human observation instead of printing a green it did not
-#     earn, and leaves it at $PB_STATE_DIR/m8-human-check.txt.
+#     earn, and leaves it at $BOOTSTRAP_STATE_DIR/m8-human-check.txt.
 #
 # HOUSE RULES THIS FILE OBEYS: bash 3.2 (no associative arrays, no ${x^^}, no mapfile) · set -u,
 # never set -e · no absolute path containing a username, $HOME only · verify by INDEPENDENT
@@ -48,47 +48,47 @@
 #
 # TEST SEAMS (module-scoped; documented here because the environment contract in CONTRACT.md §5
 # does not carry them). Both default to the real thing and neither is needed in production:
-#   PB_M8_DOMAIN    the `defaults` domain to read and write. MEASURED, and the reason this seam
+#   BOOTSTRAP_SCREENSHOT_DOMAIN    the `defaults` domain to read and write. MEASURED, and the reason this seam
 #                   exists: `defaults` IGNORES $HOME — a write under HOME=$(mktemp -d) landed in
 #                   the REAL user's ~/Library/Preferences. A sandbox-HOME test without this seam
 #                   would silently repoint the operator's live screenshot directory at a temp
 #                   directory that is then deleted.
-#   PB_M8_REPO_DIR  where the public config checkout lives. Default $HOME/Development/hammerspoon-config.
-#   PB_M8_ACC_WAIT  seconds install_ waits for the Accessibility grant before handing back. 5.
+#   BOOTSTRAP_SCREENSHOT_REPO_DIR  where the public config checkout lives. Default $HOME/Development/hammerspoon-config.
+#   BOOTSTRAP_SCREENSHOT_ACCESSIBILITY_WAIT_S  seconds install_ waits for the Accessibility grant before handing back. 5.
 
 M8_APP="/Applications/Hammerspoon.app"
 # The Hammerspoon config is VENDORED at assets/hammerspoon/init.lua. It used to be cloned from a
 # personal GitHub repo, which made deliverable 5 fail for anyone who is not its owner and put an
 # account-shaped dependency in a bootstrap whose whole premise is an ANONYMOUS reader. The clone
 # path survives only when the operator explicitly points at a checkout they want to track.
-M8_REPO_URL="${PB_M8_REPO_URL:-}"
+M8_REPO_URL="${BOOTSTRAP_SCREENSHOT_REPO_URL:-}"
 M8_DEFAULTS="/usr/bin/defaults"
 M8_SCREENCAPTURE="/usr/sbin/screencapture"
 
 # ── paths, computed rather than stored, because no state survives between verbs ───────────────
 m8_shot_dir() { printf '%s' "$HOME/Screenshots"; }
 m8_hs_dir()   { printf '%s' "$HOME/.hammerspoon"; }
-m8_repo_dir() { printf '%s' "${PB_M8_REPO_DIR:-${PB_STATE_DIR:-$HOME/.mac-bootstrap}/hammerspoon}"; }
+m8_repo_dir() { printf '%s' "${BOOTSTRAP_SCREENSHOT_REPO_DIR:-${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/hammerspoon}"; }
 # ── m8_cfg_source — where init.lua comes from. Local assets dir, then the cached copy, then the
 # pinned raw URL. Identical in shape to m1_source, deliberately: one idiom for every asset.
 m8_cfg_source() {
   local c t code
-  for c in "${PB_ASSETS:-}/hammerspoon/init.lua" \
-           "${PB_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"; do
+  for c in "${BOOTSTRAP_ASSETS:-}/hammerspoon/init.lua" \
+           "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"; do
     [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   done
-  t="${PB_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"
+  t="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"
   mkdir -p "$(dirname "$t")" 2>/dev/null || return 1
-  [ -n "${PB_RAW:-}" ] || return 1
-  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${PB_RAW}/assets/hammerspoon/init.lua" 2>/dev/null)" || {
+  [ -n "${BOOTSTRAP_RAW:-}" ] || return 1
+  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${BOOTSTRAP_RAW}/assets/hammerspoon/init.lua" 2>/dev/null)" || {
     rm -f "$t.part" 2>/dev/null; return 1; }
   [ "$code" = 200 ] || { rm -f "$t.part" 2>/dev/null; return 1; }
   mv -f "$t.part" "$t" 2>/dev/null || return 1
   printf '%s' "$t"
 }
 
-m8_domain()   { printf '%s' "${PB_M8_DOMAIN:-com.apple.screencapture}"; }
-m8_state()    { printf '%s' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}"; }
+m8_domain()   { printf '%s' "${BOOTSTRAP_SCREENSHOT_DOMAIN:-com.apple.screencapture}"; }
+m8_state()    { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 m8_mark()     { printf '%s/m8-blocked' "$(m8_state)"; }
 m8_pre()      { printf '%s/m8-defaults-pre' "$(m8_state)"; }
 m8_human()    { printf '%s/m8-human-check.txt' "$(m8_state)"; }
@@ -203,7 +203,7 @@ m8_live_symlink_ok() {
   want="$(m8_repo_dir)/init.lua"
   got="$(m8_hs_eval 'return tostring(hs.fs.symlinkAttributes(os.getenv("HOME").."/.hammerspoon/init.lua","target"))')" || return 1
   [ "$got" = "$want" ] && return 0
-  pb_warn "m8: the running Hammerspoon reads [$got] as its init.lua; this run expects [$want]."
+  bootstrap_warn "m8: the running Hammerspoon reads [$got] as its init.lua; this run expects [$want]."
   return 1
 }
 
@@ -232,20 +232,20 @@ m8_def_read() {
 m8_defaults_ok() {
   local want loc st tg
   want="$(m8_shot_dir)"
-  loc="$(m8_def_read location)" || { pb_warn "m8: $(m8_domain) 'location' is unset — captures would go to the Desktop, which init.lua does not poll."; return 1; }
+  loc="$(m8_def_read location)" || { bootstrap_warn "m8: $(m8_domain) 'location' is unset — captures would go to the Desktop, which init.lua does not poll."; return 1; }
   # shellcheck disable=SC2088  # the literal tilde is DELIBERATE: macOS writes an UNEXPANDED
   # tilde into this domain itself (the live box holds `"location-last" = "~/Documents/"`), so a
   # user or an OS-written `~/Screenshots` must compare equal. We always WRITE the absolute form.
   case "$loc" in
     "$want"|"$want"/|'~/Screenshots'|'~/Screenshots/') : ;;
-    *) pb_warn "m8: screencapture writes to [$loc] but init.lua polls [$want] — the pipeline would be dark."; return 1 ;;
+    *) bootstrap_warn "m8: screencapture writes to [$loc] but init.lua polls [$want] — the pipeline would be dark."; return 1 ;;
   esac
   st="$(m8_def_read show-thumbnail)" || st=""
-  [ "$st" = "0" ] || { pb_warn "m8: show-thumbnail is [$st], not 0. The native thumbnail is a pending-commit UI and DEFERS the disk write (measured 6.11 s ON vs 0.41 s OFF)."; return 1; }
+  [ "$st" = "0" ] || { bootstrap_warn "m8: show-thumbnail is [$st], not 0. The native thumbnail is a pending-commit UI and DEFERS the disk write (measured 6.11 s ON vs 0.41 s OFF)."; return 1; }
   tg="$(m8_def_read target)" || tg=""
-  [ "$tg" = "file" ] || { pb_warn "m8: target is [$tg], not file. target is single-valued: target=clipboard writes NO file and draws NO thumbnail."; return 1; }
+  [ "$tg" = "file" ] || { bootstrap_warn "m8: target is [$tg], not file. target is single-valued: target=clipboard writes NO file and draws NO thumbnail."; return 1; }
   if m8_def_read name >/dev/null 2>&1; then
-    pb_warn "m8: $(m8_domain) 'name' is set. init.lua anchors on ^Screenshot, so a renamed capture is never seen and the pipeline goes dark with no error."
+    bootstrap_warn "m8: $(m8_domain) 'name' is set. init.lua anchors on ^Screenshot, so a renamed capture is never seen and the pipeline goes dark with no error."
     return 1
   fi
   return 0
@@ -261,15 +261,15 @@ m8_clipboard_has_png() { osascript -e 'the clipboard as «class PNGf»' >/dev/nu
 m8_live_probe() {
   local dir shot rc i
   dir="$(m8_shot_dir)"
-  [ -d "$dir" ] || { pb_warn "m8: $dir does not exist."; return 1; }
+  [ -d "$dir" ] || { bootstrap_warn "m8: $dir does not exist."; return 1; }
 
   # NEGATIVE CONTROL FIRST. Prime the clipboard with text and require the PNG read to FAIL. If a
   # PNG is already sitting there, the poll below would pass without Hammerspoon doing anything,
   # and a positive result would carry no information at all.
   printf '%s' 'mac-bootstrap m8 sentinel — NOT an image' | pbcopy 2>/dev/null || {
-    pb_warn "m8: pbcopy failed; cannot establish the negative control."; return 1; }
+    bootstrap_warn "m8: pbcopy failed; cannot establish the negative control."; return 1; }
   if m8_clipboard_has_png; then
-    pb_warn "m8: the clipboard still reads as a PNG immediately after text was copied — the instrument cannot say no, so nothing it says yes to would mean anything."
+    bootstrap_warn "m8: the clipboard still reads as a PNG immediately after text was copied — the instrument cannot say no, so nothing it says yes to would mean anything."
     return 1
   fi
 
@@ -280,12 +280,12 @@ m8_live_probe() {
   "$M8_SCREENCAPTURE" -x -R 0,0,200,200 "$shot" >/dev/null 2>&1
   rc=$?
   if [ "$rc" != 0 ]; then
-    pb_warn "m8: screencapture exited $rc and wrote nothing. On macOS 15 the app that RUNS screencapture needs Screen Recording; grant it to your terminal, or run this from a terminal that has it."
+    bootstrap_warn "m8: screencapture exited $rc and wrote nothing. On macOS 15 the app that RUNS screencapture needs Screen Recording; grant it to your terminal, or run this from a terminal that has it."
     rm -f "$shot" 2>/dev/null
     return 2
   fi
   if [ ! -s "$shot" ]; then
-    pb_warn "m8: screencapture exited 0 but produced an empty file — treat this as a capture-side failure, not a pipeline failure."
+    bootstrap_warn "m8: screencapture exited 0 but produced an empty file — treat this as a capture-side failure, not a pipeline failure."
     rm -f "$shot" 2>/dev/null
     return 2
   fi
@@ -301,7 +301,7 @@ m8_live_probe() {
     sleep 0.25
     i=$((i + 1))
   done
-  pb_warn "m8: 15 s after a capture landed in $dir the clipboard still holds no PNG — Hammerspoon's poll or its clipboard write is not running. Check: tail \$HOME/Library/Logs/Hammerspoon/screenshot.log"
+  bootstrap_warn "m8: 15 s after a capture landed in $dir the clipboard still holds no PNG — Hammerspoon's poll or its clipboard write is not running. Check: tail \$HOME/Library/Logs/Hammerspoon/screenshot.log"
   rm -f "$shot" 2>/dev/null
   return 1
 }
@@ -317,17 +317,17 @@ profile_m8_screenshot() { printf '%s' 'full'; }
 
 verify_m8_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
-  pb_defaults_home_ok || return 1
-  m8_app_ok         || { pb_warn "m8: $M8_APP is not installed."; return 1; }
-  m8_repo_ok        || { pb_warn "m8: no config checkout at $(m8_repo_dir)."; return 1; }
-  m8_symlink_ok     || { pb_warn "m8: $(m8_hs_dir)/init.lua is not a symlink to $(m8_repo_dir)/init.lua."; return 1; }
-  m8_shotdir_ok     || { pb_warn "m8: $(m8_shot_dir) does not exist."; return 1; }
+  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  bootstrap_defaults_home_ok || return 1
+  m8_app_ok         || { bootstrap_warn "m8: $M8_APP is not installed."; return 1; }
+  m8_repo_ok        || { bootstrap_warn "m8: no config checkout at $(m8_repo_dir)."; return 1; }
+  m8_symlink_ok     || { bootstrap_warn "m8: $(m8_hs_dir)/init.lua is not a symlink to $(m8_repo_dir)/init.lua."; return 1; }
+  m8_shotdir_ok     || { bootstrap_warn "m8: $(m8_shot_dir) does not exist."; return 1; }
   m8_defaults_ok    || return 1
-  m8_running        || { pb_warn "m8: Hammerspoon is not running."; return 1; }
-  m8_config_live    || { pb_warn "m8: the running Hammerspoon has no armed screenshotPollTimer — the loaded config does not carry the screenshot feature, or it errored while loading."; return 1; }
+  m8_running        || { bootstrap_warn "m8: Hammerspoon is not running."; return 1; }
+  m8_config_live    || { bootstrap_warn "m8: the running Hammerspoon has no armed screenshotPollTimer — the loaded config does not carry the screenshot feature, or it errored while loading."; return 1; }
   m8_live_symlink_ok || return 1
-  m8_accessibility  || { pb_warn "m8: Hammerspoon does not hold Accessibility; the Cmd+V -> Ctrl+V rewrite cannot run."; return 1; }
+  m8_accessibility  || { bootstrap_warn "m8: Hammerspoon does not hold Accessibility; the Cmd+V -> Ctrl+V rewrite cannot run."; return 1; }
   m8_live_probe     || return 1
   return 0
 }
@@ -349,16 +349,16 @@ m8_gate_reason() {
 
 gate_m8_screenshot() {
   # A sandboxed HOME is a DECISION, not a bug: `defaults` would escape it and hit the real
-  # domain, so pb_defaults_home_ok refuses. Reported through gate_ so it reads NEEDS_HUMAN
+  # domain, so bootstrap_defaults_home_ok refuses. Reported through gate_ so it reads NEEDS_HUMAN
   # rather than FAILED — FAILED sends the reader to the log for a defect that is not there.
-  pb_defaults_home_ok >/dev/null 2>&1 || return 0
+  bootstrap_defaults_home_ok >/dev/null 2>&1 || return 0
   local r
   r="$(m8_gate_reason)"
   [ -n "$r" ]
 }
 
 note_m8_screenshot() {
-  if ! pb_defaults_home_ok >/dev/null 2>&1; then
+  if ! bootstrap_defaults_home_ok >/dev/null 2>&1; then
     printf 'this run has a sandboxed HOME ($HOME is not your real home), and `defaults` ignores $HOME — writing would hit your REAL preferences. Nothing was written.'
     return 0
   fi
@@ -373,8 +373,8 @@ note_m8_screenshot() {
 }
 
 gesture_m8_screenshot() {
-  if ! pb_defaults_home_ok >/dev/null 2>&1; then
-    printf 'run it from your own account (no HOME override), or set PB_ALLOW_FOREIGN_DEFAULTS=1 if you truly mean to write the real domain'
+  if ! bootstrap_defaults_home_ok >/dev/null 2>&1; then
+    printf 'run it from your own account (no HOME override), or set BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1 if you truly mean to write the real domain'
     return 0
   fi
   case "$(m8_gate_reason)" in
@@ -427,8 +427,8 @@ m8_def_write() {
 
 install_m8_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
-  pb_defaults_home_ok || return 1
+  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  bootstrap_defaults_home_ok || return 1
   local brew git dir hs out i rc want src unfinished=0
 
   rm -f "$(m8_mark)" 2>/dev/null
@@ -450,7 +450,7 @@ install_m8_screenshot() {
   fi
 
   # 2. the config itself — VENDORED, not cloned. A git checkout is used only when the operator
-  #    explicitly named one (PB_M8_REPO_DIR at a .git, or PB_M8_REPO_URL); otherwise the file
+  #    explicitly named one (BOOTSTRAP_SCREENSHOT_REPO_DIR at a .git, or BOOTSTRAP_SCREENSHOT_REPO_URL); otherwise the file
   #    comes from this repo's own assets and needs no git, no GitHub account and no network
   #    beyond the pinned raw URL the driver already used.
   dir="$(m8_repo_dir)"
@@ -460,7 +460,7 @@ install_m8_screenshot() {
       printf '   ..   git clone %s (explicitly requested)\n' "$M8_REPO_URL"
       GIT_TERMINAL_PROMPT=0 "$git" clone --depth 1 "$M8_REPO_URL" "$dir" </dev/null 2>&1
     else
-      printf '   x    PB_M8_REPO_URL is set but there is no usable git — that step is yours.\n'
+      printf '   x    BOOTSTRAP_SCREENSHOT_REPO_URL is set but there is no usable git — that step is yours.\n'
       return 1
     fi
   fi
@@ -565,7 +565,7 @@ install_m8_screenshot() {
   #    ours to take, and a bootstrap that blocks for six minutes on one toggle is worse than one
   #    that tells you the command and lets you re-run: re-running IS the recovery procedure.
   i=0
-  while [ "$i" -lt "${PB_M8_ACC_WAIT:-5}" ]; do m8_accessibility && break; sleep 1; i=$((i + 1)); done
+  while [ "$i" -lt "${BOOTSTRAP_SCREENSHOT_ACCESSIBILITY_WAIT_S:-5}" ]; do m8_accessibility && break; sleep 1; i=$((i + 1)); done
   if m8_accessibility; then
     printf '   ok   Hammerspoon holds Accessibility\n'
   else

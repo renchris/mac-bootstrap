@@ -6,8 +6,8 @@
 #
 #   $HOME/.claude/CLAUDE.md                     the 72-line / 6,142-byte global file, verbatim
 #   $HOME/.copilot/copilot-instructions.md      a SYMLINK to it — the global tier's only bridge
-#   $PB_STATE_DIR/templates/repo-CLAUDE.md      the 19-line / 518-byte per-repo template
-#   $PB_STATE_DIR/bin/agent-repo-init           the guarded per-repo wiring, as a program
+#   $BOOTSTRAP_STATE_DIR/templates/repo-CLAUDE.md      the 19-line / 518-byte per-repo template
+#   $BOOTSTRAP_STATE_DIR/bin/agent-repo-init           the guarded per-repo wiring, as a program
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # THE LAYOUT IS MEASURED, NOT CHOSEN. Do not "simplify" it back; each leg cost a probe with both
@@ -38,7 +38,7 @@
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 
 # ── where things go ──────────────────────────────────────────────────────────────────────────
-m2i_state()   { printf '%s' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}"; }
+m2i_state()   { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 m2i_global()  { printf '%s' "$HOME/.claude/CLAUDE.md"; }
 m2i_copilot() { printf '%s' "${COPILOT_HOME:-$HOME/.copilot}/copilot-instructions.md"; }
 m2i_tpl()     { printf '%s/templates/repo-CLAUDE.md' "$(m2i_state)"; }
@@ -47,17 +47,17 @@ m2i_init()    { printf '%s/bin/agent-repo-init' "$(m2i_state)"; }
 # ── m2i_asset <name> — a readable path to assets/<name>, fetching it if this is a curl'd run ──
 # CONTRACT DEVIATION, declared: pb-lib has no asset resolver, so this one lives here rather than
 # in the rail. It mirrors the driver's own order — beside the script, then the state dir, then
-# the pinned raw URL — and it refuses a moving ref exactly as mb_fetch does.
+# the pinned raw URL — and it refuses a moving ref exactly as driver_fetch does.
 m2i_asset() {
   local n="${1:-}" dest code
   [ -n "$n" ] || return 1
-  if [ -n "${PB_ASSETS:-}" ] && [ -r "$PB_ASSETS/$n" ]; then printf '%s' "$PB_ASSETS/$n"; return 0; fi
+  if [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -r "$BOOTSTRAP_ASSETS/$n" ]; then printf '%s' "$BOOTSTRAP_ASSETS/$n"; return 0; fi
   dest="$(m2i_state)/assets/$n"
   [ -r "$dest" ] && { printf '%s' "$dest"; return 0; }
-  case "${PB_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
+  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
   command -v curl >/dev/null 2>&1 || return 1
   mkdir -p "$(m2i_state)/assets" 2>/dev/null || return 1
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${PB_RAW:-}/assets/$n" 2>/dev/null)" || {
+  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$n" 2>/dev/null)" || {
     rm -f "$dest.part" 2>/dev/null; return 1; }
   [ "$code" = "200" ] && [ -s "$dest.part" ] || { rm -f "$dest.part" 2>/dev/null; return 1; }
   mv -f "$dest.part" "$dest" 2>/dev/null || return 1
@@ -123,21 +123,21 @@ m2i_exec_readback() {
   d="$(mktemp -d "${TMPDIR:-/tmp}/m2iv.XXXXXX")" 2>/dev/null || return 1
 
   # positive arm — a fresh directory is wired
-  ( cd "$d" && PB_REPO_TEMPLATE="$tpl" "$init" . ) >/dev/null 2>&1 || { rm -rf "$d"; return 1; }
+  ( cd "$d" && BOOTSTRAP_REPO_TEMPLATE="$tpl" "$init" . ) >/dev/null 2>&1 || { rm -rf "$d"; return 1; }
   [ -f "$d/AGENTS.md" ] || { rm -rf "$d"; return 1; }
   [ -L "$d/CLAUDE.md" ] || { rm -rf "$d"; return 1; }
   [ "$(readlink "$d/CLAUDE.md" 2>/dev/null)" = "AGENTS.md" ] || { rm -rf "$d"; return 1; }
   cmp -s "$d/AGENTS.md" "$tpl" || { rm -rf "$d"; return 1; }
 
   # idempotence arm — re-running is the recovery procedure, so it must change nothing
-  ( cd "$d" && PB_REPO_TEMPLATE="$tpl" "$init" . ) >/dev/null 2>&1 || { rm -rf "$d"; return 1; }
+  ( cd "$d" && BOOTSTRAP_REPO_TEMPLATE="$tpl" "$init" . ) >/dev/null 2>&1 || { rm -rf "$d"; return 1; }
   cmp -s "$d/AGENTS.md" "$tpl" || { rm -rf "$d"; return 1; }
   [ "$(readlink "$d/CLAUDE.md" 2>/dev/null)" = "AGENTS.md" ] || { rm -rf "$d"; return 1; }
 
   # NEGATIVE CONTROL — a real CLAUDE.md must be refused, preserved, and leave no AGENTS.md
   mkdir -p "$d/neg" 2>/dev/null || { rm -rf "$d"; return 1; }
   printf 'PRECIOUS existing rules\n' > "$d/neg/CLAUDE.md" 2>/dev/null || { rm -rf "$d"; return 1; }
-  ( cd "$d/neg" && PB_REPO_TEMPLATE="$tpl" "$init" . ) >/dev/null 2>&1
+  ( cd "$d/neg" && BOOTSTRAP_REPO_TEMPLATE="$tpl" "$init" . ) >/dev/null 2>&1
   rc=$?
   body="$(cat "$d/neg/CLAUDE.md" 2>/dev/null)" || body=""
   if [ "$rc" -ne 4 ] || [ "$body" != "PRECIOUS existing rules" ] || [ -e "$d/neg/AGENTS.md" ]; then
@@ -256,9 +256,9 @@ gesture_m2_instructions() {
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 install_m2_instructions() {
   local g t r rc=0
-  g="$(m2i_asset global-CLAUDE.md)" || { pb_warn "m2: cannot resolve assets/global-CLAUDE.md"; return 1; }
-  t="$(m2i_asset repo-CLAUDE.md)"   || { pb_warn "m2: cannot resolve assets/repo-CLAUDE.md";   return 1; }
-  r="$(m2i_asset agent-repo-init)"  || { pb_warn "m2: cannot resolve assets/agent-repo-init";  return 1; }
+  g="$(m2i_asset global-CLAUDE.md)" || { bootstrap_warn "m2: cannot resolve assets/global-CLAUDE.md"; return 1; }
+  t="$(m2i_asset repo-CLAUDE.md)"   || { bootstrap_warn "m2: cannot resolve assets/repo-CLAUDE.md";   return 1; }
+  r="$(m2i_asset agent-repo-init)"  || { bootstrap_warn "m2: cannot resolve assets/agent-repo-init";  return 1; }
 
   # THE BRIDGE IS CONDITIONAL ON THE GLOBAL FILE BEING OURS, and that ordering is load-bearing.
   # Found by running the conflict fixture: when the global leg refuses (the operator's own file is
@@ -281,26 +281,26 @@ m2i_place_guarded() {
   local src="$1" dst="$2" tmp
   if [ -e "$dst" ] || [ -L "$dst" ]; then
     cmp -s "$src" "$dst" && return 0
-    pb_warn "m2: $dst already exists and differs from the shipped file — refusing to overwrite it."
+    bootstrap_warn "m2: $dst already exists and differs from the shipped file — refusing to overwrite it."
     return 1
   fi
-  mkdir -p "$(dirname "$dst")" 2>/dev/null || { pb_warn "m2: cannot create $(dirname "$dst")"; return 1; }
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$dst")"; return 1; }
   tmp="$dst.pb-tmp.$$"
-  cp "$src" "$tmp" 2>/dev/null || { pb_warn "m2: cannot stage $dst"; return 1; }
-  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; pb_warn "m2: cannot place $dst"; return 1; }
+  cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m2: cannot stage $dst"; return 1; }
+  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m2: cannot place $dst"; return 1; }
   return 0
 }
 
-# A file that IS ours, under $PB_STATE_DIR: a stale copy there is our own older release, so it
+# A file that IS ours, under $BOOTSTRAP_STATE_DIR: a stale copy there is our own older release, so it
 # is replaced rather than refused. Still written via temp+mv, never edited in place.
 m2i_place_ours() {
   local src="$1" dst="$2" mode="${3:-}" tmp
   cmp -s "$src" "$dst" 2>/dev/null && { [ "$mode" = exec ] && chmod 0755 "$dst" 2>/dev/null; return 0; }
-  mkdir -p "$(dirname "$dst")" 2>/dev/null || { pb_warn "m2: cannot create $(dirname "$dst")"; return 1; }
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$dst")"; return 1; }
   tmp="$dst.pb-tmp.$$"
-  cp "$src" "$tmp" 2>/dev/null || { pb_warn "m2: cannot stage $dst"; return 1; }
+  cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m2: cannot stage $dst"; return 1; }
   [ "$mode" = exec ] && chmod 0755 "$tmp" 2>/dev/null
-  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; pb_warn "m2: cannot place $dst"; return 1; }
+  mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m2: cannot place $dst"; return 1; }
   return 0
 }
 
@@ -312,11 +312,11 @@ m2i_place_bridge() {
   cop="$(m2i_copilot)"
   m2i_bridge_shape_ok && return 0
   if [ -e "$cop" ] || [ -L "$cop" ]; then
-    pb_warn "m2: $cop already exists and is not a link to the Claude file — refusing to replace it."
+    bootstrap_warn "m2: $cop already exists and is not a link to the Claude file — refusing to replace it."
     return 1
   fi
-  mkdir -p "$(dirname "$cop")" 2>/dev/null || { pb_warn "m2: cannot create $(dirname "$cop")"; return 1; }
-  ln -s "$(m2i_global)" "$cop" 2>/dev/null || { pb_warn "m2: cannot create the Copilot bridge"; return 1; }
+  mkdir -p "$(dirname "$cop")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$cop")"; return 1; }
+  ln -s "$(m2i_global)" "$cop" 2>/dev/null || { bootstrap_warn "m2: cannot create the Copilot bridge"; return 1; }
   return 0
 }
 
@@ -330,12 +330,12 @@ uninstall_m2_instructions() {
 
   gl="$(m2i_global)"
   if [ -f "$gl" ] && [ -n "$g" ] && cmp -s "$g" "$gl"; then
-    rm -f "$gl" 2>/dev/null || { pb_warn "m2: cannot remove $gl"; return 1; }
+    rm -f "$gl" 2>/dev/null || { bootstrap_warn "m2: cannot remove $gl"; return 1; }
   fi
 
   cop="$(m2i_copilot)"
   if m2i_bridge_shape_ok; then
-    rm -f "$cop" 2>/dev/null || { pb_warn "m2: cannot remove $cop"; return 1; }
+    rm -f "$cop" 2>/dev/null || { bootstrap_warn "m2: cannot remove $cop"; return 1; }
   fi
 
   rm -f "$(m2i_tpl)" "$(m2i_init)" 2>/dev/null

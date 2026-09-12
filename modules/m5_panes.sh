@@ -64,9 +64,9 @@
 # and one re-run. On the target — a fresh Mac — the only reachable gate is C5(a).
 #
 # ── WRITERS ──────────────────────────────────────────────────────────────────────────────────
-# `pb_settings_merge` is the one writer for JSON settings files; neither file here is one
+# `bootstrap_settings_merge` is the one writer for JSON settings files; neither file here is one
 # (a binary plist and a kitty text config), and it refuses anything whose first byte is not `{`.
-# The plist is written with PlistBuddy and read back with plutil through `pb_settings_get` —
+# The plist is written with PlistBuddy and read back with plutil through `bootstrap_settings_get` —
 # two different engines by construction. kitty's config is written as text and read back by
 # KITTY'S OWN PARSER, which is what makes the read-back independent rather than a grep for a
 # phrase we just wrote.
@@ -144,7 +144,7 @@ _m5_iterm_capable() {
   local bin="${1:-}/Contents/MacOS/iTerm2"
   [ -f "$bin" ] || return 1
   LC_ALL=C grep -qa "$M5_ITERM_BOGUS" "$bin" 2>/dev/null && {
-    pb_warn "m5_panes: the iTerm2 selector probe matched a selector that cannot exist; not trusting it"
+    bootstrap_warn "m5_panes: the iTerm2 selector probe matched a selector that cannot exist; not trusting it"
     return 1
   }
   LC_ALL=C grep -qa "$M5_ITERM_SELECTOR" "$bin" 2>/dev/null
@@ -166,19 +166,19 @@ _m5_conflict() {
   fi
   p="$(_m5_iterm_plist)"
   [ -f "$p" ] || return 1
-  pb_settings_type "$p" "GlobalKeyMap.$M5_ITERM_CHORD" >/dev/null 2>&1 && { printf 'plist'; return 0; }
+  bootstrap_settings_type "$p" "GlobalKeyMap.$M5_ITERM_CHORD" >/dev/null 2>&1 && { printf 'plist'; return 0; }
   while [ "$i" -lt 64 ]; do
-    pb_settings_type "$p" "New Bookmarks.$i" >/dev/null 2>&1 || break
-    pb_settings_type "$p" "New Bookmarks.$i.Keyboard Map.$M5_ITERM_CHORD" >/dev/null 2>&1 \
+    bootstrap_settings_type "$p" "New Bookmarks.$i" >/dev/null 2>&1 || break
+    bootstrap_settings_type "$p" "New Bookmarks.$i.Keyboard Map.$M5_ITERM_CHORD" >/dev/null 2>&1 \
       && { printf 'plist'; return 0; }
     i=$((i + 1))
   done
   return 1
 }
 
-# _m5_iterm_verify — the read-back. plutil via pb_settings_get; PlistBuddy wrote it.
+# _m5_iterm_verify — the read-back. plutil via bootstrap_settings_get; PlistBuddy wrote it.
 # 🚨 MEASURED, and the reason every plist read here passes `raw` rather than taking
-# pb_settings_get's DEFAULT of `json`: plutil serialises the WHOLE FILE to the destination
+# bootstrap_settings_get's DEFAULT of `json`: plutil serialises the WHOLE FILE to the destination
 # format before it extracts, so one value anywhere in the plist that JSON cannot represent
 # fails the extraction of an unrelated, purely-string key:
 #     $ plutil -extract NSUserKeyEquivalents json -o - ~/Library/Preferences/com.googlecode.iterm2.plist
@@ -188,18 +188,18 @@ _m5_conflict() {
 # minimal reproduction is a <data> blob: add one to a two-key fixture and the same json
 # extract flips from `{"Select Next Tab":"@]"}` rc 0 to that sentence, rc 1. So `json` here
 # would be a permanent, file-wide false negative that names the key it was not about — and for
-# the same reason pb_json_ok, which runs `plutil -convert json`, must never be pointed at this
+# the same reason bootstrap_json_ok, which runs `plutil -convert json`, must never be pointed at this
 # file. `raw` is right for these values anyway: they are scalars, and plutil cannot render a
 # top-level scalar as JSON at all (pb-lib's own trap 5).
 _m5_iterm_verify() {
   local p v rc
   p="$(_m5_iterm_plist)"
   [ -f "$p" ] || return 1
-  v="$(pb_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_ARRANGE" raw)"; rc=$?
+  v="$(bootstrap_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_ARRANGE" raw)"; rc=$?
   [ "$rc" -eq 0 ] || return 1
   [ "$v" = "$M5_KEYEQ" ] || return 1
   # The stock occupant must have been vacated. Absent means it still holds Cmd+Shift+E.
-  v="$(pb_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_TIMESTAMPS" raw)"; rc=$?
+  v="$(bootstrap_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_TIMESTAMPS" raw)"; rc=$?
   [ "$rc" -eq 0 ] || return 1
   [ "$v" = "$M5_KEYEQ" ] && return 1
   return 0
@@ -227,20 +227,20 @@ _m5_iterm_install() {
   p="$(_m5_iterm_plist)"
   _m5_iterm_verify && return 0                    # already correct: do not open it for writing
   mkdir -p "$(dirname "$p")" 2>/dev/null
-  pb_backup "$p"
+  bootstrap_backup "$p"
   [ -f "$p" ] && _m5_is_bplist "$p" && was_bin=1
   "$M5_PLISTBUDDY" -c "Add :NSUserKeyEquivalents dict" "$p" >/dev/null 2>&1   # rc 1 if it exists
   _m5_pb_set "$p" "$M5_ITERM_ARRANGE" "$M5_KEYEQ" || {
-    pb_warn "m5_panes: could not write NSUserKeyEquivalents:$M5_ITERM_ARRANGE"; return 1; }
+    bootstrap_warn "m5_panes: could not write NSUserKeyEquivalents:$M5_ITERM_ARRANGE"; return 1; }
   # R1: "" vacates the chord. Only write it if the incumbent still holds Cmd+Shift+E — an
   # operator who moved it somewhere else is left alone.
   local cur rc
-  cur="$(pb_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_TIMESTAMPS" raw)"; rc=$?
+  cur="$(bootstrap_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_TIMESTAMPS" raw)"; rc=$?
   if [ "$rc" -ne 0 ] || [ "$cur" = "$M5_KEYEQ" ]; then
     _m5_pb_set "$p" "$M5_ITERM_TIMESTAMPS" '' || {
-      pb_warn "m5_panes: could not vacate Cmd+Shift+E from $M5_ITERM_TIMESTAMPS"; return 1; }
+      bootstrap_warn "m5_panes: could not vacate Cmd+Shift+E from $M5_ITERM_TIMESTAMPS"; return 1; }
   fi
-  [ "$was_bin" = 1 ] && "$PB_PLUTIL" -convert binary1 "$p" >/dev/null 2>&1
+  [ "$was_bin" = 1 ] && "$BOOTSTRAP_PLUTIL" -convert binary1 "$p" >/dev/null 2>&1
   return 0
 }
 
@@ -249,18 +249,18 @@ _m5_iterm_uninstall() {
   p="$(_m5_iterm_plist)"
   [ -f "$p" ] || return 0
   _m5_is_bplist "$p" && was_bin=1
-  v="$(pb_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_ARRANGE" raw)"; rc=$?
+  v="$(bootstrap_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_ARRANGE" raw)"; rc=$?
   if [ "$rc" -eq 0 ] && [ "$v" = "$M5_KEYEQ" ]; then
-    pb_backup "$p"
+    bootstrap_backup "$p"
     "$M5_PLISTBUDDY" -c "Delete :NSUserKeyEquivalents:'$M5_ITERM_ARRANGE'" "$p" >/dev/null 2>&1
   fi
   # Only our own value comes out. If they put a real shortcut there, it is theirs now.
-  v="$(pb_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_TIMESTAMPS" raw)"; rc=$?
+  v="$(bootstrap_settings_get "$p" "NSUserKeyEquivalents.$M5_ITERM_TIMESTAMPS" raw)"; rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$v" ]; then
-    pb_backup "$p"
+    bootstrap_backup "$p"
     "$M5_PLISTBUDDY" -c "Delete :NSUserKeyEquivalents:'$M5_ITERM_TIMESTAMPS'" "$p" >/dev/null 2>&1
   fi
-  [ "$was_bin" = 1 ] && "$PB_PLUTIL" -convert binary1 "$p" >/dev/null 2>&1
+  [ "$was_bin" = 1 ] && "$BOOTSTRAP_PLUTIL" -convert binary1 "$p" >/dev/null 2>&1
   return 0
 }
 
@@ -323,8 +323,8 @@ except Exception:
 print('PROBE=yes')
 print('CONFDIR=' + config_dir)
 for path, tag in (
-    (os.environ['PB_M5_CTL'], 'CTL'),
-    (os.environ['PB_M5_NEG'], 'NEG'),
+    (os.environ['KITTY_PROBE_CONTROL_CONF'], 'CTL'),
+    (os.environ['KITTY_PROBE_NEGATIVE_CONF'], 'NEG'),
     (os.path.join(config_dir, 'kitty.conf'), 'USR'),
 ):
     lay = []
@@ -361,7 +361,7 @@ _m5_kitty_probe() {                               # prints the KEY=VALUE block, 
   printf '%s\n%s\n' "$(_m5_kitty_layout_line 'stack')" 'map cmd+shift+e layout_action equalize' \
     > "$td/ctl/kitty.conf" 2>/dev/null
   : > "$td/neg/kitty.conf" 2>/dev/null
-  out="$(PB_M5_CTL="$td/ctl/kitty.conf" PB_M5_NEG="$td/neg/kitty.conf" \
+  out="$(KITTY_PROBE_CONTROL_CONF="$td/ctl/kitty.conf" KITTY_PROBE_NEGATIVE_CONF="$td/neg/kitty.conf" \
          "$kb" +runpy "$(_m5_kitty_py)" 2>/dev/null)"
   rc=$?
   rm -rf "$td" 2>/dev/null
@@ -398,7 +398,7 @@ _m5_kitty_verify() {
   local out
   _m5_kitty_ver_ok "$(_m5_kitty_bin)" || return 1
   out="$(_m5_kitty_probe)" || {
-    pb_warn "m5_panes: kitty's config probe could not run or failed its own control arms"
+    bootstrap_warn "m5_panes: kitty's config probe could not run or failed its own control arms"
     return 1
   }
   [ "$(_m5_field "$out" USR_LAYOUT0)" = splits ] || return 1
@@ -418,7 +418,7 @@ _m5_kitty_strip() {
   case "${ne:-0}" in ''|*[!0-9]*) ne=0 ;; esac
   [ "$nb" = 0 ] && [ "$ne" = 0 ] && return 0
   if [ "$nb" != 1 ] || [ "$ne" != 1 ]; then
-    pb_warn "m5_panes: $conf has $nb begin and $ne end markers; leaving it alone"
+    bootstrap_warn "m5_panes: $conf has $nb begin and $ne end markers; leaving it alone"
     return 1
   fi
   tmp="$(mktemp -t pbm5conf 2>/dev/null)" || return 1
@@ -436,13 +436,13 @@ _m5_kitty_install() {
   local conf out l0 eq layouts rest need_layout=0 need_map=0
   _m5_kitty_ver_ok "$(_m5_kitty_bin)" || return 1
   out="$(_m5_kitty_probe)" || {
-    pb_warn "m5_panes: kitty's own config parser did not answer, so this install cannot be verified"
+    bootstrap_warn "m5_panes: kitty's own config parser did not answer, so this install cannot be verified"
     return 1
   }
   conf="$(_m5_kitty_confpath "$out")"
   mkdir -p "$(dirname "$conf")" 2>/dev/null
   [ -f "$conf" ] || : > "$conf" 2>/dev/null
-  pb_backup "$conf"
+  bootstrap_backup "$conf"
   _m5_kitty_strip "$conf" || return 1             # then re-read: the answer changes without it
   out="$(_m5_kitty_probe)" || return 1
   l0="$(_m5_field "$out" USR_LAYOUT0)"
@@ -496,7 +496,7 @@ _m5_kitty_uninstall() {
   out="$(_m5_kitty_probe)" || out=""
   conf="$(_m5_kitty_confpath "$out")"
   [ -f "$conf" ] || return 0
-  pb_backup "$conf"
+  bootstrap_backup "$conf"
   _m5_kitty_strip "$conf"
 }
 

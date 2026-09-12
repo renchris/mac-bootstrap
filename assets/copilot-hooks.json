@@ -1,6 +1,6 @@
 {
   "_pb": {
-    "README": "THE WIRE TABLE. This file is the single source of truth for which lifecycle hooks are registered, under which event, on both agents. m3_hooks.sh READS _pb.wire and registers each row through pb_settings_merge (the one writer) — it never copies this file into place, so the _pb block never reaches a user's machine. The top-level hooks object below is the rendered Copilot envelope, kept so a human can see exactly what lands; verify_m3_hooks asserts it still agrees with _pb.wire, because two renderings of one table drift silently.",
+    "README": "THE WIRE TABLE. This file is the single source of truth for which lifecycle hooks are registered, under which event, on both agents. m3_hooks.sh READS _pb.wire and registers each row through bootstrap_settings_merge (the one writer) — it never copies this file into place, so the _pb block never reaches a user's machine. The top-level hooks object below is the rendered Copilot envelope, kept so a human can see exactly what lands; verify_m3_hooks asserts it still agrees with _pb.wire, because two renderings of one table drift silently.",
     "paths": {
       "claude": "$HOME/.claude/settings.json  (hooks.<Event>[].hooks[].command)",
       "copilot": "$HOME/.copilot/hooks/00-lifecycle.json  (hooks.<Event>[].bash)",
@@ -33,7 +33,7 @@
         "claude_matcher": "",
         "copilot_matcher": "",
         "timeout": 15,
-        "does": "Ledger + context-fill advisory + a BOUNDED auto-continue that may return decision:block. Bounded by stop_hook_active and a per-session counter (PB_STOP_MAX, default 3)."
+        "does": "Ledger + context-fill advisory + a BOUNDED auto-continue that may return decision:block. Bounded by stop_hook_active and a per-session counter (BOOTSTRAP_STOP_MAX, default 3)."
       },
       {
         "script": "pb-guard-write.sh",

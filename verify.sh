@@ -28,42 +28,42 @@
 
 set -u
 
-VF_HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || VF_HERE="."
-VF_STATE="$HOME/.mac-bootstrap"
-VF_RECEIPT="$VF_STATE/receipt.verify.json"
-VF_SELFTEST=1
-VF_ARGS=""
+VERIFY_HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || VERIFY_HERE="."
+VERIFY_STATE="$HOME/.mac-bootstrap"
+VERIFY_RECEIPT="$VERIFY_STATE/receipt.verify.json"
+VERIFY_SELFTEST=1
+VERIFY_ARGS=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-selftest) VF_SELFTEST=0 ;;
+    --no-selftest) VERIFY_SELFTEST=0 ;;
     --only)        [ $# -ge 2 ] || { printf 'verify: --only needs a module name\n' >&2; exit 30; }
-                   VF_ARGS="$VF_ARGS --only $2"; shift ;;
+                   VERIFY_ARGS="$VERIFY_ARGS --only $2"; shift ;;
     --help|-h)     sed -n '2,27p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)             printf 'verify: unknown argument: %s   (try --help)\n' "$1" >&2; exit 30 ;;
   esac
   shift
 done
 
-VF_BOOT="$VF_HERE/bootstrap.sh"
-VF_LIB="$VF_HERE/assets/hooks/pb-lib.sh"
-[ -r "$VF_LIB" ] || VF_LIB="$VF_STATE/assets/hooks/pb-lib.sh"
+VERIFY_BOOTSTRAP="$VERIFY_HERE/bootstrap.sh"
+VERIFY_LIB="$VERIFY_HERE/assets/hooks/pb-lib.sh"
+[ -r "$VERIFY_LIB" ] || VERIFY_LIB="$VERIFY_STATE/assets/hooks/pb-lib.sh"
 
-if [ ! -r "$VF_BOOT" ]; then
-  printf 'verify: bootstrap.sh is not beside this file (%s).\n' "$VF_HERE" >&2
+if [ ! -r "$VERIFY_BOOTSTRAP" ]; then
+  printf 'verify: bootstrap.sh is not beside this file (%s).\n' "$VERIFY_HERE" >&2
   printf '  Run it from a clone of the repo, or use:  bash bootstrap.sh --verify\n' >&2
   exit 30
 fi
 
 # ── 1. the control arm ───────────────────────────────────────────────────────────────────────
-if [ "$VF_SELFTEST" = 1 ]; then
-  if [ -r "$VF_LIB" ]; then
+if [ "$VERIFY_SELFTEST" = 1 ]; then
+  if [ -r "$VERIFY_LIB" ]; then
     printf 'control: pb-lib fixtures ... '
-    if VF_OUT="$(/bin/bash "$VF_LIB" --selftest 2>&1)"; then
-      printf '%s\n' "$(printf '%s' "$VF_OUT" | tail -1)"
+    if VERIFY_OUT="$(/bin/bash "$VERIFY_LIB" --selftest 2>&1)"; then
+      printf '%s\n' "$(printf '%s' "$VERIFY_OUT" | tail -1)"
     else
       printf 'FAILED\n'
-      printf '%s\n' "$VF_OUT" | grep -v '^  ok ' 
+      printf '%s\n' "$VERIFY_OUT" | grep -v '^  ok ' 
       printf '\nverify: the instrument failed its own fixtures, so any verdict it produced about\n' >&2
       printf '        your Mac would be meaningless. Nothing was verified.\n' >&2
       exit 30
@@ -76,31 +76,31 @@ fi
 
 # ── 2. the verdict, produced by the one implementation ───────────────────────────────────────
 printf '\n'
-# shellcheck disable=SC2086  # VF_ARGS is a deliberately word-split flag list
-/bin/bash "$VF_BOOT" --verify $VF_ARGS
-VF_RC=$?
+# shellcheck disable=SC2086  # VERIFY_ARGS is a deliberately word-split flag list
+/bin/bash "$VERIFY_BOOTSTRAP" --verify $VERIFY_ARGS
+VERIFY_RC=$?
 
 # ── 3. the render ────────────────────────────────────────────────────────────────────────────
-if [ -r "$VF_LIB" ] && [ -r "$VF_RECEIPT" ]; then
+if [ -r "$VERIFY_LIB" ] && [ -r "$VERIFY_RECEIPT" ]; then
   # shellcheck source=assets/hooks/pb-lib.sh
-  . "$VF_LIB" 2>/dev/null || true
+  . "$VERIFY_LIB" 2>/dev/null || true
   printf '\n%s\n' "----------------------------------------------------------------------"
-  vf_i=0; vf_gestures=""
-  while [ "$vf_i" -lt 64 ]; do
-    vf_m="$(pb_settings_get "$VF_RECEIPT" "modules.$vf_i.module" raw 2>/dev/null)" || break
-    [ -n "$vf_m" ] || break
-    vf_s="$(pb_settings_get "$VF_RECEIPT" "modules.$vf_i.state" raw 2>/dev/null)" || vf_s="?"
-    vf_n="$(pb_settings_get "$VF_RECEIPT" "modules.$vf_i.note" raw 2>/dev/null)" || vf_n=""
-    vf_g="$(pb_settings_get "$VF_RECEIPT" "modules.$vf_i.human_command" raw 2>/dev/null)" || vf_g=""
-    printf '%-16s %-12s %s\n' "$vf_m" "$vf_s" "$vf_n"
-    [ -n "$vf_g" ] && vf_gestures="$vf_gestures
-  $vf_g"
-    vf_i=$((vf_i + 1))
+  verify_i=0; verify_gestures=""
+  while [ "$verify_i" -lt 64 ]; do
+    verify_m="$(bootstrap_settings_get "$VERIFY_RECEIPT" "modules.$verify_i.module" raw 2>/dev/null)" || break
+    [ -n "$verify_m" ] || break
+    verify_s="$(bootstrap_settings_get "$VERIFY_RECEIPT" "modules.$verify_i.state" raw 2>/dev/null)" || verify_s="?"
+    verify_n="$(bootstrap_settings_get "$VERIFY_RECEIPT" "modules.$verify_i.note" raw 2>/dev/null)" || verify_n=""
+    verify_g="$(bootstrap_settings_get "$VERIFY_RECEIPT" "modules.$verify_i.human_command" raw 2>/dev/null)" || verify_g=""
+    printf '%-16s %-12s %s\n' "$verify_m" "$verify_s" "$verify_n"
+    [ -n "$verify_g" ] && verify_gestures="$verify_gestures
+  $verify_g"
+    verify_i=$((verify_i + 1))
   done
-  [ "$vf_i" = 0 ] && printf '(no modules recorded)\n'
-  if [ -n "$vf_gestures" ]; then
-    printf '\nThese are yours — each line is a command, executable as typed:%s\n' "$vf_gestures"
+  [ "$verify_i" = 0 ] && printf '(no modules recorded)\n'
+  if [ -n "$verify_gestures" ]; then
+    printf '\nThese are yours — each line is a command, executable as typed:%s\n' "$verify_gestures"
   fi
 fi
 
-exit "$VF_RC"
+exit "$VERIFY_RC"

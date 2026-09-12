@@ -51,7 +51,7 @@ it, see §7):
 
 ## 2. THE STATE MACHINE
 
-State lives on disk under `$PB_STATE_DIR/handoff/<id>/`, never in the driver process, so a
+State lives on disk under `$BOOTSTRAP_STATE_DIR/handoff/<id>/`, never in the driver process, so a
 `kill -9` mid-flight loses nothing.
 
 ```

@@ -93,16 +93,16 @@
 # that demanded Parakeet would convict a multilingual user forever. note_ says it instead.
 
 # ── seams. Every one has a default; none is required. ────────────────────────────────────────
-M7_NAME="${PB_M7_NAME:-voiceink-rewrite}"            # the derived model, and the VoiceInk picker entry
-M7_URL="${PB_M7_BASE_URL:-http://localhost:11434}"
-M7_DOMAIN="${PB_M7_DOMAIN:-com.prakashjoshipax.VoiceInk}"
-M7_TIMEOUT_S="${PB_M7_TIMEOUT_S:-15}"                # EnhancementTimeoutSeconds
+M7_NAME="${BOOTSTRAP_REWRITE_MODEL_NAME:-voiceink-rewrite}"            # the derived model, and the VoiceInk picker entry
+M7_URL="${MODEL_GATE_BASE_URL:-http://localhost:11434}"
+M7_DOMAIN="${BOOTSTRAP_REWRITE_MODEL_DOMAIN:-com.prakashjoshipax.VoiceInk}"
+M7_TIMEOUT_S="${BOOTSTRAP_REWRITE_MODEL_TIMEOUT_S:-15}"                # EnhancementTimeoutSeconds
 # The app whose running-ness blocks a preference write. A seam ONLY so the lifecycle can be
-# exercised on a machine where VoiceInk is open (it is paired with PB_M7_DOMAIN, which points the
+# exercised on a machine where VoiceInk is open (it is paired with BOOTSTRAP_REWRITE_MODEL_DOMAIN, which points the
 # writes at a throwaway domain). Pointing it at nothing on a real machine does not manufacture a
 # green: VoiceInk would rewrite the domain on quit, the next verify_ would read the old value
 # back, and the module would return to NEEDS_HUMAN.
-M7_APP="${PB_M7_APP_PROCESS:-VoiceInk}"
+M7_APP="${BOOTSTRAP_REWRITE_MODEL_APP_PROCESS:-VoiceInk}"
 M7_CURL=/usr/bin/curl
 M7_DEFAULTS=/usr/bin/defaults
 M7_PGREP=/usr/bin/pgrep
@@ -134,7 +134,7 @@ m7_brew() {
 # m7-cache-* are raw API responses, kept only so the caller can parse fields out of them; they
 # are the ONLY files that differ between two consecutive runs (ollama stamps modified_at into
 # every /api/tags reply), and nothing reads them across runs.
-m7_state() { printf '%s/%s' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}" "$1"; }
+m7_state() { printf '%s/%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}" "$1"; }
 
 # m7_mem_gb — unified memory in whole GB, or 0 when sysctl cannot say. 0 is NOT "small": it is
 # unknown, and the tier rule treats unknown as "do not guess", which is the same branch as 8 GB.
@@ -150,7 +150,7 @@ m7_mem_gb() {
 # inform it.
 m7_base() {
   local m
-  m="${PB_M7_MODEL:-${PB_MODEL:-}}"
+  m="${BOOTSTRAP_MODEL:-${BOOTSTRAP_MODEL:-}}"
   [ -n "$m" ] && { printf '%s' "$m"; return 0; }
   [ "$(m7_mem_gb)" -ge 12 ] && { printf 'qwen3:8b'; return 0; }
   return 0
@@ -167,43 +167,43 @@ m7_forbidden() {
 
 # ── the ollama HTTP API. Every read-back goes through this, and NEVER through the `ollama` CLI
 #    that wrote the model — two engines by construction. Parsing is plutil-only, for the same
-#    reason pb_settings_get is: it must work on a Mac with no jq. ─────────────────────────────
+#    reason bootstrap_settings_get is: it must work on a Mac with no jq. ─────────────────────────────
 
 # m7_api_post <path> <body> <outfile> — rc 0 iff curl succeeded AND the reply parses as JSON.
 m7_api_post() {
   local p="$1" body="$2" out="$3" rc
-  "$M7_CURL" -sS -m "${PB_M7_HTTP_TIMEOUT:-30}" -H 'Content-Type: application/json' \
+  "$M7_CURL" -sS -m "${BOOTSTRAP_REWRITE_MODEL_HTTP_TIMEOUT:-30}" -H 'Content-Type: application/json' \
     -d "$body" "$M7_URL$p" >"$out" 2>/dev/null
   rc=$?
   [ $rc -eq 0 ] || return 1
-  pb_json_ok "$out" || return 1
+  bootstrap_json_ok "$out" || return 1
   return 0
 }
 m7_api_get() {
   local p="$1" out="$2" rc
-  "$M7_CURL" -sS -m "${PB_M7_HTTP_TIMEOUT:-30}" "$M7_URL$p" >"$out" 2>/dev/null
+  "$M7_CURL" -sS -m "${BOOTSTRAP_REWRITE_MODEL_HTTP_TIMEOUT:-30}" "$M7_URL$p" >"$out" 2>/dev/null
   rc=$?
   [ $rc -eq 0 ] || return 1
-  pb_json_ok "$out" || return 1
+  bootstrap_json_ok "$out" || return 1
   return 0
 }
 
 # m7_field <file> <keypath> — the library's own read-back, pinned to `raw`. NOT a second
-# implementation: pb_settings_get already handles the trap that matters here, which is that
+# implementation: bootstrap_settings_get already handles the trap that matters here, which is that
 # `plutil -extract` writes its FAILURE MESSAGE TO STDOUT, so a reader that forwards stdout
 # blindly hands its caller an error sentence where a value belongs. The wrapper exists only to
 # fix the format argument at every call site — an ollama reply is a JSON document and every
 # field this module reads out of one is a scalar.
-m7_field() { pb_settings_get "${1:-}" "${2:-}" raw; }
+m7_field() { bootstrap_settings_get "${1:-}" "${2:-}" raw; }
 
 m7_server_up() { "$M7_CURL" -fsS -m 5 "$M7_URL/api/version" >/dev/null 2>&1; }
 
 # m7_show <model> <outfile> — POST /api/show. rc 1 when the model is not there.
 m7_show() {
-  # pb_json_escape, not string interpolation: M7_NAME arrives from a seam and a bare " in it
+  # bootstrap_json_escape, not string interpolation: M7_NAME arrives from a seam and a bare " in it
   # would produce a body the server rejects with an error this function would then read as
   # "the model is not there".
-  m7_api_post /api/show "{\"model\":\"$(pb_json_escape "$1")\"}" "$2" || return 1
+  m7_api_post /api/show "{\"model\":\"$(bootstrap_json_escape "$1")\"}" "$2" || return 1
   m7_field "$2" details >/dev/null 2>&1 || return 1
   return 0
 }
@@ -246,7 +246,7 @@ m7_params_ok() {
 }
 
 # ── VoiceInk preferences ─────────────────────────────────────────────────────────────────────
-# `defaults`, not pb_settings_merge: that function is the one writer for JSON settings FILES and
+# `defaults`, not bootstrap_settings_merge: that function is the one writer for JSON settings FILES and
 # structurally refuses anything whose first byte is not `{` — this domain is a binary plist owned
 # by cfprefsd. The read-back is `defaults read`, deliberately NOT plutil on the .plist: cfprefsd
 # holds the authoritative copy and the file on disk can lag a write by an unbounded interval, so
@@ -277,7 +277,7 @@ m7_cloud_key_present() {
            openRouterAPIKey xaiAPIKey; do
     m7_pref_exists "LocalKeychain_$k" && return 0
   done
-  if [ -x /usr/bin/security ] && [ -z "${PB_M7_NO_KEYCHAIN_PROBE:-}" ]; then
+  if [ -x /usr/bin/security ] && [ -z "${BOOTSTRAP_REWRITE_MODEL_NO_KEYCHAIN_PROBE:-}" ]; then
     for k in geminiAPIKey openAIAPIKey anthropicAPIKey; do
       # metadata only — no -w, so no secret is read and no unlock dialog is raised
       /usr/bin/security find-generic-password -s "$M7_DOMAIN" -a "$k" >/dev/null 2>&1 && return 0
@@ -308,13 +308,13 @@ m7_receipt_base() {
 # clone, otherwise fetched once into the state dir at the release pin. Never writes in the repo.
 m7_asset() {
   local n="$1" dest code
-  if [ -n "${PB_ASSETS:-}" ] && [ -r "$PB_ASSETS/$n" ]; then printf '%s' "$PB_ASSETS/$n"; return 0; fi
+  if [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -r "$BOOTSTRAP_ASSETS/$n" ]; then printf '%s' "$BOOTSTRAP_ASSETS/$n"; return 0; fi
   dest="$(m7_state "$n")"
   [ -r "$dest" ] && { printf '%s' "$dest"; return 0; }
-  case "${PB_PIN:-}" in
+  case "${BOOTSTRAP_PIN:-}" in
     ''|__PIN_SHA__|main|master|HEAD) return 1 ;;    # a moving ref is not a pin; refuse to fetch
   esac
-  code="$("$M7_CURL" -sS -L -o "$dest.part" -w '%{http_code}' "${PB_RAW:-}/assets/$n" 2>/dev/null)" || code=""
+  code="$("$M7_CURL" -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$n" 2>/dev/null)" || code=""
   if [ "$code" = "200" ] && [ -s "$dest.part" ]; then
     mv "$dest.part" "$dest" 2>/dev/null && { printf '%s' "$dest"; return 0; }
   fi
@@ -350,8 +350,8 @@ profile_m7_model() { printf '%s' 'standard'; }
 
 verify_m7_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
-  pb_defaults_home_ok || return 1
+  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  bootstrap_defaults_home_ok || return 1
   local show want got sel t
   m7_machine_ready || return 1
 
@@ -362,7 +362,7 @@ verify_m7_model() {
   got="$(m7_field "$show" details.parent_model)" || got=""
   want="$(m7_receipt_base)" || want=""
   [ -n "$got" ] && [ -n "$want" ] && [ "$got" = "$want" ] || return 1
-  if [ -n "${PB_M7_MODEL:-${PB_MODEL:-}}" ] && [ "${PB_M7_MODEL:-${PB_MODEL:-}}" != "$got" ]; then
+  if [ -n "${BOOTSTRAP_MODEL:-${BOOTSTRAP_MODEL:-}}" ] && [ "${BOOTSTRAP_MODEL:-${BOOTSTRAP_MODEL:-}}" != "$got" ]; then
     return 1
   fi
 
@@ -378,10 +378,10 @@ verify_m7_model() {
   # An optional live re-measurement. Off by default because it costs a model load, and the
   # receipt is already bound to the digest; on when you want the end-to-end answer rather than
   # the recorded one.
-  if [ -n "${PB_M7_VERIFY_INFERENCE:-}" ]; then
+  if [ -n "${BOOTSTRAP_REWRITE_MODEL_VERIFY_INFERENCE:-}" ]; then
     local g
     g="$(m7_asset model-gate.sh)" || return 1
-    PB_M7_MODEL="$M7_NAME" PB_M7_BASE_URL="$M7_URL" /bin/bash "$g" --runs 1 >/dev/null 2>&1 || return 1
+    BOOTSTRAP_MODEL="$M7_NAME" MODEL_GATE_BASE_URL="$M7_URL" /bin/bash "$g" --runs 1 >/dev/null 2>&1 || return 1
   fi
   return 0
 }
@@ -417,15 +417,15 @@ m7_pending() {
 
 gate_m7_model() {
   # A sandboxed HOME is a DECISION, not a bug: `defaults` would escape it and hit the real
-  # domain, so pb_defaults_home_ok refuses. Reported through gate_ so it reads NEEDS_HUMAN
+  # domain, so bootstrap_defaults_home_ok refuses. Reported through gate_ so it reads NEEDS_HUMAN
   # rather than FAILED — FAILED sends the reader to the log for a defect that is not there.
-  pb_defaults_home_ok >/dev/null 2>&1 || return 0
+  bootstrap_defaults_home_ok >/dev/null 2>&1 || return 0
   [ "$(m7_pending)" = NONE ] && return 1
   return 0
 }
 
 note_m7_model() {
-  if ! pb_defaults_home_ok >/dev/null 2>&1; then
+  if ! bootstrap_defaults_home_ok >/dev/null 2>&1; then
     printf 'this run has a sandboxed HOME ($HOME is not your real home), and `defaults` ignores $HOME — writing would hit your REAL preferences. Nothing was written.'
     return 0
   fi
@@ -447,8 +447,8 @@ note_m7_model() {
 }
 
 gesture_m7_model() {
-  if ! pb_defaults_home_ok >/dev/null 2>&1; then
-    printf 'run it from your own account (no HOME override), or set PB_ALLOW_FOREIGN_DEFAULTS=1 if you truly mean to write the real domain'
+  if ! bootstrap_defaults_home_ok >/dev/null 2>&1; then
+    printf 'run it from your own account (no HOME override), or set BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1 if you truly mean to write the real domain'
     return 0
   fi
   local root
@@ -456,8 +456,8 @@ gesture_m7_model() {
     HOMEBREW)
       printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n' ;;
     DECIDE)
-      if [ -n "${PB_ASSETS:-}" ]; then
-        root="$(dirname "$PB_ASSETS")"
+      if [ -n "${BOOTSTRAP_ASSETS:-}" ]; then
+        root="$(dirname "$BOOTSTRAP_ASSETS")"
         [ -r "$root/bootstrap.sh" ] && { printf 'bash %s/bootstrap.sh --only m7_model --bench qwen3.5:4b\n' "$root"; return 0; }
       fi
       printf 'bash bootstrap.sh --only m7_model --bench qwen3.5:4b\n' ;;
@@ -473,13 +473,13 @@ gesture_m7_model() {
 
 install_m7_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: pb_defaults_home_ok)
-  pb_defaults_home_ok || return 1
+  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  bootstrap_defaults_home_ok || return 1
   local base ollama brew mf rendered show dg g rc waited sel t prev
 
   base="$(m7_base)"
   if [ -z "$base" ]; then
-    pb_warn "m7: $(m7_mem_gb) GB of unified memory and no measured model at that size — refusing to guess. Run --bench."
+    bootstrap_warn "m7: $(m7_mem_gb) GB of unified memory and no measured model at that size — refusing to guess. Run --bench."
     return 2
   fi
   # A model tag goes into a sed replacement and into a shell word below. ollama tags are
@@ -487,23 +487,23 @@ install_m7_model() {
   # handing to sed — where `&` means "the matched text" and `|` would end the s-command.
   case "$base" in
     *[!A-Za-z0-9._:/-]*)
-      pb_warn "m7: refusing base '$base' — that is not a well-formed ollama model tag"
+      bootstrap_warn "m7: refusing base '$base' — that is not a well-formed ollama model tag"
       return 2 ;;
   esac
   if m7_forbidden "$base"; then
-    pb_warn "m7: refusing base '$base'. Measured 82-156 s per call and untagged prose reasoning that VoiceInk's <think> filter cannot strip, so the reasoning is pasted into the document. Use --bench to re-measure it if you want to challenge that."
+    bootstrap_warn "m7: refusing base '$base'. Measured 82-156 s per call and untagged prose reasoning that VoiceInk's <think> filter cannot strip, so the reasoning is pasted into the document. Use --bench to re-measure it if you want to challenge that."
     return 2
   fi
 
   # 1. ollama ─────────────────────────────────────────────────────────────────────────────────
   if ! ollama="$(m7_ollama)"; then
-    brew="$(m7_brew)" || { pb_warn "m7: no ollama and no brew"; return 2; }
+    brew="$(m7_brew)" || { bootstrap_warn "m7: no ollama and no brew"; return 2; }
     printf 'm7: installing ollama via Homebrew\n'
-    "$brew" install ollama || pb_warn "m7: brew install ollama exited non-zero; checking anyway"
-    ollama="$(m7_ollama)" || { pb_warn "m7: ollama is still not on disk after brew install"; return 2; }
+    "$brew" install ollama || bootstrap_warn "m7: brew install ollama exited non-zero; checking anyway"
+    ollama="$(m7_ollama)" || { bootstrap_warn "m7: ollama is still not on disk after brew install"; return 2; }
   fi
   # Executed, not assumed: an installer's exit code is never the verdict.
-  "$ollama" --version >/dev/null 2>&1 || { pb_warn "m7: $ollama will not run"; return 2; }
+  "$ollama" --version >/dev/null 2>&1 || { bootstrap_warn "m7: $ollama will not run"; return 2; }
 
   # 2. the server ─────────────────────────────────────────────────────────────────────────────
   if ! m7_server_up; then
@@ -525,13 +525,13 @@ install_m7_model() {
       waited=$((waited + 1))
     done
   fi
-  m7_server_up || { pb_warn "m7: no ollama server answering at $M7_URL after 30 s"; return 2; }
+  m7_server_up || { bootstrap_warn "m7: no ollama server answering at $M7_URL after 30 s"; return 2; }
 
   # 3. the base model ─────────────────────────────────────────────────────────────────────────
   if ! m7_model_present "$base"; then
     printf 'm7: pulling %s — this is the only network step, and it is several GB\n' "$base"
-    "$ollama" pull "$base" || { pb_warn "m7: ollama pull $base failed"; return 2; }
-    m7_model_present "$base" || { pb_warn "m7: $base is still absent after the pull"; return 2; }
+    "$ollama" pull "$base" || { bootstrap_warn "m7: ollama pull $base failed"; return 2; }
+    m7_model_present "$base" || { bootstrap_warn "m7: $base is still absent after the pull"; return 2; }
   fi
 
   # 4. the derived model ──────────────────────────────────────────────────────────────────────
@@ -540,19 +540,19 @@ install_m7_model() {
      && [ "$(m7_field "$show" details.parent_model 2>/dev/null)" = "$base" ]; then
     printf 'm7: %s already derives from %s with the right parameters\n' "$M7_NAME" "$base"
   else
-    mf="$(m7_asset voiceink-rewrite.Modelfile)" || { pb_warn "m7: cannot find or fetch assets/voiceink-rewrite.Modelfile"; return 2; }
+    mf="$(m7_asset voiceink-rewrite.Modelfile)" || { bootstrap_warn "m7: cannot find or fetch assets/voiceink-rewrite.Modelfile"; return 2; }
     rendered="$(m7_state voiceink-rewrite.Modelfile)"
     # The asset is the single source of the PARAMETER block; only FROM is rewritten, so a tier
     # change cannot silently drift from the parameters that were measured.
-    sed "s|^FROM .*|FROM $base|" "$mf" >"$rendered" || { pb_warn "m7: could not render the Modelfile"; return 2; }
+    sed "s|^FROM .*|FROM $base|" "$mf" >"$rendered" || { bootstrap_warn "m7: could not render the Modelfile"; return 2; }
     # Compared as a STRING, not as a regex: a tag like qwen3.5:9b contains a `.`, and
     # `grep "^FROM qwen3.5:9b$"` would happily match FROM qwen3x5:9b.
     [ "$(sed -n 's/^FROM //p' "$rendered" | head -1)" = "$base" ] \
-      || { pb_warn "m7: the rendered Modelfile does not say FROM $base"; return 2; }
+      || { bootstrap_warn "m7: the rendered Modelfile does not say FROM $base"; return 2; }
     printf 'm7: creating %s from %s\n' "$M7_NAME" "$base"
-    "$ollama" create "$M7_NAME" -f "$rendered" || { pb_warn "m7: ollama create $M7_NAME failed"; return 2; }
-    m7_show "$M7_NAME" "$show" || { pb_warn "m7: $M7_NAME is absent after create"; return 2; }
-    m7_params_ok "$show" || { pb_warn "m7: $M7_NAME exists but the server does not report num_ctx 4096 / temperature 0.2"; return 2; }
+    "$ollama" create "$M7_NAME" -f "$rendered" || { bootstrap_warn "m7: ollama create $M7_NAME failed"; return 2; }
+    m7_show "$M7_NAME" "$show" || { bootstrap_warn "m7: $M7_NAME is absent after create"; return 2; }
+    m7_params_ok "$show" || { bootstrap_warn "m7: $M7_NAME exists but the server does not report num_ctx 4096 / temperature 0.2"; return 2; }
   fi
 
   # 5. the acceptance gate — BEFORE anything is called done ───────────────────────────────────
@@ -562,22 +562,22 @@ install_m7_model() {
   # Idempotency: a PASS is bound to the model's DIGEST, so if the receipt already names these
   # exact bytes there is nothing new to measure and re-running costs a model load for no
   # information. Anything that changes the model changes the digest and the gate runs again.
-  dg="$(m7_digest "$M7_NAME")" || { pb_warn "m7: cannot read the digest of $M7_NAME"; return 2; }
+  dg="$(m7_digest "$M7_NAME")" || { bootstrap_warn "m7: cannot read the digest of $M7_NAME"; return 2; }
   if [ "$dg" = "$(m7_receipt_digest 2>/dev/null)" ]; then
     printf 'm7: %s is already certified at this digest — the gate is not re-run\n' "$M7_NAME"
   else
-    g="$(m7_asset model-gate.sh)" || { pb_warn "m7: cannot find or fetch assets/model-gate.sh"; return 2; }
+    g="$(m7_asset model-gate.sh)" || { bootstrap_warn "m7: cannot find or fetch assets/model-gate.sh"; return 2; }
     printf 'm7: running the acceptance gate against %s\n' "$M7_NAME"
-    PB_M7_MODEL="$M7_NAME" PB_M7_BASE_URL="$M7_URL" PB_M7_MAX_MS="$((M7_TIMEOUT_S * 1000))" \
+    BOOTSTRAP_MODEL="$M7_NAME" MODEL_GATE_BASE_URL="$M7_URL" MODEL_GATE_MAX_MS="$((M7_TIMEOUT_S * 1000))" \
       /bin/bash "$g"
     rc=$?
     case "$rc" in
       0) : ;;
-      1) pb_warn "m7: $M7_NAME FAILED the acceptance gate; removing it rather than leaving a bad rewrite engine wired up"
+      1) bootstrap_warn "m7: $M7_NAME FAILED the acceptance gate; removing it rather than leaving a bad rewrite engine wired up"
          "$ollama" rm "$M7_NAME" >/dev/null 2>&1 || true
          rm -f "$(m7_state m7-gate.receipt)" 2>/dev/null || true
          return 3 ;;
-      *) pb_warn "m7: the acceptance gate could not run (rc $rc) — nothing was measured, so nothing is certified"
+      *) bootstrap_warn "m7: the acceptance gate could not run (rc $rc) — nothing was measured, so nothing is certified"
          return 4 ;;
     esac
   fi
@@ -601,7 +601,7 @@ install_m7_model() {
   # provider API keys. ollamaSelectedModel is deliberately NOT written — see the header.
   t="$(m7_pref EnhancementTimeoutSeconds)" || t=""
   if [ "$t" != "$M7_TIMEOUT_S" ] && m7_voiceink_running; then
-    pb_warn "m7: VoiceInk is running; it rewrites its preferences on quit, so the ${M7_TIMEOUT_S}s timeout was not written (it currently reads '${t:-absent}')"
+    bootstrap_warn "m7: VoiceInk is running; it rewrites its preferences on quit, so the ${M7_TIMEOUT_S}s timeout was not written (it currently reads '${t:-absent}')"
   elif m7_voiceink_running; then
     : # already correct, and a running app is only a problem when something must be written
   else
@@ -609,12 +609,12 @@ install_m7_model() {
       prev="$(m7_state m7-timeout.prev)"
       [ -f "$prev" ] || printf '%s\n' "${t:-absent}" >"$prev"    # once, so uninstall can undo it
       "$M7_DEFAULTS" write "$M7_DOMAIN" EnhancementTimeoutSeconds -int "$M7_TIMEOUT_S" 2>/dev/null \
-        || pb_warn "m7: could not write EnhancementTimeoutSeconds"
+        || bootstrap_warn "m7: could not write EnhancementTimeoutSeconds"
     fi
     # Harmless and idempotent: it pre-fills the field the human is about to Connect through.
     m7_pref_exists ollamaBaseURL || "$M7_DEFAULTS" write "$M7_DOMAIN" ollamaBaseURL -string "$M7_URL" 2>/dev/null || true
     t="$(m7_pref EnhancementTimeoutSeconds)" || t=""
-    [ "$t" = "$M7_TIMEOUT_S" ] || { pb_warn "m7: EnhancementTimeoutSeconds reads back as '${t:-absent}'"; return 2; }
+    [ "$t" = "$M7_TIMEOUT_S" ] || { bootstrap_warn "m7: EnhancementTimeoutSeconds reads back as '${t:-absent}'"; return 2; }
   fi
 
   # 7. the one step no script can take ────────────────────────────────────────────────────────
@@ -640,11 +640,11 @@ install_m7_model() {
 uninstall_m7_model() {
   local ollama prev
   if ollama="$(m7_ollama)" && m7_server_up && m7_model_present "$M7_NAME"; then
-    "$ollama" rm "$M7_NAME" >/dev/null 2>&1 || pb_warn "m7: ollama rm $M7_NAME failed"
+    "$ollama" rm "$M7_NAME" >/dev/null 2>&1 || bootstrap_warn "m7: ollama rm $M7_NAME failed"
   fi
   # The BASE model is left alone unless asked: re-pulling several GB over someone's network is
   # not a reversal anybody wants by surprise, and other things on the machine may use it.
-  if [ -n "${PB_M7_UNINSTALL_BASE:-}" ] && ollama="$(m7_ollama)"; then
+  if [ -n "${BOOTSTRAP_REWRITE_MODEL_UNINSTALL_BASE:-}" ] && ollama="$(m7_ollama)"; then
     local b; b="$(m7_receipt_base)" || b=""
     [ -n "$b" ] && "$ollama" rm "$b" >/dev/null 2>&1 || true
   fi
@@ -689,7 +689,7 @@ uninstall_m7_model() {
 bench_m7_model() {
   local cand ollama tmpname mf rendered show g rc resident mem headroom gb hr
 
-  cand="${PB_M7_BENCH:-${PB_BENCH:-}}"
+  cand="${BOOTSTRAP_BENCH:-${BOOTSTRAP_BENCH:-}}"
   [ -n "$cand" ] || { printf 'bench: no candidate. Pass --bench <model tag>, e.g. --bench qwen3.5:4b\n'; return 1; }
 
   ollama="$(m7_ollama)" || { printf 'bench: ollama is not installed — nothing was measured.\n'; return 1; }
@@ -733,8 +733,8 @@ bench_m7_model() {
   g="$(m7_asset model-gate.sh)" || { printf 'bench: cannot find assets/model-gate.sh\n'; return 1; }
   printf 'bench: %s -> derived %s, running the same acceptance gate the installer uses\n' "$cand" "$tmpname"
   printf '\n'
-  PB_M7_MODEL="$tmpname" PB_M7_BASE_URL="$M7_URL" PB_M7_MAX_MS="$((M7_TIMEOUT_S * 1000))" \
-    PB_M7_GATE_RUNS="${PB_M7_GATE_RUNS:-5}" /bin/bash "$g"
+  BOOTSTRAP_MODEL="$tmpname" MODEL_GATE_BASE_URL="$M7_URL" MODEL_GATE_MAX_MS="$((M7_TIMEOUT_S * 1000))" \
+    MODEL_GATE_RUNS="${MODEL_GATE_RUNS:-5}" /bin/bash "$g"
   rc=$?
 
   # Resident memory is the binding constraint on a small Mac, and it is the number the tag's

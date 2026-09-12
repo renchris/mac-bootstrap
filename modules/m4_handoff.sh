@@ -2,11 +2,11 @@
 # m4_handoff — DELIVERABLE 2c: portable /handoff and self-recycle, END TO END, NO HUMAN.
 #
 # FIVE artifacts, and two of them are documents rather than programs:
-#   $PB_STATE_DIR/bin/agent-handoff            the verb: capture | status | fire | resume | doctor
-#   $PB_STATE_DIR/succession/{oracle,seed,driver-tmux,driver-kitty,driver-iterm2}.sh
+#   $BOOTSTRAP_STATE_DIR/bin/agent-handoff            the verb: capture | status | fire | resume | doctor
+#   $BOOTSTRAP_STATE_DIR/succession/{oracle,seed,driver-tmux,driver-kitty,driver-iterm2}.sh
 #                                              the engine: one oracle, one seeder, one driver per
 #                                              terminal behind ONE seam
-#   $PB_STATE_DIR/succession/README.md         the state machine, the invariant, the failure
+#   $BOOTSTRAP_STATE_DIR/succession/README.md         the state machine, the invariant, the failure
 #                                              taxonomy, and what is UNPROVEN
 #   $HOME/.claude/commands/handoff.md          a real typed /handoff in Claude Code
 #   $HOME/.copilot/skills/handoff/SKILL.md     the SAME bytes as a Copilot PERSONAL skill
@@ -59,7 +59,7 @@
 # between them and everything below re-derives what it needs.
 
 # ── constants, re-derived per verb because no state survives between them ───────────────────
-_m4_state()   { printf '%s' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}"; }
+_m4_state()   { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 _m4_bin()     { printf '%s/bin/agent-handoff' "$(_m4_state)"; }
 _m4_succ()    { printf '%s/succession' "$(_m4_state)"; }
 _m4_cmd()     { printf '%s/.claude/commands/handoff.md' "$HOME"; }
@@ -72,17 +72,17 @@ _m4_parts()   { printf 'oracle.sh seed.sh driver-tmux.sh driver-kitty.sh driver-
 # driver owns fetching), so it lives here, which is where the contract says it belongs.
 _m4_source() {
   local rel="${1:-}" c dest code
-  for c in "${PB_ASSETS:-}/$rel" "$(_m4_state)/assets/$rel"; do
+  for c in "${BOOTSTRAP_ASSETS:-}/$rel" "$(_m4_state)/assets/$rel"; do
     case "$c" in /*) : ;; *) continue ;; esac
     [ -r "$c" ] && { printf '%s' "$c"; return 0; }
   done
-  case "${PB_PIN:-}" in
+  case "${BOOTSTRAP_PIN:-}" in
     __PIN_SHA__|main|master|"") return 1 ;;          # a moving ref is not a pin; never fetch one
   esac
   command -v curl >/dev/null 2>&1 || return 1
   dest="$(_m4_state)/assets/$rel"
   mkdir -p "$(dirname "$dest")" 2>/dev/null || return 1
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${PB_RAW:-}/assets/$rel" 2>/dev/null)" || code=""
+  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$rel" 2>/dev/null)" || code=""
   if [ "$code" = "200" ] && [ -s "$dest.part" ]; then
     mv -f "$dest.part" "$dest" && { printf '%s' "$dest"; return 0; }
   fi
@@ -260,18 +260,18 @@ install_m4_handoff() {
 
   mkdir -p "$state/bin" "$state/handoff" "$succ" "$HOME/.claude/commands" \
            "$HOME/.copilot/skills/handoff" 2>/dev/null \
-    || { pb_warn "m4: cannot create the install directories"; return 1; }
+    || { bootstrap_warn "m4: cannot create the install directories"; return 1; }
 
   # 1. the mechanism
-  src="$(_m4_source agent-handoff)" || { pb_warn "m4: cannot find or fetch assets/agent-handoff"; return 1; }
-  cp -f "$src" "$bin.m4-tmp" 2>/dev/null || { pb_warn "m4: cannot stage $bin"; return 1; }
+  src="$(_m4_source agent-handoff)" || { bootstrap_warn "m4: cannot find or fetch assets/agent-handoff"; return 1; }
+  cp -f "$src" "$bin.m4-tmp" 2>/dev/null || { bootstrap_warn "m4: cannot stage $bin"; return 1; }
   chmod 755 "$bin.m4-tmp" 2>/dev/null
   # Stage, PROVE IT RUNS, then land it. An agent-handoff that cannot execute is worse than an
   # absent one: the Stop arm calls it every turn and a broken copy would fail open forever,
   # silently, exactly as if the fill were simply unknown.
   if ! "$bin.m4-tmp" --version >/dev/null 2>&1; then
     rm -f "$bin.m4-tmp" 2>/dev/null
-    pb_warn "m4: the staged agent-handoff does not execute — $bin left untouched"
+    bootstrap_warn "m4: the staged agent-handoff does not execute — $bin left untouched"
     return 1
   fi
   mv -f "$bin.m4-tmp" "$bin" 2>/dev/null || { rm -f "$bin.m4-tmp" 2>/dev/null; return 1; }
@@ -279,20 +279,20 @@ install_m4_handoff() {
   # 2. the succession engine. Each part is staged, PARSED, and only then landed — a driver that
   #    lands half-written fails after the successor exists, which is the worst moment for it.
   for p in $(_m4_parts); do
-    src="$(_m4_source "succession/$p")" || { pb_warn "m4: cannot find or fetch assets/succession/$p"; return 1; }
-    cp -f "$src" "$succ/$p.m4-tmp" 2>/dev/null || { pb_warn "m4: cannot stage $succ/$p"; return 1; }
+    src="$(_m4_source "succession/$p")" || { bootstrap_warn "m4: cannot find or fetch assets/succession/$p"; return 1; }
+    cp -f "$src" "$succ/$p.m4-tmp" 2>/dev/null || { bootstrap_warn "m4: cannot stage $succ/$p"; return 1; }
     case "$p" in
       *.sh)
         if ! /bin/bash -n "$succ/$p.m4-tmp" 2>/dev/null; then
           rm -f "$succ/$p.m4-tmp" 2>/dev/null
-          pb_warn "m4: the staged $p does not parse — $succ/$p left untouched"
+          bootstrap_warn "m4: the staged $p does not parse — $succ/$p left untouched"
           return 1
         fi
         chmod 755 "$succ/$p.m4-tmp" 2>/dev/null ;;
       *) chmod 644 "$succ/$p.m4-tmp" 2>/dev/null ;;
     esac
     mv -f "$succ/$p.m4-tmp" "$succ/$p" 2>/dev/null \
-      || { rm -f "$succ/$p.m4-tmp" 2>/dev/null; pb_warn "m4: cannot land $succ/$p"; return 1; }
+      || { rm -f "$succ/$p.m4-tmp" 2>/dev/null; bootstrap_warn "m4: cannot land $succ/$p"; return 1; }
   done
 
   # 3. pb-lib, where the installed agent-handoff looks for it.
@@ -301,7 +301,7 @@ install_m4_handoff() {
   #    implementations of one rule are two rules. $state/assets/hooks/ is the rail's OWN fallback
   #    location for the library, so this puts a copy where the rail already looks — it does not
   #    invent a path. Refreshed every run so a stale copy cannot outlive an upgrade.
-  lib="${PB_LIB:-}"
+  lib="${BOOTSTRAP_LIB:-}"
   if [ -n "$lib" ] && [ -r "$lib" ] && [ "$lib" != "$state/assets/hooks/pb-lib.sh" ]; then
     mkdir -p "$state/assets/hooks" 2>/dev/null && cp -f "$lib" "$state/assets/hooks/pb-lib.sh" 2>/dev/null
   fi
@@ -312,15 +312,15 @@ install_m4_handoff() {
   #    own repo — measured on the development box, a link into a live checkout — a plain `cp`
   #    silently rewrites a file in THAT repo instead of installing here. A clean-install Mac has
   #    no such link, which is exactly why this would have shipped unnoticed.
-  src="$(_m4_source handoff.md)" || { pb_warn "m4: cannot find or fetch assets/handoff.md"; return 1; }
+  src="$(_m4_source handoff.md)" || { bootstrap_warn "m4: cannot find or fetch assets/handoff.md"; return 1; }
   for p in "$cmd" "$skill"; do
     if [ -L "$p" ]; then
-      pb_warn "m4: $p is a symlink; replacing the LINK, not writing through it to $(readlink "$p" 2>/dev/null)"
+      bootstrap_warn "m4: $p is a symlink; replacing the LINK, not writing through it to $(readlink "$p" 2>/dev/null)"
       rm -f "$p" 2>/dev/null
     fi
   done
-  cp -f "$src" "$cmd"   2>/dev/null || { pb_warn "m4: cannot write $cmd"; return 1; }
-  cp -f "$src" "$skill" 2>/dev/null || { pb_warn "m4: cannot write $skill"; return 1; }
+  cp -f "$src" "$cmd"   2>/dev/null || { bootstrap_warn "m4: cannot write $cmd"; return 1; }
+  cp -f "$src" "$skill" 2>/dev/null || { bootstrap_warn "m4: cannot write $skill"; return 1; }
   chmod 644 "$cmd" "$skill" 2>/dev/null
   # Everything above LANDED — /handoff is installed and works. But if tmux is absent the
   # fault-tolerance guarantee is not there, and the contract's "an installer may DISCOVER a gate"

@@ -86,18 +86,18 @@ AH_SELF="${AH_SELF_DIR:-.}/$(basename "$0")"
 # HOME=/var/folders/…/proj vs root=/private/var/folders/…/proj, zero hits. Both spellings are
 # carried, and the first one that matches wins.
 AH_HOME_P="$(cd "$HOME" 2>/dev/null && pwd -P)" || AH_HOME_P="$HOME"
-PB_STATE_DIR="${PB_STATE_DIR:-$HOME/.mac-bootstrap}"
-AH_DIR="$PB_STATE_DIR/handoff"
+BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"
+AH_DIR="$BOOTSTRAP_STATE_DIR/handoff"
 AGENT_LAUNCH="${AGENT_LAUNCH:-claude}"
-PB_CTX_T="${PB_CTX_T:-70}"
-PB_PLUTIL=/usr/bin/plutil
+BOOTSTRAP_CONTEXT_THRESHOLD_PCT="${BOOTSTRAP_CONTEXT_THRESHOLD_PCT:-70}"
+BOOTSTRAP_PLUTIL=/usr/bin/plutil
 
 ah_say()  { printf '%s\n' "$*"; }
 ah_err()  { printf '%s\n' "$*" >&2; }
 
 # ── pb-lib, if it is reachable. ──────────────────────────────────────────────────────────────
 # The context-fill RULES (600 s freshness, a null is not 0, a float truncates, an absent window
-# is never imputed) live in pb_ctx_pct and are NOT re-implemented here. Two implementations of
+# is never imputed) live in bootstrap_ctx_pct and are NOT re-implemented here. Two implementations of
 # one rule is two rules. If the library cannot be found, `status` says UNKNOWN and names that as
 # the reason — which is the honest answer, not a degraded guess.
 AH_LIB=""
@@ -105,12 +105,12 @@ ah_load_lib() {
   [ -n "$AH_LIB" ] && return 0
   local c d
   d="${AH_SELF_DIR:-.}"
-  for c in "${PB_LIB:-}" "$PB_STATE_DIR/assets/hooks/pb-lib.sh" \
+  for c in "${BOOTSTRAP_LIB:-}" "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh" \
            "$d/../assets/hooks/pb-lib.sh" "$d/hooks/pb-lib.sh" "$d/pb-lib.sh"; do
     [ -n "$c" ] && [ -r "$c" ] || continue
     # shellcheck disable=SC1090  # resolved at runtime by design
     . "$c" >/dev/null 2>&1 || continue
-    command -v pb_ctx_pct >/dev/null 2>&1 || continue
+    command -v bootstrap_ctx_pct >/dev/null 2>&1 || continue
     AH_LIB="$c"; return 0
   done
   return 1
@@ -123,7 +123,7 @@ ah_load_lib() {
 ah_plist_raw() {
   local out rc
   [ -f "${1:-}" ] || return 1
-  out="$("$PB_PLUTIL" -extract "${2:-}" raw -o - "$1" 2>/dev/null)"
+  out="$("$BOOTSTRAP_PLUTIL" -extract "${2:-}" raw -o - "$1" 2>/dev/null)"
   rc=$?
   [ "$rc" -eq 0 ] || return 1
   printf '%s' "$out"
@@ -177,7 +177,7 @@ ah_bridge() { printf '%s/%s.md' "$AH_DIR" "$(ah_key "$(ah_root)")"; }
 ah_fill() {
   local want="${1:-}" dir f sid pct now mtime age n=0 newest=""
   ah_load_lib || { printf 'no-pb-lib'; return 1; }
-  dir="${PB_TELEMETRY_DIR:-/tmp/pb-telemetry}"
+  dir="${BOOTSTRAP_TELEMETRY_DIR:-/tmp/pb-telemetry}"
   [ -d "$dir" ] || { printf 'no-telemetry-dir'; return 1; }
   if [ -n "$want" ]; then
     [ -f "$dir/$want.json" ] || { printf 'no-row-for-session'; return 1; }
@@ -192,7 +192,7 @@ ah_fill() {
     [ -n "$newest" ] || { printf 'no-telemetry-rows'; return 1; }
   fi
   sid="${newest##*/}"; sid="${sid%.json}"
-  pct="$(pb_ctx_pct "$sid")" || pct=""
+  pct="$(bootstrap_ctx_pct "$sid")" || pct=""
   [ -n "$pct" ] || { printf 'stale-absent-or-null'; return 1; }
   now="$(date +%s 2>/dev/null)" || now=0
   mtime="$(ah_mtime "$newest")"
@@ -349,10 +349,10 @@ cmd_status() {
     pct="${out%%	*}"; out="${out#*	}"
     sid="${out%%	*}"; out="${out#*	}"
     age="${out%%	*}"; n="${out##*	}"
-    if [ "$pct" -ge "$PB_CTX_T" ]; then
-      ah_say "context  : ${pct}%  ->  RECYCLE NOW (>= ${PB_CTX_T}%) — capture, then fire"
+    if [ "$pct" -ge "$BOOTSTRAP_CONTEXT_THRESHOLD_PCT" ]; then
+      ah_say "context  : ${pct}%  ->  RECYCLE NOW (>= ${BOOTSTRAP_CONTEXT_THRESHOLD_PCT}%) — capture, then fire"
     else
-      ah_say "context  : ${pct}%  ->  keep working (threshold ${PB_CTX_T}%)"
+      ah_say "context  : ${pct}%  ->  keep working (threshold ${BOOTSTRAP_CONTEXT_THRESHOLD_PCT}%)"
     fi
     # The count is printed ONLY when it carries information. With one session there is nothing to
     # disambiguate, and an explicit --session read never counts at all — it printed "0 session(s)
@@ -388,7 +388,7 @@ cmd_status() {
 # THE SUCCESSION ENGINE
 #
 # State lives on DISK, never in this process, so a `kill -9` mid-flight loses nothing:
-#   $PB_STATE_DIR/handoff/<id>/
+#   $BOOTSTRAP_STATE_DIR/handoff/<id>/
 #     state.json     phase + every resolved input   (atomic: temp + rename(2))
 #     brief.md       the frozen brief, sha'd at plan and RE-VERIFIED immediately before launch
 #     prompt.txt     brief + the succession handshake — what the successor actually receives
@@ -415,8 +415,8 @@ AH_ENTRY="${AH_ENTRY:-fire}"   # which verb entered ah_succ_run — a fire may n
 ah_part() {
   local rel="${1:-}" c d
   d="${AH_SELF_DIR:-.}"
-  for c in "${AH_SUCCESSION_DIR:-}/$rel" "$PB_STATE_DIR/succession/$rel" \
-           "$PB_STATE_DIR/assets/succession/$rel" "$d/../assets/succession/$rel" \
+  for c in "${AH_SUCCESSION_DIR:-}/$rel" "$BOOTSTRAP_STATE_DIR/succession/$rel" \
+           "$BOOTSTRAP_STATE_DIR/assets/succession/$rel" "$d/../assets/succession/$rel" \
            "$d/succession/$rel" "$d/../succession/$rel"; do
     case "$c" in /*) : ;; *) continue ;; esac
     [ -r "$c" ] && { printf '%s' "$c"; return 0; }
@@ -445,7 +445,7 @@ ah_state_put() {
     LC_ALL=C awk 'NR>1{print p ","} {p=$0} END{if(NR)print p}' "$kv"
     printf '}\n'; } > "$tmp" 2>/dev/null || { rm -f "$kv" "$tmp"; return 1; }
   rm -f "$kv"
-  "$PB_PLUTIL" -convert json -o /dev/null -- "$tmp" >/dev/null 2>&1 \
+  "$BOOTSTRAP_PLUTIL" -convert json -o /dev/null -- "$tmp" >/dev/null 2>&1 \
     || { rm -f "$tmp"; ah_err "!! state.json would not parse — refusing to land it"; return 1; }
   mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 1; }
   return 0
@@ -1136,12 +1136,12 @@ cmd_recycle_due() {
   out="$(ah_fill "$sid")" || return 1
   pct="${out%%	*}"
   case "${pct:-}" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$pct" -ge "$PB_CTX_T" ] || return 1
+  [ "$pct" -ge "$BOOTSTRAP_CONTEXT_THRESHOLD_PCT" ] || return 1
   latch="$AH_DIR/recycle-latch.$(printf '%s' "$sid" | LC_ALL=C sed 's/[^A-Za-z0-9._-]/-/g')"
   [ -f "$latch" ] && return 1
   mkdir -p "$AH_DIR" 2>/dev/null || return 1
   : > "$latch" 2>/dev/null || return 1
-  printf 'Context is at %s%%, past the %s%% line. Persist what this context holds that the disk does not — a rejected approach and why, a measurement that contradicts the obvious reading — then run: agent-handoff capture "<the one next step>", edit the bridge it prints, and run agent-handoff fire. If you have already handed off or this is deliberate, say so in your closing message and stop. This fires at most once per session.' "$pct" "$PB_CTX_T"
+  printf 'Context is at %s%%, past the %s%% line. Persist what this context holds that the disk does not — a rejected approach and why, a measurement that contradicts the obvious reading — then run: agent-handoff capture "<the one next step>", edit the bridge it prints, and run agent-handoff fire. If you have already handed off or this is deliberate, say so in your closing message and stop. This fires at most once per session.' "$pct" "$BOOTSTRAP_CONTEXT_THRESHOLD_PCT"
   return 0
 }
 
@@ -1161,9 +1161,9 @@ cmd_selftest() {
   # real home the arm silently passes for the wrong reason (the bridge lands in /var/folders, the
   # $HOME branch is never taken, and the assertion measures mktemp rather than the substitution).
   HOME="$T/home"; export HOME
-  PB_STATE_DIR="$HOME/.mac-bootstrap"; AH_DIR="$PB_STATE_DIR/handoff"
-  PB_TELEMETRY_DIR="$T/tel"; export PB_TELEMETRY_DIR
-  mkdir -p "$HOME/work" "$PB_TELEMETRY_DIR"
+  BOOTSTRAP_STATE_DIR="$HOME/.mac-bootstrap"; AH_DIR="$BOOTSTRAP_STATE_DIR/handoff"
+  BOOTSTRAP_TELEMETRY_DIR="$T/tel"; export BOOTSTRAP_TELEMETRY_DIR
+  mkdir -p "$HOME/work" "$BOOTSTRAP_TELEMETRY_DIR"
   cd "$HOME/work" || return 30
 
   # 1. capture creates, and the bridge carries the sections a successor needs.
@@ -1209,38 +1209,38 @@ cmd_selftest() {
   case "$out" in *"context  : UNKNOWN"*) ah_ok "no telemetry ⇒ the literal UNKNOWN (never 0%)" ;;
                  *) ah_bad "no telemetry did not read UNKNOWN" "$out" ;; esac
   sid="AHSELFTEST-SID"
-  printf '{"ts":%s,"used_pct":82}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid.json"
+  printf '{"ts":%s,"used_pct":82}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
   out="$(cmd_status "$sid" 2>&1)"
   case "$out" in *"82%"*RECYCLE*) ah_ok "82% reads RECYCLE NOW and names its session" ;;
                  *) ah_bad "82% did not read RECYCLE" "$out" ;; esac
-  printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid.json"
+  printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
   out="$(cmd_status "$sid" 2>&1)"
   case "$out" in *"12%"*"keep working"*) ah_ok "12% reads keep working" ;;
                  *) ah_bad "12% did not read keep working" "$out" ;; esac
   case "$out" in *"session(s) reporting"*|*"0 reporting"*)
       ah_bad "an explicit session read printed a session COUNT it never took" "$out" ;;
     *)  ah_ok "an explicit session read prints no count (it counted nothing)" ;; esac
-  printf '{"ts":%s,"used_pct":33}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid-2.json"
+  printf '{"ts":%s,"used_pct":33}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid-2.json"
   out="$(cmd_status 2>&1)"
   case "$out" in *"NEWEST of 2 reporting"*) ah_ok "two live sessions: the scan says WHICH it read and that it guessed" ;;
                  *) ah_bad "an ambiguous scan did not disclose the ambiguity" "$out" ;; esac
-  rm -f "$PB_TELEMETRY_DIR/$sid-2.json"
+  rm -f "$BOOTSTRAP_TELEMETRY_DIR/$sid-2.json"
 
   # 7. recycle-due — the predicate that gates a Stop BLOCK. It must be able to say NO.
-  printf '{"ts":%s,"used_pct":82}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid.json"
+  printf '{"ts":%s,"used_pct":82}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid.json"
   out="$(cmd_recycle_due "$sid")"; rc=$?
   if [ "$rc" = 0 ] && [ -n "$out" ]; then ah_ok "recycle-due fires at 82% and prints a reason"
   else ah_bad "recycle-due did not fire at 82%" "rc=$rc out=[$out]"; fi
   out="$(cmd_recycle_due "$sid")"; rc=$?
   ah_is "recycle-due LATCHES — it cannot fire twice for one session" "$rc" "1"
   ah_is "…and says nothing when it does not fire" "$out" ""
-  printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid-low.json"
+  printf '{"ts":%s,"used_pct":12}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid-low.json"
   out="$(cmd_recycle_due "$sid-low")"; rc=$?
   ah_is "NEG: recycle-due is silent at 12%" "$rc" "1"
-  printf '{"ts":1,"used_pct":95}\n' > "$PB_TELEMETRY_DIR/$sid-stale.json"
+  printf '{"ts":1,"used_pct":95}\n' > "$BOOTSTRAP_TELEMETRY_DIR/$sid-stale.json"
   out="$(cmd_recycle_due "$sid-stale")"; rc=$?
   ah_is "NEG: STALE telemetry at 95% still does not fire" "$rc" "1"
-  printf '{"ts":%s,"used_pct":null}\n' "$(date +%s)" > "$PB_TELEMETRY_DIR/$sid-null.json"
+  printf '{"ts":%s,"used_pct":null}\n' "$(date +%s)" > "$BOOTSTRAP_TELEMETRY_DIR/$sid-null.json"
   out="$(cmd_recycle_due "$sid-null")"; rc=$?
   ah_is "NEG: a null fill is not read as 0 and does not fire" "$rc" "1"
   out="$(cmd_recycle_due "NO-SUCH-SESSION-ANYWHERE")"; rc=$?
@@ -1269,7 +1269,7 @@ cmd_selftest() {
   ah_is "state: overwriting a key keeps ONE copy" "$(grep -c '"phase"' "$sd/state.json")" "1"
   ah_is "state: the other key survived the rewrite" \
         "$(ah_state_get "$sd" goal)" 'land it and print "git log -1" \ now'
-  "$PB_PLUTIL" -convert json -o /dev/null -- "$sd/state.json" >/dev/null 2>&1 \
+  "$BOOTSTRAP_PLUTIL" -convert json -o /dev/null -- "$sd/state.json" >/dev/null 2>&1 \
     && ah_ok "state: the file is valid JSON" || ah_bad "state: the file is not valid JSON"
 
   # the run lock — one driver per id, and a DEAD holder is stolen rather than obeyed forever.

@@ -12,7 +12,7 @@
 #   absent. The no-jq arm therefore CUTS the remainder at "rate_limits" before matching.
 #   A float truncates (45.7 -> 45): `[ 93.4 -ge 90 ]` is an arithmetic error, and the swallowed
 #   error falls through to the CALM colour — the alarm inverted at the one end that matters.
-# It also writes $PB_TELEMETRY_DIR/<session_id>.json, because no HOOK event on Claude Code
+# It also writes $BOOTSTRAP_TELEMETRY_DIR/<session_id>.json, because no HOOK event on Claude Code
 # carries a context-window size: the status line is the only producer of this number.
 set -u
 
@@ -83,7 +83,7 @@ if [ -n "$PCT" ] && [ -n "$SID" ]; then
   case $SID in ''|*[!A-Za-z0-9._-]*) SID='' ;; esac
 fi
 if [ -n "$PCT" ] && [ -n "$SID" ]; then
-  TD=${PB_TELEMETRY_DIR:-/tmp/pb-telemetry}
+  TD=${BOOTSTRAP_TELEMETRY_DIR:-/tmp/pb-telemetry}
   if mkdir -p "$TD" 2>/dev/null; then
     TS=$(date +%s 2>/dev/null) || TS=0
     case $TS in ''|*[!0-9]*) TS=0 ;; esac

@@ -76,15 +76,15 @@
 
 set -u
 
-GATE_MODEL="${PB_M7_MODEL:-voiceink-rewrite}"
-GATE_URL="${PB_M7_BASE_URL:-http://localhost:11434}"
-GATE_RUNS="${PB_M7_GATE_RUNS:-3}"
-GATE_PROMPT_FILE="${PB_M7_PROMPT_FILE:-}"
-GATE_MAX_MS="${PB_M7_MAX_MS:-15000}"     # the EnhancementTimeoutSeconds this repo writes, in ms
+GATE_MODEL="${BOOTSTRAP_MODEL:-voiceink-rewrite}"
+GATE_URL="${MODEL_GATE_BASE_URL:-http://localhost:11434}"
+GATE_RUNS="${MODEL_GATE_RUNS:-3}"
+GATE_PROMPT_FILE="${MODEL_GATE_PROMPT_FILE:-}"
+GATE_MAX_MS="${MODEL_GATE_MAX_MS:-15000}"     # the EnhancementTimeoutSeconds this repo writes, in ms
 # The per-call ceiling. Deliberately an order of magnitude above GATE_MAX_MS: a model that is
 # merely slow must be allowed to FINISH, so its latency can be reported as the reason it is
 # unfit. Hitting this is not "could not run" — see gate_call.
-GATE_CALL_S="${PB_M7_CALL_TIMEOUT_S:-180}"
+GATE_CALL_S="${MODEL_GATE_CALL_TIMEOUT_S:-180}"
 GATE_JSON=0
 GATE_DUMP=""
 GATE_CURL=/usr/bin/curl
@@ -197,7 +197,7 @@ VOICEINK_SYSTEM_PROMPT
 # ── jq is preferred for BUILDING the request; plutil always PARSES the reply ──────────────────
 # Two engines by construction, and the parse side never depends on jq being installed.
 gate_jq() {
-  [ -n "${PB_NO_JQ:-}" ] && return 1
+  [ -n "${BOOTSTRAP_NO_JQ:-}" ] && return 1
   local c
   for c in /usr/bin/jq /opt/homebrew/bin/jq /usr/local/bin/jq; do
     [ -x "$c" ] && { printf '%s' "$c"; return 0; }

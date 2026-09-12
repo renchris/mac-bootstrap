@@ -1,9 +1,9 @@
 # shellcheck shell=bash
 # m1_statusline — DELIVERABLE 1: context-% in the status line, on BOTH agents.
 #
-# Installs assets/agent-statusline.sh to $PB_STATE_DIR/bin/ and registers it, by ABSOLUTE path,
+# Installs assets/agent-statusline.sh to $BOOTSTRAP_STATE_DIR/bin/ and registers it, by ABSOLUTE path,
 # in $HOME/.claude/settings.json and $HOME/.copilot/settings.json — both through the ONE writer,
-# pb_settings_merge (C2). Nothing here calls plutil or jq to write a settings file.
+# bootstrap_settings_merge (C2). Nothing here calls plutil or jq to write a settings file.
 #
 # WHY THE ABSOLUTE PATH: Copilot documents that it expands `~` in statusLine.command; Claude
 # Code's help only *recommends* a `~/…` path and its expansion was never measured. An absolute
@@ -17,7 +17,7 @@
 #
 # No permission, no credential, no allow-list keypath is written here or anywhere below.
 
-M1_SL() { printf '%s' "${PB_STATE_DIR:-$HOME/.mac-bootstrap}/bin/agent-statusline.sh"; }
+M1_SL() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/bin/agent-statusline.sh"; }
 M1_CC() { printf '%s' "$HOME/.claude/settings.json"; }
 M1_CP() { printf '%s' "$HOME/.copilot/settings.json"; }
 
@@ -36,17 +36,17 @@ M1_FIX_ZERO='{"session_id":"pb-m1-probe4","cwd":"/tmp/pb-m1","model":{"display_n
 # pinned raw URL. NOT in pb-lib (the library deliberately does no network), so it lives here.
 m1_source() {
   local c t
-  for c in "${PB_ASSETS:-}/agent-statusline.sh" \
-           "${PB_STATE_DIR:-$HOME/.mac-bootstrap}/assets/agent-statusline.sh"; do
+  for c in "${BOOTSTRAP_ASSETS:-}/agent-statusline.sh" \
+           "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/agent-statusline.sh"; do
     case "$c" in /agent-statusline.sh) continue ;; esac
     [ -r "$c" ] && { printf '%s' "$c"; return 0; }
   done
-  case "${PB_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
+  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
   command -v curl >/dev/null 2>&1 || return 1
-  t="${PB_STATE_DIR:-$HOME/.mac-bootstrap}/assets/agent-statusline.sh"
+  t="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/agent-statusline.sh"
   mkdir -p "$(dirname "$t")" 2>/dev/null || return 1
   local code
-  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${PB_RAW:-}/assets/agent-statusline.sh" 2>/dev/null)" || {
+  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/agent-statusline.sh" 2>/dev/null)" || {
     rm -f "$t.part" 2>/dev/null; return 1; }
   [ "$code" = "200" ] && [ -s "$t.part" ] || { rm -f "$t.part" 2>/dev/null; return 1; }
   mv -f "$t.part" "$t" 2>/dev/null || return 1
@@ -79,10 +79,10 @@ m1_probe() {
   td="$(mktemp -d -t pbm1)" || return 1
   if [ "${2:-}" = nojq ]; then
     m1_shimpath "$td/bin" || { rm -rf "$td" 2>/dev/null; return 1; }
-    out="$(printf '%s' "$1" | PATH="$td/bin" PB_TELEMETRY_DIR="$td" "$(M1_SL)" 2>/dev/null)" ||
+    out="$(printf '%s' "$1" | PATH="$td/bin" BOOTSTRAP_TELEMETRY_DIR="$td" "$(M1_SL)" 2>/dev/null)" ||
       { rm -rf "$td" 2>/dev/null; return 1; }
   else
-    out="$(printf '%s' "$1" | PB_TELEMETRY_DIR="$td" "$(M1_SL)" 2>/dev/null)" ||
+    out="$(printf '%s' "$1" | BOOTSTRAP_TELEMETRY_DIR="$td" "$(M1_SL)" 2>/dev/null)" ||
       { rm -rf "$td" 2>/dev/null; return 1; }
   fi
   rm -rf "$td" 2>/dev/null
@@ -103,9 +103,9 @@ verify_m1_statusline() {
 
   # (a) REGISTRATION, parsed back out of each file with plutil — never grepped.
   for f in "$(M1_CC)" "$(M1_CP)"; do
-    cur="$(pb_settings_get "$f" statusLine.command raw 2>/dev/null)" || return 1
+    cur="$(bootstrap_settings_get "$f" statusLine.command raw 2>/dev/null)" || return 1
     [ "$cur" = "$sl" ] || return 1
-    cur="$(pb_settings_get "$f" statusLine.type raw 2>/dev/null)" || return 1
+    cur="$(bootstrap_settings_get "$f" statusLine.type raw 2>/dev/null)" || return 1
     [ "$cur" = "command" ] || return 1
   done
 
@@ -129,8 +129,8 @@ verify_m1_statusline() {
   # (c) the telemetry producer the Stop advisory depends on — read back through plutil.
   local td pct
   td="$(mktemp -d -t pbm1t)" || return 1
-  printf '%s' "$M1_FIX_CC" | PB_TELEMETRY_DIR="$td" "$sl" >/dev/null 2>&1
-  pct="$(pb_settings_get "$td/pb-m1-probe.json" used_pct raw 2>/dev/null)" || pct=""
+  printf '%s' "$M1_FIX_CC" | BOOTSTRAP_TELEMETRY_DIR="$td" "$sl" >/dev/null 2>&1
+  pct="$(bootstrap_settings_get "$td/pb-m1-probe.json" used_pct raw 2>/dev/null)" || pct=""
   rm -rf "$td" 2>/dev/null
   [ "$pct" = "42" ] || return 1
   return 0
@@ -139,7 +139,7 @@ verify_m1_statusline() {
 # gate_ — exit 0 ONLY when a human gesture is genuinely required. Two such states, and neither
 # can occur on the fresh Mac this bootstrap targets:
 #   1. a settings file exists but is not JSON text, or is unparseable, or is not writable —
-#      pb_settings_merge refuses it by design and only a person can decide what to do;
+#      bootstrap_settings_merge refuses it by design and only a person can decide what to do;
 #   2. a settings file already carries SOMEBODY ELSE'S status line. Replacing it is a decision,
 #      not an installation. (Once ours is registered this is quiet, so it stays idempotent.)
 gate_m1_statusline() { m1_gated_file >/dev/null 2>&1; }
@@ -156,16 +156,16 @@ m1_gated_file() {
   sl="$(M1_SL)"
   for f in "$(M1_CC)" "$(M1_CP)"; do
     if [ -f "$f" ]; then
-      if ! pb_is_json_text "$f" >/dev/null 2>&1; then
-        if "$PB_PLUTIL" -convert json -o /dev/null "$f" >/dev/null 2>&1
+      if ! bootstrap_is_json_text "$f" >/dev/null 2>&1; then
+        if "$BOOTSTRAP_PLUTIL" -convert json -o /dev/null "$f" >/dev/null 2>&1
           then printf '%s|plist' "$f"
           else printf '%s|unparseable' "$f"
         fi
         return 0
       fi
-      pb_json_ok "$f" >/dev/null 2>&1 || { printf '%s|unparseable' "$f"; return 0; }
+      bootstrap_json_ok "$f" >/dev/null 2>&1 || { printf '%s|unparseable' "$f"; return 0; }
       [ -w "$f" ] || { printf '%s|readonly' "$f"; return 0; }
-      cur="$(pb_settings_get "$f" statusLine.command raw 2>/dev/null)" || cur=""
+      cur="$(bootstrap_settings_get "$f" statusLine.command raw 2>/dev/null)" || cur=""
       [ -n "$cur" ] && [ "$cur" != "$sl" ] && { printf '%s|taken' "$f"; return 0; }
     else
       [ -d "$(dirname "$f")" ] && [ ! -w "$(dirname "$f")" ] && { printf '%s|dir' "$f"; return 0; }
@@ -203,29 +203,29 @@ gesture_m1_statusline() {
 
 install_m1_statusline() {
   local src sl bin tmp v
-  src="$(m1_source)" || { pb_warn "m1: cannot find or fetch assets/agent-statusline.sh"; return 1; }
+  src="$(m1_source)" || { bootstrap_warn "m1: cannot find or fetch assets/agent-statusline.sh"; return 1; }
   sl="$(M1_SL)"; bin="$(dirname "$sl")"
-  mkdir -p "$bin" 2>/dev/null || { pb_warn "m1: cannot create $bin"; return 1; }
+  mkdir -p "$bin" 2>/dev/null || { bootstrap_warn "m1: cannot create $bin"; return 1; }
 
   if ! cmp -s "$src" "$sl" 2>/dev/null; then           # idempotent: identical bytes ⇒ no write
     tmp="$sl.pb-tmp.$$"
-    cp -f "$src" "$tmp" 2>/dev/null || { pb_warn "m1: cannot stage the script"; return 1; }
+    cp -f "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m1: cannot stage the script"; return 1; }
     chmod 755 "$tmp" 2>/dev/null
-    mv -f "$tmp" "$sl" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; pb_warn "m1: cannot place $sl"; return 1; }
+    mv -f "$tmp" "$sl" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m1: cannot place $sl"; return 1; }
   fi
   chmod 755 "$sl" 2>/dev/null
 
   # Rule 4, before we register anything: a script that cannot produce a percentage must never be
   # written into a settings file, because the agent will then run a broken command every redraw.
-  v="$(m1_probe "$M1_FIX_CC")" || { pb_warn "m1: the installed script did not run"; return 1; }
-  case "$v" in *42%*) : ;; *) pb_warn "m1: the installed script printed no percentage — not registering it"; return 1 ;; esac
+  v="$(m1_probe "$M1_FIX_CC")" || { bootstrap_warn "m1: the installed script did not run"; return 1; }
+  case "$v" in *42%*) : ;; *) bootstrap_warn "m1: the installed script printed no percentage — not registering it"; return 1 ;; esac
 
   local ent rc
-  ent="{\"type\":\"command\",\"command\":\"$(pb_json_escape "$sl")\"}"
-  pb_settings_merge "$(M1_CC)" statusLine "$ent"; rc=$?
-  [ "$rc" = 0 ] || { pb_warn "m1: could not register in the Claude Code settings file (rc $rc)"; return 1; }
-  pb_settings_merge "$(M1_CP)" statusLine "$ent"; rc=$?
-  [ "$rc" = 0 ] || { pb_warn "m1: could not register in the Copilot settings file (rc $rc)"; return 1; }
+  ent="{\"type\":\"command\",\"command\":\"$(bootstrap_json_escape "$sl")\"}"
+  bootstrap_settings_merge "$(M1_CC)" statusLine "$ent"; rc=$?
+  [ "$rc" = 0 ] || { bootstrap_warn "m1: could not register in the Claude Code settings file (rc $rc)"; return 1; }
+  bootstrap_settings_merge "$(M1_CP)" statusLine "$ent"; rc=$?
+  [ "$rc" = 0 ] || { bootstrap_warn "m1: could not register in the Copilot settings file (rc $rc)"; return 1; }
   return 0
 }
 
@@ -235,15 +235,15 @@ install_m1_statusline() {
 m1_settings_remove() {
   local f="${1:-}" k="${2:-}" tmp
   [ -f "$f" ] || return 0
-  pb_settings_type "$f" "$k" >/dev/null 2>&1 || return 0        # already absent
-  pb_json_ok "$f" >/dev/null 2>&1 || return 2
-  pb_is_json_text "$f" >/dev/null 2>&1 || return 2
-  pb_backup "$f"
+  bootstrap_settings_type "$f" "$k" >/dev/null 2>&1 || return 0        # already absent
+  bootstrap_json_ok "$f" >/dev/null 2>&1 || return 2
+  bootstrap_is_json_text "$f" >/dev/null 2>&1 || return 2
+  bootstrap_backup "$f"
   tmp="$f.m1-tmp.$$"
   cp -p "$f" "$tmp" 2>/dev/null || return 2
-  "$PB_PLUTIL" -remove "$k" "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 2; }
-  pb_json_ok "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 2; }
-  pb_settings_type "$tmp" "$k" >/dev/null 2>&1 && { rm -f "$tmp"; return 2; }
+  "$BOOTSTRAP_PLUTIL" -remove "$k" "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 2; }
+  bootstrap_json_ok "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 2; }
+  bootstrap_settings_type "$tmp" "$k" >/dev/null 2>&1 && { rm -f "$tmp"; return 2; }
   mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 2; }
   return 0
 }
@@ -253,7 +253,7 @@ uninstall_m1_statusline() {
   sl="$(M1_SL)"
   for f in "$(M1_CC)" "$(M1_CP)"; do
     [ -f "$f" ] || continue
-    cur="$(pb_settings_get "$f" statusLine.command raw 2>/dev/null)" || cur=""
+    cur="$(bootstrap_settings_get "$f" statusLine.command raw 2>/dev/null)" || cur=""
     [ "$cur" = "$sl" ] || continue                     # someone else's status line is not ours to remove
     m1_settings_remove "$f" statusLine || rc=1
   done

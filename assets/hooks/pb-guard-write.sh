@@ -43,46 +43,46 @@
 # permissionDecision:"allow" to smuggle the text through: that would auto-approve a tool call the
 # user's own policy might have wanted to ask about. The backup is the load-bearing half anyway.
 #
-# Seams: PB_GUARD_WRITE=0 disables · PB_STATE_DIR · PB_GUARD_KEEP (default 10 backups per path)
-#        PB_GUARD_MAX_BYTES (default 20000000 — above it, advise without copying).
+# Seams: BOOTSTRAP_WRITE_GUARD_HOOK=0 disables · BOOTSTRAP_STATE_DIR · BOOTSTRAP_GUARD_KEEP (default 10 backups per path)
+#        BOOTSTRAP_GUARD_MAX_BYTES (default 20000000 — above it, advise without copying).
 # NO `set -e`, no `pipefail` (CONTRACT.md §7.8). Self-test: bash pb-guard-write.sh --selftest
 set -u
 
-PB3_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || PB3_SELF_DIR="."
-PB3_SELF="$PB3_SELF_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || HOOK_DIR="."
+HOOK_SELF="$HOOK_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
 # shellcheck source=pb-lib.sh disable=SC1091
-. "$PB3_SELF_DIR/pb-lib.sh" 2>/dev/null || exit 0
+. "$HOOK_DIR/pb-lib.sh" 2>/dev/null || exit 0
 
-# ── pb3_field <payload> <keypath> — READ A FIELD OUT OF THE HOOK PAYLOAD, WITH OR WITHOUT jq. ──
-# pb_json is the library's reader and is deliberately conservative without jq: it handles only
+# ── hook_field <payload> <keypath> — READ A FIELD OUT OF THE HOOK PAYLOAD, WITH OR WITHOUT jq. ──
+# bootstrap_json is the library's reader and is deliberately conservative without jq: it handles only
 # FLAT keys whose values are QUOTED STRINGS, because sed-extracting a quote-laden shell command
 # out of JSON mis-parses silently and a wrong answer is worse than none. Two consequences bit
-# here, both MEASURED under PB_NO_JQ=1:
+# here, both MEASURED under BOOTSTRAP_NO_JQ=1:
 #   · `stop_hook_active` is a flat key with a BOOLEAN value, so it read EMPTY — and bound B1, the
 #     one that makes a blocking Stop hook provably terminate, silently disarmed.
 #   · every nested read (`tool_input.file_path`, `tool_input.command`) read EMPTY, so both guards
 #     were inert rather than merely weaker.
 # The repair is not a better regex: it is to use the OTHER engine the library already trusts.
 # plutil parses the payload properly — booleans, numbers, nesting, embedded quotes — so we write
-# the payload to a temp file ONCE and extract through pb_settings_get, which emits only on rc 0
+# the payload to a temp file ONCE and extract through bootstrap_settings_get, which emits only on rc 0
 # (plutil writes its failure message to STDOUT, so a reader that forwards stdout blindly hands
 # its caller an error sentence where a value belongs). With jq present this path never runs.
-PB3_PAY=""
-pb3_field() {
+HOOK_PAYLOAD=""
+hook_field() {
   local v
-  v="$(pb_json "${1:-}" "${2:-}")"
+  v="$(bootstrap_json "${1:-}" "${2:-}")"
   [ -n "$v" ] && { printf '%s' "$v"; return 0; }
-  if [ -z "$PB3_PAY" ]; then
-    PB3_PAY="$(mktemp -t pbpay 2>/dev/null)" || { PB3_PAY=""; return 0; }
-    printf '%s' "${1:-}" > "$PB3_PAY" 2>/dev/null || { rm -f "$PB3_PAY"; PB3_PAY=""; return 0; }
+  if [ -z "$HOOK_PAYLOAD" ]; then
+    HOOK_PAYLOAD="$(mktemp -t pbpay 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
+    printf '%s' "${1:-}" > "$HOOK_PAYLOAD" 2>/dev/null || { rm -f "$HOOK_PAYLOAD"; HOOK_PAYLOAD=""; return 0; }
   fi
-  pb_settings_get "$PB3_PAY" "${2:-}" raw 2>/dev/null
+  bootstrap_settings_get "$HOOK_PAYLOAD" "${2:-}" raw 2>/dev/null
   return 0
 }
-pb3_field_cleanup() { [ -n "$PB3_PAY" ] && rm -f "$PB3_PAY" 2>/dev/null; PB3_PAY=""; return 0; }
-trap pb3_field_cleanup EXIT
+hook_field_cleanup() { [ -n "$HOOK_PAYLOAD" ] && rm -f "$HOOK_PAYLOAD" 2>/dev/null; HOOK_PAYLOAD=""; return 0; }
+trap hook_field_cleanup EXIT
 
-pb3_wants() {                       # pb3_wants <tool_name> → 0 if this tool can overwrite a file
+hook_wants() {                       # hook_wants <tool_name> → 0 if this tool can overwrite a file
   case "${1:-}" in
     Write|MultiEdit) return 0 ;;
     Edit|Read|Bash|Glob|Grep|WebFetch|WebSearch|Task|NotebookEdit) return 1 ;;
@@ -94,11 +94,11 @@ pb3_wants() {                       # pb3_wants <tool_name> → 0 if this tool c
   return 1
 }
 
-# pb3_patch_paths <tool_input-as-text> — the files an apply-patch envelope touches, one per line.
+# hook_patch_paths <tool_input-as-text> — the files an apply-patch envelope touches, one per line.
 # Copilot's edit tool hands the whole patch through as a STRING; its header lines are the only
 # place a path appears. `Add File:` is included because an add over an existing path is an
 # overwrite — and when the path does not exist the caller simply finds nothing to back up.
-pb3_patch_paths() {
+hook_patch_paths() {
   # The awk pass turns a LITERAL backslash-n back into a real newline before the header lines are
   # matched. That is not cosmetic: with jq the string arrives decoded, but on the plutil/no-jq arm
   # the whole patch can arrive as ONE line with `\n` still escaped, and every `^\*\*\*` anchor then
@@ -108,27 +108,27 @@ pb3_patch_paths() {
     | LC_ALL=C awk '{ gsub(/\\n/, "\n"); print }' \
     | LC_ALL=C sed -E -n 's/^\*\*\* (Update|Delete|Add) File: //p'
 }
-pb3_is_patch() {                    # is this tool_input an apply-patch envelope rather than a dict?
+hook_is_patch() {                    # is this tool_input an apply-patch envelope rather than a dict?
   case "${1:-}" in *'*** '*'File:'*) return 0 ;; esac
   return 1
 }
 
-pb3_guard_write_main() {
+hook_guard_write_main() {
   local IN TOOL F TI SEEN MSG FRAG
-  [ "${PB_GUARD_WRITE:-1}" = 1 ] || return 0
+  [ "${BOOTSTRAP_WRITE_GUARD_HOOK:-1}" = 1 ] || return 0
   IN="$(cat 2>/dev/null || true)"
-  TOOL="$(pb3_field "$IN" tool_name)"
-  F="$(pb3_field "$IN" tool_input.file_path)"
+  TOOL="$(hook_field "$IN" tool_name)"
+  F="$(hook_field "$IN" tool_input.file_path)"
   if [ -n "$F" ]; then
-    pb3_wants "$TOOL" || return 0                 # the Claude Code shape: one path in the payload
-    MSG="$(pb3_backup_one "$F")"
-    [ -n "$MSG" ] && pb_emit_ctx PreToolUse "$MSG"
+    hook_wants "$TOOL" || return 0                 # the Claude Code shape: one path in the payload
+    MSG="$(hook_backup_one "$F")"
+    [ -n "$MSG" ] && bootstrap_emit_ctx PreToolUse "$MSG"
     return 0
   fi
   # No file_path. Either this tool touches no file at all, or it is an apply-patch envelope —
   # which is how Copilot CLI's edit tool arrives, and which can delete and recreate a whole file.
-  TI="$(pb_json "$IN" tool_input)"
-  pb3_is_patch "$TI" || return 0
+  TI="$(bootstrap_json "$IN" tool_input)"
+  hook_is_patch "$TI" || return 0
   # ONE OBJECT ON STDOUT, ALWAYS. A patch that deletes and re-adds the same path names it TWICE
   # (measured — that is exactly the shape Copilot sent), and an earlier draft emitted one JSON
   # object per line: two objects on a hook's stdout is not "two messages", it is malformed output,
@@ -139,25 +139,25 @@ pb3_guard_write_main() {
     [ -n "$F" ] || continue
     case "$SEEN" in *"|$F|"*) continue ;; esac
     SEEN="$SEEN$F|"
-    FRAG="$(pb3_backup_one "$F")"
+    FRAG="$(hook_backup_one "$F")"
     [ -n "$FRAG" ] && MSG="$MSG$FRAG "
   done <<EOP
-$(pb3_patch_paths "$TI")
+$(hook_patch_paths "$TI")
 EOP
-  [ -n "$MSG" ] && pb_emit_ctx PreToolUse "$MSG"
+  [ -n "$MSG" ] && bootstrap_emit_ctx PreToolUse "$MSG"
   return 0
 }
 
-# pb3_backup_one <path> — copy it aside and PRINT one plain-text fragment. Silent when there is
+# hook_backup_one <path> — copy it aside and PRINT one plain-text fragment. Silent when there is
 # nothing to destroy. It does not emit JSON: main owns the envelope, so stdout can never hold two.
-pb3_backup_one() {
+hook_backup_one() {
   local F="${1:-}" B BK KEEP p o n sz keepn
   [ -n "$F" ] && [ -f "$F" ] || return 0          # a NEW file has nothing to destroy
 
-  B="$PB_STATE_DIR/backups"; mkdir -p "$B" 2>/dev/null || true
+  B="$BOOTSTRAP_STATE_DIR/backups"; mkdir -p "$B" 2>/dev/null || true
   BK="$B/$(basename "$F")__$(date +%Y%m%d-%H%M%S)-$$-${RANDOM:-0}.bak"
   sz="$(stat -f %z "$F" 2>/dev/null)"; case "${sz:-}" in ''|*[!0-9]*) sz=0 ;; esac
-  if [ "$sz" -gt "${PB_GUARD_MAX_BYTES:-20000000}" ]; then
+  if [ "$sz" -gt "${BOOTSTRAP_GUARD_MAX_BYTES:-20000000}" ]; then
     printf "OVERWRITE GUARD: '%s' is %s bytes — too large to back up inside a hook, so this write is UNBACKED. INTEGRATE new content; do not replace the file." "$(basename "$F")" "$sz"
     return 0
   fi
@@ -166,7 +166,7 @@ pb3_backup_one() {
     # The identity of a backup is the SOURCE PATH, not the basename: two repos' AGENTS.md must
     # not evict each other. The sidecar carries it, so rotation keys on the sidecar's CONTENT.
     printf '%s\n' "$F" > "${BK%.bak}.path" 2>/dev/null || true
-    keepn="${PB_GUARD_KEEP:-10}"; case "$keepn" in ''|*[!0-9]*) keepn=10 ;; esac
+    keepn="${BOOTSTRAP_GUARD_KEEP:-10}"; case "$keepn" in ''|*[!0-9]*) keepn=10 ;; esac
     KEEP=""
     for p in "$B/$(basename "$F")__"*.path; do
       [ -f "$p" ] || continue
@@ -190,7 +190,7 @@ pb3_backup_one() {
 # one case it exists for, and "the hook fired" is unfalsifiable without a tool name that must NOT
 # fire and an event name that does not exist.
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-pb3_selftest() {
+hook_selftest() {
   local T n=0 bad=0 out before after i
   T="$(mktemp -d -t pbgw)" || return 30
   mkdir -p "$T/state"
@@ -199,11 +199,11 @@ pb3_selftest() {
   _ok()  { n=$((n+1)); printf '  ok   %s\n' "$1"; }
   _bad() { n=$((n+1)); bad=$((bad+1)); printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; }
   _fire() {   # _fire <tool_name> <file> → stdout of the hook
-    PB_STATE_DIR="$T/state" /bin/bash "$PB3_SELF" <<XIN 2>/dev/null
+    BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" <<XIN 2>/dev/null
 {"hook_event_name":"PreToolUse","session_id":"GW","cwd":"$T","tool_name":"$1","tool_input":{"file_path":"$2"}}
 XIN
   }
-  _count() { ls "$T/state/backups/"*.bak 2>/dev/null | pb_count; }
+  _count() { ls "$T/state/backups/"*.bak 2>/dev/null | bootstrap_count; }
 
   before="$(_count)"
   out="$(_fire Write "$T/plan.md")"
@@ -214,7 +214,7 @@ XIN
   case "$out" in *'"PreToolUse"'*) _ok "…in the PreToolUse envelope" ;; *) _bad "wrong envelope" "[$out]" ;; esac
   if [ -n "$out" ]; then
     printf '%s' "$out" > "$T/out.json"
-    if pb_json_ok "$T/out.json"; then _ok "…and that output is valid JSON (parsed, not grepped)"
+    if bootstrap_json_ok "$T/out.json"; then _ok "…and that output is valid JSON (parsed, not grepped)"
     else _bad "hook stdout is not valid JSON" "[$out]"; fi
   fi
 
@@ -238,24 +238,24 @@ XIN
   [ "$after" -gt "$before" ] && _ok "Copilot arm: an unknown *edit* tool still backs the file up" \
                              || _bad "Copilot arm did not fire" "$before→$after"
 
-  # ROTATION — newest PB_GUARD_KEEP per SOURCE PATH, and a same-basename file elsewhere survives.
+  # ROTATION — newest BOOTSTRAP_GUARD_KEEP per SOURCE PATH, and a same-basename file elsewhere survives.
   mkdir -p "$T/other"; printf 'x\n' > "$T/other/plan.md"
-  PB_STATE_DIR="$T/state" PB_GUARD_KEEP=3 /bin/bash "$PB3_SELF" >/dev/null 2>&1 <<XIN
+  BOOTSTRAP_STATE_DIR="$T/state" BOOTSTRAP_GUARD_KEEP=3 /bin/bash "$HOOK_SELF" >/dev/null 2>&1 <<XIN
 {"tool_name":"Write","tool_input":{"file_path":"$T/other/plan.md"}}
 XIN
   i=0
   while [ "$i" -lt 6 ]; do
-    PB_STATE_DIR="$T/state" PB_GUARD_KEEP=3 /bin/bash "$PB3_SELF" >/dev/null 2>&1 <<XIN
+    BOOTSTRAP_STATE_DIR="$T/state" BOOTSTRAP_GUARD_KEEP=3 /bin/bash "$HOOK_SELF" >/dev/null 2>&1 <<XIN
 {"tool_name":"Write","tool_input":{"file_path":"$T/plan.md"}}
 XIN
     i=$((i + 1))
   done
   n=$((n+1))
-  after="$(grep -l "^$T/plan.md$" "$T/state/backups/"*.path 2>/dev/null | pb_count)"
-  if [ "$after" -le 3 ]; then printf '  ok   rotation keeps at most PB_GUARD_KEEP per source path (%s)\n' "$after"
+  after="$(grep -l "^$T/plan.md$" "$T/state/backups/"*.path 2>/dev/null | bootstrap_count)"
+  if [ "$after" -le 3 ]; then printf '  ok   rotation keeps at most BOOTSTRAP_GUARD_KEEP per source path (%s)\n' "$after"
   else bad=$((bad+1)); printf '  FAIL rotation kept %s, want <= 3\n' "$after"; fi
   n=$((n+1))
-  after="$(grep -l "^$T/other/plan.md$" "$T/state/backups/"*.path 2>/dev/null | pb_count)"
+  after="$(grep -l "^$T/other/plan.md$" "$T/state/backups/"*.path 2>/dev/null | bootstrap_count)"
   if [ "$after" -ge 1 ]; then printf '  ok   a same-basename file in another directory is NOT evicted\n'
   else bad=$((bad+1)); printf '  FAIL the other directory backup was evicted\n'; fi
 
@@ -265,7 +265,7 @@ XIN
   # arrived, and the first version of this guard backed up nothing at all.
   printf 'copilot one\ncopilot two\n' > "$T/cop.md"
   before="$(_count)"
-  out="$(PB_STATE_DIR="$T/state" /bin/bash "$PB3_SELF" 2>/dev/null <<XIN
+  out="$(BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" 2>/dev/null <<XIN
 {"hook_event_name":"PreToolUse","session_id":"E2E","tool_name":"Edit","tool_input":"*** Begin Patch\\n*** Delete File: $T/cop.md\\n*** Add File: $T/cop.md\\n+HELLO\\n*** End Patch\\n"}
 XIN
 )"
@@ -276,7 +276,7 @@ XIN
   # …and the same patch names that path TWICE (Delete then Add). Stdout must still be ONE object.
   printf '%s' "$out" > "$T/cop.json"
   n=$((n+1))
-  if pb_json_ok "$T/cop.json"; then printf '  ok   …and a path named twice in one patch still yields exactly ONE JSON object\n'
+  if bootstrap_json_ok "$T/cop.json"; then printf '  ok   …and a path named twice in one patch still yields exactly ONE JSON object\n'
   else bad=$((bad+1)); printf '  FAIL two JSON objects on stdout — malformed hook output: [%s]\n' "$out"; fi
   n=$((n+1))
   if [ "$(printf '%s' "$out" | grep -c 'hookEventName')" = 1 ]; then printf '  ok   …exactly one envelope, counted\n'
@@ -292,7 +292,7 @@ XIN
 
   # …and a patch that only ADDS a file that does not exist has nothing to destroy.
   before="$(_count)"
-  PB_STATE_DIR="$T/state" /bin/bash "$PB3_SELF" >/dev/null 2>&1 <<'XIN'
+  BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" >/dev/null 2>&1 <<'XIN'
 {"tool_name":"Edit","tool_input":"*** Begin Patch\n*** Add File: /nonexistent/pb/nope.md\n+hi\n*** End Patch\n"}
 XIN
   after="$(_count)"
@@ -304,7 +304,7 @@ XIN
   # line with its newlines still escaped, and every header anchor then matches nothing.
   printf 'nojq one\nnojq two\n' > "$T/cop2.md"
   before="$(_count)"
-  PB_NO_JQ=1 PB_STATE_DIR="$T/state" /bin/bash "$PB3_SELF" >/dev/null 2>&1 <<XIN
+  BOOTSTRAP_NO_JQ=1 BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" >/dev/null 2>&1 <<XIN
 {"tool_name":"Edit","tool_input":"*** Begin Patch\\n*** Delete File: $T/cop2.md\\n*** Add File: $T/cop2.md\\n+HELLO\\n*** End Patch\\n"}
 XIN
   after="$(_count)"
@@ -313,9 +313,9 @@ XIN
   else bad=$((bad+1)); printf '  FAIL NO-JQ arm: the patch guard is inert without jq\n'; fi
 
   # NO-JQ ARM. tool_input.file_path is a NESTED read, which the library's no-jq reader refuses;
-  # before pb3_field this hook was inert without jq and this case is what says so out loud.
+  # before hook_field this hook was inert without jq and this case is what says so out loud.
   before="$(_count)"
-  PB_NO_JQ=1 PB_STATE_DIR="$T/state" /bin/bash "$PB3_SELF" >/dev/null 2>&1 <<XIN
+  BOOTSTRAP_NO_JQ=1 BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" >/dev/null 2>&1 <<XIN
 {"tool_name":"Write","tool_input":{"file_path":"$T/plan.md"}}
 XIN
   after="$(_count)"
@@ -325,7 +325,7 @@ XIN
 
   # Never blocks, whatever happens: rc 0 even on unreadable stdin.
   n=$((n+1))
-  PB_STATE_DIR="$T/state" /bin/bash "$PB3_SELF" < /dev/null >/dev/null 2>&1
+  BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$HOOK_SELF" < /dev/null >/dev/null 2>&1
   if [ $? -eq 0 ]; then printf '  ok   empty stdin still exits 0 (Copilot preToolUse fails CLOSED)\n'
   else bad=$((bad+1)); printf '  FAIL empty stdin exited non-zero — that DENIES the tool call on Copilot\n'; fi
 
@@ -336,7 +336,7 @@ XIN
 }
 
 case "${1:-}" in
-  --selftest) pb3_selftest; exit $? ;;
+  --selftest) hook_selftest; exit $? ;;
 esac
-pb3_guard_write_main
+hook_guard_write_main
 exit 0

@@ -1,7 +1,7 @@
 # voiceink-rewrite.Modelfile — the derived ollama model VoiceInk's AI enhancement calls.
 #
 # `ollama create voiceink-rewrite -f <this file>`.  m7_model renders a copy of this file into
-# $PB_STATE_DIR with the FROM line rewritten to the base its tier rule selected, and creates the
+# $BOOTSTRAP_STATE_DIR with the FROM line rewritten to the base its tier rule selected, and creates the
 # model from THAT copy.  Nothing is ever written inside the repo.  Edit the PARAMETER lines here
 # and every tier inherits the change; edit FROM here only if you are changing the default base.
 #

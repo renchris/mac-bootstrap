@@ -57,7 +57,7 @@ fi
 #
 # FOUR BOUNDS, and only the first two are new:
 #   B1  stop_hook_active — inherited; it is already the first statement in this file.
-#   B2  the PB_STOP_MAX counter — shared with arm C, so the two arms cannot between them spend
+#   B2  the BOOTSTRAP_STOP_MAX counter — shared with arm C, so the two arms cannot between them spend
 #       more forced turns than the file's one documented budget.
 #   B4  a PER-SESSION LATCH inside recycle-due: a session is asked to hand itself off AT MOST
 #       ONCE, ever, however many times this hook runs. Stronger than a counter, because the
@@ -65,28 +65,28 @@ fi
 #       every subsequent stop for the rest of the session, which is the runaway shape.
 #   B5  no agent-handoff, not executable, or a non-zero rc ⇒ the arm does not exist this turn.
 # FAILS OPEN at every seam, like everything else in this file.
-AH="$PB_DIR/bin/agent-handoff"
+AH="$BOOTSTRAP_STATE_DIR/bin/agent-handoff"
 if [ -x "$AH" ] && [ "$CNT" -lt "$MAX" ] \
    && R_REASON="$("$AH" recycle-due "$SID" 2>/dev/null)" && [ -n "$R_REASON" ]; then
   printf '%s %s' "$SID" "$(( CNT + 1 ))" > "$CNT_F" 2>/dev/null || true
-  printf '%s\n' "$RUNG $LEDGER" > "$PB_DIR/last-ledger" 2>/dev/null || true
-  R_SYS="⟳ pb-stop [$(( CNT + 1 ))/$MAX]: context past ${PB_CTX_T:-70}% — handing off. $RUNG${LEDGER:+ — $LEDGER}"
+  printf '%s\n' "$RUNG $LEDGER" > "$BOOTSTRAP_STATE_DIR/last-ledger" 2>/dev/null || true
+  R_SYS="⟳ pb-stop [$(( CNT + 1 ))/$MAX]: context past ${BOOTSTRAP_CONTEXT_THRESHOLD_PCT:-70}% — handing off. $RUNG${LEDGER:+ — $LEDGER}"
   # The reason text CONTAINS DOUBLE QUOTES (it quotes the capture command back at the model), so
   # the no-jq arm must escape rather than interpolate. A Stop hook that emits malformed JSON has
   # its whole chain ignored, silently — and the one message that most needs to survive a missing
   # jq is the one telling the session to save itself.
-  if R_JQ="$(pb_jq)"; then
+  if R_JQ="$(bootstrap_jq)"; then
     "$R_JQ" -nc --arg r "$R_REASON" --arg s "$R_SYS" \
             '{decision:"block",reason:$r,systemMessage:$s}'
   else
     printf '{"decision":"block","reason":"%s","systemMessage":"%s"}\n' \
-      "$(pb_json_escape "$R_REASON")" "$(pb_json_escape "$R_SYS")"
+      "$(bootstrap_json_escape "$R_REASON")" "$(bootstrap_json_escape "$R_SYS")"
   fi
   exit 0
 fi
 ```
 
-`PB_DIR`, `CNT`, `MAX`, `CNT_F`, `SID`, `RUNG` and `LEDGER` are all already in scope at that point
+`BOOTSTRAP_STATE_DIR`, `CNT`, `MAX`, `CNT_F`, `SID`, `RUNG` and `LEDGER` are all already in scope at that point
 in `pb-stop.sh`; the patch introduces `AH`, `R_REASON`, `R_SYS` and `R_JQ` and nothing else.
 
 ## Measured — 9 arms, run against the real installed `agent-handoff`

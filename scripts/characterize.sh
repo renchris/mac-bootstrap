@@ -351,10 +351,10 @@ VSAT="$(receipt_states "$VRECEIPT" | grep -c ' SATISFIED$' | tr -d ' ')"
 same "verify-agrees-with-the-install" "$VSAT" "$ROW_N"
 
 # the standalone wrapper, which adds the control arm and the human-readable render
-VF_OUT="$(HOME="$CHECK_HOME" TMPDIR="$CHECK_WORK" /bin/bash "$CHECK_ROOT/verify.sh" 2>&1)"; VF_RC=$?
-printf '%s\n' "$VF_OUT" | snap verify-wrapper.txt
-same "verify-wrapper-rc" "$VF_RC" 0
-case "$VF_OUT" in
+VERIFY_OUT="$(HOME="$CHECK_HOME" TMPDIR="$CHECK_WORK" /bin/bash "$CHECK_ROOT/verify.sh" 2>&1)"; VERIFY_RC=$?
+printf '%s\n' "$VERIFY_OUT" | snap verify-wrapper.txt
+same "verify-wrapper-rc" "$VERIFY_RC" 0
+case "$VERIFY_OUT" in
   *control*) pass "verify-wrapper-runs-its-control-arm" ;;
   *) fail "verify-wrapper-runs-its-control-arm" ;;
 esac

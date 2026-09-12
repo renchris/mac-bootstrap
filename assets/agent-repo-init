@@ -39,10 +39,10 @@ ari_self_dir() {
 # then the state dir, then an explicit override. Never a path with a user name in it.
 ari_template() {
   local c
-  for c in "${PB_REPO_TEMPLATE:-}" \
+  for c in "${BOOTSTRAP_REPO_TEMPLATE:-}" \
            "$(ari_self_dir)/../templates/repo-CLAUDE.md" \
-           "${PB_STATE_DIR:-$HOME/.mac-bootstrap}/templates/repo-CLAUDE.md" \
-           "${PB_ASSETS:-}/repo-CLAUDE.md"; do
+           "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/templates/repo-CLAUDE.md" \
+           "${BOOTSTRAP_ASSETS:-}/repo-CLAUDE.md"; do
     [ -n "$c" ] || continue
     [ -r "$c" ] && { printf '%s' "$c"; return 0; }
   done
@@ -83,7 +83,7 @@ if [ -e AGENTS.md ] || [ -L AGENTS.md ]; then
 else
   ari_tpl="$(ari_template)" || {
     printf 'agent-repo-init: refusing — no AGENTS.md here and no template to write one from.\n' >&2
-    printf '  Looked beside this script, in $PB_STATE_DIR/templates, and in $PB_ASSETS.\n' >&2
+    printf '  Looked beside this script, in $BOOTSTRAP_STATE_DIR/templates, and in $BOOTSTRAP_ASSETS.\n' >&2
     exit 2; }
   # temp + mv, so an interrupted copy can never leave a half-written instructions file behind
   if ! { cp "$ari_tpl" "AGENTS.md.ari-tmp.$$" 2>/dev/null &&
