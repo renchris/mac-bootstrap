@@ -39,7 +39,7 @@ set -u
 
 MB_VERSION=1
 MB_REPO="renchris/mac-bootstrap"
-MB_PIN="${MB_PIN:-__PIN_SHA__}"          # replaced at release time. NEVER "main": a main-pinned
+MB_PIN="${MB_PIN:-e3493657d2226e39c9307f5f0b4e311aefc21eeb}"          # replaced at release time. NEVER "main": a main-pinned
                                          # raw URL serves up to 5 minutes of stale Fastly bytes.
 MB_RAW="https://raw.githubusercontent.com/$MB_REPO/$MB_PIN"
 
