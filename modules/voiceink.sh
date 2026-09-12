@@ -1,5 +1,5 @@
 #!/bin/bash
-# modules/voiceink.sh — DELIVERABLE 4a: a local, licence-key-free, TCC-stable VoiceInk.
+# modules/voiceink.sh — a local, licence-key-free, TCC-stable VoiceInk.
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # WHAT THIS MODULE CLAIMS WHEN IT SAYS SATISFIED, AND WHAT IT DOES NOT

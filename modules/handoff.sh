@@ -1,5 +1,5 @@
 #!/bin/bash
-# handoff — DELIVERABLE 2c: portable /handoff and self-recycle, END TO END, NO HUMAN.
+# handoff — portable /handoff and self-recycle, END TO END, NO HUMAN.
 #
 # FIVE artifacts, and two of them are documents rather than programs:
 #   $BOOTSTRAP_STATE_DIR/bin/agent-handoff            the verb: capture | status | fire | resume | doctor

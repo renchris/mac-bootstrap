@@ -24,7 +24,7 @@
 # ollama drops it. The Modelfile is the only lever. The full measurement, both arms of the A/B and
 # the refutation of the "24 GB" story are in assets/voiceink-rewrite.Modelfile.
 #
-# THE GUI STEP (this is deliverable 4's whole point). VoiceInk resolves its AI provider PER MODE:
+# THE GUI STEP (this is this module's whole point). VoiceInk resolves its AI provider PER MODE:
 # ModeRuntimeConfiguration reads mode?.selectedAIProvider and falls back to `resolvedProvider`,
 # which returns `aiService.connectedProviders.first` — and connectedProviders filters
 # AIProvider.allCases IN DECLARATION ORDER, where gemini is 3rd and ollama is 13th. So ANY

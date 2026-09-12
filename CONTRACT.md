@@ -121,8 +121,8 @@ are the contract.
 | Variable | Set by | Meaning |
 |---|---|---|
 | `BOOTSTRAP_MODE` | the driver | `install` · `verify` · `bench` · `uninstall` |
-| `BOOTSTRAP_MODEL` | `--model <name>` | the model a module should install. `BOOTSTRAP_MODEL` is a compatibility alias for the same value. |
-| `BOOTSTRAP_BENCH` | `--bench <model>` | the candidate `bench_` should measure. `BOOTSTRAP_BENCH` is its alias. |
+| `BOOTSTRAP_MODEL` | `--model <name>` | the model a module should install. |
+| `BOOTSTRAP_BENCH` | `--bench <model>` | the candidate `bench_` should measure. |
 | `BOOTSTRAP_STATE_DIR` | the driver | `$HOME/.mac-bootstrap`. **All runtime state goes here**, never in the repo. |
 | `BOOTSTRAP_ASSETS` | the driver | the `assets/` directory beside `bootstrap.sh`, when running from a clone. |
 | `BOOTSTRAP_LIB` | the driver | the absolute path to the `bootstrap-lib.sh` in force. |

@@ -1,5 +1,5 @@
 #!/bin/bash
-# hooks.sh — DELIVERABLE 2b: the agent lifecycle hook core, for BOTH agents.
+# hooks.sh — the agent lifecycle hook core, for BOTH agents.
 #
 # INSTALLS five files into $BOOTSTRAP_STATE_DIR/hooks — bootstrap-lib.sh and four hooks — and REGISTERS THREE
 # of them, twice: once in $HOME/.claude/settings.json and once in

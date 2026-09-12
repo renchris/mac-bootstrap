@@ -1,5 +1,5 @@
 #!/bin/bash
-# instructions — DELIVERABLE 2a. The minimal, repo-agnostic instructions file, honoured by
+# instructions — the minimal, repo-agnostic instructions file, honoured by
 # BOTH Claude Code and GitHub Copilot CLI.
 #
 # It installs four things and nothing else:

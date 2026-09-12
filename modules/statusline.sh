@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# statusline — DELIVERABLE 1: context-% in the status line, on BOTH agents.
+# statusline — context-% in the status line, on BOTH agents.
 #
 # Installs assets/agent-statusline.sh to $BOOTSTRAP_STATE_DIR/bin/ and registers it, by ABSOLUTE path,
 # in $HOME/.claude/settings.json and $HOME/.copilot/settings.json — both through the ONE writer,

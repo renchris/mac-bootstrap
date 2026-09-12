@@ -58,7 +58,7 @@
 
 SCREENSHOT_APP="/Applications/Hammerspoon.app"
 # The Hammerspoon config is VENDORED at assets/hammerspoon/init.lua. It used to be cloned from a
-# personal GitHub repo, which made deliverable 5 fail for anyone who is not its owner and put an
+# personal GitHub repo, which made this module fail for anyone who is not its owner and put an
 # account-shaped dependency in a bootstrap whose whole premise is an ANONYMOUS reader. The clone
 # path survives only when the operator explicitly points at a checkout they want to track.
 SCREENSHOT_REPO_URL="${BOOTSTRAP_SCREENSHOT_REPO_URL:-}"

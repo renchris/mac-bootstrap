@@ -15,7 +15,7 @@ the advisory's own wording does not survive: **`systemMessage` reaches the OPERA
 model.** The text says *"…then run /handoff"*, and the only reader who can run `/handoff` is the
 one who cannot see it.
 
-So deliverable 2c's *self*-recycle is not delivered by arm B. At Stop there is exactly one channel
+So `handoff`'s *self*-recycle is not delivered by arm B. At Stop there is exactly one channel
 that reaches the model — `decision:"block"`, whose `reason` becomes the next turn — and that is
 what this arm uses. It is the same mechanism arm C already uses for uncommitted work; this is the
 second thing worth spending a forced turn on.
