@@ -68,12 +68,6 @@ name is refused with the list of real ones, so it never selects nothing and call
 
 ## 3. Run it, and read the exit code
 
-> [!IMPORTANT]
-> **This repo is private today, so the fetch below needs auth.** `raw.githubusercontent.com` answers
-> anonymously with 404, and that request is step 1 of both paths. Until it is public, run `gh auth
-> login` on the target Mac first (it needs GitHub for Copilot anyway), or clone this repo somewhere
-> that can and carry `bootstrap.sh` across.
-
 `0` all satisfied · `10` satisfied but for steps waiting on **you** · `20` something failed, read the
 log · `30` the run could not assemble itself, so it is *not* a verdict about your machine (precedence
 `30 > 20 > 10 > 0`, install and verify alike). It is idempotent — **re-running it is the recovery
@@ -82,7 +76,10 @@ procedure** — and writes only to `$HOME/.mac-bootstrap/`.
 ### If an agent is already running, paste this
 
 Replace `bd3f74ff41d10aaf285a0846b66d12d7c47b3986` with the release commit — never `main`, whose
-raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured).
+raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured). At
+that pinned commit `bootstrap.sh` is 790 lines and `shasum -a 256` reads
+`ddb2831d09dd0103761315ab9a028f3599f5aeb9fcfb4c5066451c868e45e2ed`; step 1 shows you the checksum,
+and anything else means stop.
 
 ```text
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
