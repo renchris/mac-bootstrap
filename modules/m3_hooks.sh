@@ -1,15 +1,15 @@
 #!/bin/bash
 # m3_hooks.sh — DELIVERABLE 2b: the agent lifecycle hook core, for BOTH agents.
 #
-# INSTALLS five files into $BOOTSTRAP_STATE_DIR/hooks — pb-lib.sh and four hooks — and REGISTERS THREE
+# INSTALLS five files into $BOOTSTRAP_STATE_DIR/hooks — bootstrap-lib.sh and four hooks — and REGISTERS THREE
 # of them, twice: once in $HOME/.claude/settings.json and once in
-# $HOME/.copilot/hooks/00-lifecycle.json. The wire table is assets/copilot-hooks.json (_pb.wire);
+# $HOME/.copilot/hooks/00-lifecycle.json. The wire table is assets/copilot-hooks.json (_spec.wire);
 # this module renders it, it does not carry a second copy of it.
 #
-#   pb-session-start.sh  SessionStart  → frozen scope · last ledger · LIVE git read · jq warning
-#   pb-stop.sh           Stop          → ledger · context-fill advisory (C3) · bounded continue
-#   pb-guard-write.sh    PreToolUse    → backup + INTEGRATE-never-overwrite advisory
-#   pb-guard-bash.sh     (not wired)   → installed, deliberately unregistered. See below.
+#   session-start.sh  SessionStart  → frozen scope · last ledger · LIVE git read · jq warning
+#   stop.sh           Stop          → ledger · context-fill advisory (C3) · bounded continue
+#   guard-write.sh    PreToolUse    → backup + INTEGRATE-never-overwrite advisory
+#   guard-bash.sh     (not wired)   → installed, deliberately unregistered. See below.
 #
 # ── WHY BOTH AGENTS TAKE ONE SET OF SCRIPTS ──────────────────────────────────────────────────
 # Registered under Claude Code's PascalCase event names — which GitHub documents as the "VS Code
@@ -21,7 +21,7 @@
 # fire until a folder is trusted, so a bootstrap that used them would install a hook set that
 # does nothing and says so nowhere.
 #
-# ── WHY pb-guard-bash.sh IS INSTALLED AND NOT WIRED ──────────────────────────────────────────
+# ── WHY guard-bash.sh IS INSTALLED AND NOT WIRED ──────────────────────────────────────────
 # It false-allowed its own flagship class: a quoted `rm -rf "$HOME/…"`, a quoted force-push to
 # trunk, a bare `~`, a `${HOME}` spelling and a `+main` refspec all got through, because its
 # quote-stripping pre-pass deleted the token its patterns matched and every one of its fourteen
@@ -37,13 +37,13 @@
 #
 # Contract: six verbs, no top-level side effects, bash 3.2, set -u, never `exit`.
 
-# ── small helpers this module needs and pb-lib does not have. Noted as contract deviations. ──
+# ── small helpers this module needs and bootstrap-lib.sh does not have. Noted as contract deviations. ──
 
 m3_dir()      { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/hooks"; }
 m3_cc()       { printf '%s' "$HOME/.claude/settings.json"; }
 m3_cop()      { printf '%s' "$HOME/.copilot/hooks/00-lifecycle.json"; }
-m3_scripts()  { printf '%s' "pb-session-start.sh pb-stop.sh pb-guard-write.sh pb-guard-bash.sh"; }
-m3_unwired()  { printf '%s' "pb-guard-bash.sh"; }
+m3_scripts()  { printf '%s' "session-start.sh stop.sh guard-write.sh guard-bash.sh"; }
+m3_unwired()  { printf '%s' "guard-bash.sh"; }
 
 # m3_asset <relpath> <dest> — resolve a shipped asset: the clone first, then the installed copy,
 # then the pinned raw URL. Returns 1 if it cannot be had, and never leaves a partial file.
@@ -73,14 +73,14 @@ m3_table() {
 m3_rows() {
   local t
   t="$(m3_table)" || { printf '0'; return 0; }
-  bootstrap_array_len "$t" "_pb.wire"
+  bootstrap_array_len "$t" "_spec.wire"
 }
 
 # m3_field <row-index> <field> — one field of one wire row, or empty.
 m3_field() {
   local t
   t="$(m3_table)" || return 1
-  bootstrap_settings_get "$t" "_pb.wire.${1:-0}.${2:-script}" raw
+  bootstrap_settings_get "$t" "_spec.wire.${1:-0}.${2:-script}" raw
 }
 
 # m3_cmd <script> — the ABSOLUTE command string we register. $HOME is expanded here rather than
@@ -147,9 +147,9 @@ m3_file_unusable() {
 #   · the unwired guard registered EXACTLY ZERO times in either file
 #   · a bogus event name registered nowhere (the negative control: without it, "the hooks are
 #     wired" is unfalsifiable — everything is wired if nothing is checked for absence)
-#   · pb-guard-write.sh FIRED with a real PreToolUse payload actually writes a backup file, and
+#   · guard-write.sh FIRED with a real PreToolUse payload actually writes a backup file, and
 #     fired with a tool name that cannot overwrite anything writes nothing
-#   · pb-stop.sh's own fixtures pass — they carry the C3 matrix (12%/82% × repo/bare/inert-git)
+#   · stop.sh's own fixtures pass — they carry the C3 matrix (12%/82% × repo/bare/inert-git)
 #
 # HONEST BOUND, and it is the one thing this verifier cannot do: it does not launch an agent.
 # Registering a hook and having a real agent RUN it are different claims, and the second needs an
@@ -176,9 +176,9 @@ verify_m3_hooks() {
       cmp -s "${BOOTSTRAP_ASSETS}/hooks/$s" "$d/$s" || return 1
     fi
   done
-  [ -f "$d/pb-lib.sh" ] || return 1
+  [ -f "$d/bootstrap-lib.sh" ] || return 1
   [ -f "$d/copilot-hooks.json" ] || return 1
-  if [ -n "${BOOTSTRAP_LIB:-}" ] && [ -r "${BOOTSTRAP_LIB}" ]; then cmp -s "${BOOTSTRAP_LIB}" "$d/pb-lib.sh" || return 1; fi
+  if [ -n "${BOOTSTRAP_LIB:-}" ] && [ -r "${BOOTSTRAP_LIB}" ]; then cmp -s "${BOOTSTRAP_LIB}" "$d/bootstrap-lib.sh" || return 1; fi
 
   # the wire table's two renderings must still agree — a table copied twice drifts in silence
   i=0
@@ -215,7 +215,7 @@ verify_m3_hooks() {
   # FIRE the write guard for real, in a sandbox, and require the file it promises to appear.
   T="$(mktemp -d -t m3v 2>/dev/null)" || return 1
   printf 'a\nb\n' > "$T/plan.md"
-  out="$(BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$d/pb-guard-write.sh" 2>/dev/null <<XIN
+  out="$(BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$d/guard-write.sh" 2>/dev/null <<XIN
 {"hook_event_name":"PreToolUse","session_id":"VERIFY","cwd":"$T","tool_name":"Write","tool_input":{"file_path":"$T/plan.md"}}
 XIN
 )"
@@ -227,7 +227,7 @@ XIN
   # structural check above still passed. A settings file can be perfectly wired to a hook that
   # does nothing.
   before="$after"
-  BOOTSTRAP_NO_JQ=1 BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$d/pb-guard-write.sh" >/dev/null 2>&1 <<XIN
+  BOOTSTRAP_NO_JQ=1 BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$d/guard-write.sh" >/dev/null 2>&1 <<XIN
 {"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"$T/plan.md"}}
 XIN
   after="$(ls "$T/state/backups/"*.bak 2>/dev/null | bootstrap_count)"
@@ -235,7 +235,7 @@ XIN
 
   # …and the negative half: a tool that cannot overwrite a file must write nothing at all.
   before="$after"
-  out="$(BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$d/pb-guard-write.sh" 2>/dev/null <<XIN
+  out="$(BOOTSTRAP_STATE_DIR="$T/state" /bin/bash "$d/guard-write.sh" 2>/dev/null <<XIN
 {"hook_event_name":"PreToolUse","session_id":"VERIFY","cwd":"$T","tool_name":"NotAToolXYZ","tool_input":{"file_path":"$T/plan.md"}}
 XIN
 )"
@@ -245,7 +245,7 @@ XIN
   rm -rf "$T" 2>/dev/null
 
   # the Stop hook's own fixtures — they carry the C3 matrix and the block bound
-  /bin/bash "$d/pb-stop.sh" --selftest >/dev/null 2>&1 || rc=1
+  /bin/bash "$d/stop.sh" --selftest >/dev/null 2>&1 || rc=1
 
   return "$rc"
 }
@@ -292,11 +292,11 @@ install_m3_hooks() {
   mkdir -p "$d" 2>/dev/null || { bootstrap_warn "m3: cannot create $d"; return 1; }
 
   # the library the hooks source: the one in force, so a hook can never run against a different
-  # pb-lib than the driver did. Falls back to the shipped asset when BOOTSTRAP_LIB is unset.
+  # bootstrap-lib.sh than the driver did. Falls back to the shipped asset when BOOTSTRAP_LIB is unset.
   if [ -n "${BOOTSTRAP_LIB:-}" ] && [ -r "${BOOTSTRAP_LIB}" ]; then
-    cp -f "${BOOTSTRAP_LIB}" "$d/pb-lib.sh" 2>/dev/null || { bootstrap_warn "m3: cannot place pb-lib.sh"; return 1; }
+    cp -f "${BOOTSTRAP_LIB}" "$d/bootstrap-lib.sh" 2>/dev/null || { bootstrap_warn "m3: cannot place bootstrap-lib.sh"; return 1; }
   else
-    m3_asset hooks/pb-lib.sh "$d/pb-lib.sh" || { bootstrap_warn "m3: cannot resolve pb-lib.sh"; return 1; }
+    m3_asset hooks/bootstrap-lib.sh "$d/bootstrap-lib.sh" || { bootstrap_warn "m3: cannot resolve bootstrap-lib.sh"; return 1; }
   fi
   for s in $(m3_scripts); do
     m3_asset "hooks/$s" "$d/$s" || { bootstrap_warn "m3: cannot resolve $s"; return 1; }
@@ -334,7 +334,12 @@ install_m3_hooks() {
 uninstall_m3_hooks() {
   local d f i ev b keep=0 s
   d="$(m3_dir)"
-  bootstrap_hook_unwire "$(m3_cc)" "$d/pb-" >/dev/null 2>&1
+  # OWNERSHIP IS THE DIRECTORY, NOT A FILENAME PREFIX. This used to match the hook scripts by
+  # their old shared filename prefix, so renaming them silently stopped the uninstall unwiring
+  # them: the registrations survived in the user's settings.json, pointing at scripts that had
+  # just been deleted. The hooks directory is ours entirely — that is the fact, and a filename
+  # convention nothing enforced was never it.
+  bootstrap_hook_unwire "$(m3_cc)" "$d/" >/dev/null 2>&1
 
   # The Copilot file is ours by name (00-lifecycle.json). Remove it only if every entry in it is
   # ours; if a human added one, leave the file alone and say so rather than editing around them.
@@ -344,7 +349,7 @@ uninstall_m3_hooks() {
       i=0
       while [ "$i" -lt 64 ]; do
         b="$(bootstrap_settings_get "$f" "hooks.$ev.$i.bash" raw 2>/dev/null)" || break
-        case "$b" in "$d/pb-"*) : ;; *) keep=1 ;; esac
+        case "$b" in "$d/"*) : ;; *) keep=1 ;; esac
         i=$((i + 1))
       done
     done
@@ -356,7 +361,7 @@ uninstall_m3_hooks() {
   fi
 
   for s in $(m3_scripts); do rm -f "$d/$s" 2>/dev/null; done
-  rm -f "$d/pb-lib.sh" "$d/copilot-hooks.json" 2>/dev/null
+  rm -f "$d/bootstrap-lib.sh" "$d/copilot-hooks.json" 2>/dev/null
   rmdir "$d" 2>/dev/null || true
   rm -f "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/stop-count" \
         "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/last-ledger" 2>/dev/null

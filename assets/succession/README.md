@@ -495,8 +495,8 @@ Each carries its measurement in a comment beside the code.
   real transcript carrying deliberate `"type":"assistant"` bait). It remains reachable in theory via
   a structured `toolUseResult`, but only *after* the agent has run a tool, which is engagement at a
   higher tier than the one being forged.
-* `agent-handoff selftest` shows 4 failures when `pb-lib.sh` is unreachable — all four are
-  context-fill arms, and the tool correctly reports `UNKNOWN (no-pb-lib)`. Not an engine defect, but
+* `agent-handoff selftest` shows 4 failures when `bootstrap-lib.sh` is unreachable — all four are
+  context-fill arms, and the tool correctly reports `UNKNOWN (no-bootstrap-lib.sh)`. Not an engine defect, but
   a standalone install of the succession parts will show red.
 
 ### UNTESTED ON THE TARGET MACHINE (clean-install Mac, iTerm2, Copilot seat)

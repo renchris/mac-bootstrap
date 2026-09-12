@@ -1,7 +1,7 @@
 #!/bin/bash
-# pb-lib.sh — the ONLY shared code in mac-bootstrap.
+# bootstrap-lib.sh — the ONLY shared code in mac-bootstrap.
 #
-# Sourced by BOTH the lifecycle hooks (pb-session-start.sh, pb-stop.sh, pb-guard-*.sh) and the
+# Sourced by BOTH the lifecycle hooks (session-start.sh, stop.sh, pb-guard-*.sh) and the
 # installer modules (modules/mN_*.sh) and the driver (bootstrap.sh). One copy, one set of rules.
 #
 # THE FIVE PROPERTIES, each of which cost a measured defect somewhere in this corpus:
@@ -24,11 +24,11 @@
 # itself. The SHA pin on the fetched tree is the only real integrity control. This is
 # defence-in-depth against our own mistakes and is documented as exactly that.
 #
-# Self-test:  bash pb-lib.sh --selftest      (runs the shipped fixtures, including the C1 red arm)
+# Self-test:  bash bootstrap-lib.sh --selftest      (runs the shipped fixtures, including the C1 red arm)
 
 # ── Seams. Every one has a default; none is required. ────────────────────────────────────────
 BOOTSTRAP_STATE_DIR="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"
-BOOTSTRAP_TELEMETRY_DIR="${BOOTSTRAP_TELEMETRY_DIR:-/tmp/pb-telemetry}"
+BOOTSTRAP_TELEMETRY_DIR="${BOOTSTRAP_TELEMETRY_DIR:-/tmp/mac-bootstrap-telemetry}"
 BOOTSTRAP_CONTEXT_THRESHOLD_PCT="${BOOTSTRAP_CONTEXT_THRESHOLD_PCT:-70}"                 # context-fill threshold, percent
 BOOTSTRAP_CONTEXT_MAX_AGE_S="${BOOTSTRAP_CONTEXT_MAX_AGE_S:-600}"    # telemetry older than this says NOTHING
 BOOTSTRAP_LIB_VERSION=1
@@ -41,7 +41,7 @@ BOOTSTRAP_PLUTIL=/usr/bin/plutil
 # ── bootstrap_warn <text> — stderr + the log. NEVER stdout: a hook's stdout is parsed as JSON. ──────
 bootstrap_warn() {
   printf 'pb: %s\n' "$*" >&2
-  [ -n "${BOOTSTRAP_LOG:-}" ] && printf '%s pb-lib %s\n' "$(date -u +%FT%TZ)" "$*" >>"$BOOTSTRAP_LOG" 2>/dev/null
+  [ -n "${BOOTSTRAP_LOG:-}" ] && printf '%s bootstrap-lib.sh %s\n' "$(date -u +%FT%TZ)" "$*" >>"$BOOTSTRAP_LOG" 2>/dev/null
   return 0
 }
 
@@ -198,7 +198,7 @@ bootstrap_backup() {
   case "$BOOTSTRAP_BACKED_UP" in *"|$f|"*) return 0 ;; esac
   BOOTSTRAP_BACKED_UP="$BOOTSTRAP_BACKED_UP|$f|"
   [ -f "$f" ] || return 0
-  cp -p "$f" "$f.pb-bak.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+  cp -p "$f" "$f.mac-bootstrap-backup.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
   return 0
 }
 
@@ -252,10 +252,10 @@ bootstrap_settings_refuse() {
 #   ADDITIVE    every other key in the file survives; we set exactly one keypath.
 #   IDEMPOTENT  if the keypath already holds this value (compared through plutil's own
 #               normalisation, not by string equality), the file is not touched at all.
-#   ATOMIC      all work happens on <file>.pb-tmp.$$ and is read back THERE; a failed write
+#   ATOMIC      all work happens on <file>.mac-bootstrap-tmp.$$ and is read back THERE; a failed write
 #               never lands, and a half-written settings.json — which makes the agent start
 #               with NO hooks, silently — is impossible.
-#   BACKED UP   <file>.pb-bak.<utc> once per process.
+#   BACKED UP   <file>.mac-bootstrap-backup.<utc> once per process.
 #   DEGRADING   jq when present, plutil when not. NEVER returns non-zero merely for no jq.
 #
 # 🚨 C1, and it is the whole reason this function exists. plutil -replace AND -insert BOTH exit 1
@@ -266,7 +266,7 @@ bootstrap_settings_refuse() {
 #        $ plutil -insert  statusLine -json '{…}' a.json   →  a.json: <unknown error>   rc=1
 #        $ plutil -convert json a.json ; plutil -replace … →  rc=1   (-convert is not the fix)
 #    The fix is to seed a throwaway key, write, then remove the seed — measured rc=0 both calls.
-#    `bash pb-lib.sh --selftest` runs the PRE-FIX arm and asserts it RED, so the repair here is
+#    `bash bootstrap-lib.sh --selftest` runs the PRE-FIX arm and asserts it RED, so the repair here is
 #    attributable rather than merely asserted.
 #
 # rc: 0 written-or-already-correct · 2 refused/failed · 3 keypath shape not supported
@@ -292,7 +292,7 @@ bootstrap_settings_merge() {
   idx="$(bootstrap_array_len "$f" "$k")"                            # where an append will land
 
   bootstrap_backup "$f"
-  tmp="$f.pb-tmp.$$"
+  tmp="$f.mac-bootstrap-tmp.$$"
   if [ -s "$f" ]; then
     cp -p "$f" "$tmp" 2>/dev/null || { bootstrap_warn "cannot copy $f"; return 2; }
     bootstrap_json_ok "$tmp" || { rm -f "$tmp"; bootstrap_warn "$f is not valid JSON — refusing to touch it."; return 2; }
@@ -520,7 +520,7 @@ bootstrap_copilot_hook_wire() {
 # states are the target machine's day-one state (/usr/bin/git is an inert xcrun shim until a
 # human installs the Command Line Tools, and the prompt says "in any directory"). A caller must
 # render bootstrap_ctx_advisory UNCONDITIONALLY; it is silent when it has nothing to say, which is the
-# only correct silence. `bash pb-lib.sh --selftest` runs the no-git arm.
+# only correct silence. `bash bootstrap-lib.sh --selftest` runs the no-git arm.
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
 # bootstrap_ctx_pct <session_id> → an integer 0-100, or nothing.
@@ -629,7 +629,7 @@ bootstrap_trunk() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-# SHIPPED FIXTURES —  bash pb-lib.sh --selftest
+# SHIPPED FIXTURES —  bash bootstrap-lib.sh --selftest
 #
 # Not decoration. C1's own correction says: "Add the {} case as a shipped fixture … with the
 # pre-fix arm asserted red — otherwise the repair is unattributed." Case 1 IS that pre-fix arm:
@@ -645,7 +645,7 @@ bootstrap_is()   { if [ "$2" = "$3" ]; then bootstrap_ok "$1"; else bootstrap_ba
 bootstrap_selftest() {
   local T A B rc out sid arm
   T="$(mktemp -d -t pbself)" || return 30
-  printf 'pb-lib selftest · bash %s · %s %s\n' "${BASH_VERSION:-?}" "$(sw_vers -productVersion 2>/dev/null)" "$(uname -m)"
+  printf 'bootstrap-lib.sh selftest · bash %s · %s %s\n' "${BASH_VERSION:-?}" "$(sw_vers -productVersion 2>/dev/null)" "$(uname -m)"
 
   # ── 1. C1 PRE-FIX (RED) ARM. The unrepaired command against a literal {}. ──────────────────
   printf '{}\n' > "$T/c1.json"
@@ -687,14 +687,14 @@ bootstrap_selftest() {
 
     # 5. HOOKS: user's existing hook stays FIRST, ours is appended, and re-wiring is a no-op.
     printf '%s\n' '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/mine/existing.sh"}]}]}}' > "$T/h.json"
-    bootstrap_hook_wire "$T/h.json" Stop "" "/pb/pb-stop.sh" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
     bootstrap_is "[$arm] hook: user's hook still first" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.0.command raw)" "/mine/existing.sh"
-    bootstrap_is "[$arm] hook: ours appended into the same matcher group" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.1.command raw)" "/pb/pb-stop.sh"
+    bootstrap_is "[$arm] hook: ours appended into the same matcher group" "$(bootstrap_settings_get "$T/h.json" hooks.Stop.0.hooks.1.command raw)" "/pb/stop.sh"
     A="$(shasum -a 256 "$T/h.json" | cut -d' ' -f1)"
-    bootstrap_hook_wire "$T/h.json" Stop "" "/pb/pb-stop.sh" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
     B="$(shasum -a 256 "$T/h.json" | cut -d' ' -f1)"
     bootstrap_is "[$arm] hook: re-wiring is a no-op" "$A" "$B"
-    bootstrap_hook_wire "$T/h.json" PreToolUse "Write|MultiEdit" "/pb/pb-guard-write.sh" >/dev/null 2>&1
+    bootstrap_hook_wire "$T/h.json" PreToolUse "Write|MultiEdit" "/pb/guard-write.sh" >/dev/null 2>&1
     bootstrap_is "[$arm] hook: a new event is created as an ARRAY, not a dict" "$(bootstrap_settings_type "$T/h.json" hooks.PreToolUse)" "array"
     bootstrap_is "[$arm] hook: new matcher group carries the matcher" "$(bootstrap_settings_get "$T/h.json" hooks.PreToolUse.0.matcher raw)" "Write|MultiEdit"
     bootstrap_hook_wire "$T/h.json" Stop "OTHER" "/pb/other.sh" >/dev/null 2>&1
@@ -705,12 +705,12 @@ bootstrap_selftest() {
 
     # 6. COPILOT: a fresh envelope on a machine with no ~/.copilot at all.
     rm -rf "$T/copilot"
-    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/pb/pb-stop.sh" >/dev/null 2>&1
+    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
     bootstrap_is "[$arm] copilot: version pinned" "$(bootstrap_settings_get "$T/copilot/hooks/00-lifecycle.json" version raw)" "1"
-    bootstrap_is "[$arm] copilot: bash key, not command" "$(bootstrap_settings_get "$T/copilot/hooks/00-lifecycle.json" hooks.Stop.0.bash raw)" "/pb/pb-stop.sh"
+    bootstrap_is "[$arm] copilot: bash key, not command" "$(bootstrap_settings_get "$T/copilot/hooks/00-lifecycle.json" hooks.Stop.0.bash raw)" "/pb/stop.sh"
     bootstrap_is "[$arm] copilot: event is an ARRAY" "$(bootstrap_settings_type "$T/copilot/hooks/00-lifecycle.json" hooks.Stop)" "array"
     A="$(shasum -a 256 "$T/copilot/hooks/00-lifecycle.json" | cut -d' ' -f1)"
-    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/pb/pb-stop.sh" >/dev/null 2>&1
+    bootstrap_copilot_hook_wire "$T/copilot/hooks/00-lifecycle.json" Stop "" "/pb/stop.sh" >/dev/null 2>&1
     B="$(shasum -a 256 "$T/copilot/hooks/00-lifecycle.json" | cut -d' ' -f1)"
     bootstrap_is "[$arm] copilot: re-wiring is a no-op" "$A" "$B"
 
@@ -798,8 +798,8 @@ bootstrap_selftest() {
 if [ "${BASH_SOURCE[0]:-x}" = "${0:-y}" ]; then
   case "${1:-}" in
     --selftest) bootstrap_selftest; exit $? ;;
-    --version)  printf 'pb-lib %s\n' "$BOOTSTRAP_LIB_VERSION"; exit 0 ;;
-    *)          printf 'pb-lib.sh is a library. Source it, or run: bash pb-lib.sh --selftest\n' >&2; exit 0 ;;
+    --version)  printf 'bootstrap-lib.sh %s\n' "$BOOTSTRAP_LIB_VERSION"; exit 0 ;;
+    *)          printf 'bootstrap-lib.sh is a library. Source it, or run: bash bootstrap-lib.sh --selftest\n' >&2; exit 0 ;;
   esac
 fi
 

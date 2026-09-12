@@ -1,5 +1,5 @@
 #!/bin/bash
-# pb-session-start.sh — SessionStart (Claude Code) · SessionStart→sessionStart (Copilot CLI).
+# session-start.sh — SessionStart (Claude Code) · SessionStart→sessionStart (Copilot CLI).
 #
 # THE WHERE-WE-WERE BRIEF, injected as additionalContext before the model's first turn.
 #
@@ -34,8 +34,8 @@
 set -u
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || HOOK_DIR="."
-# shellcheck source=pb-lib.sh disable=SC1091
-. "$HOOK_DIR/pb-lib.sh" 2>/dev/null || exit 0      # no library ⇒ say nothing, never wedge
+# shellcheck source=bootstrap-lib.sh disable=SC1091
+. "$HOOK_DIR/bootstrap-lib.sh" 2>/dev/null || exit 0      # no library ⇒ say nothing, never wedge
 [ "${BOOTSTRAP_SESSION_START_HOOK:-1}" = 1 ] || exit 0
 
 # ── hook_field <payload> <keypath> — READ A FIELD OUT OF THE HOOK PAYLOAD, WITH OR WITHOUT jq. ──
@@ -58,7 +58,7 @@ hook_field() {
   v="$(bootstrap_json "${1:-}" "${2:-}")"
   [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   if [ -z "$HOOK_PAYLOAD" ]; then
-    HOOK_PAYLOAD="$(mktemp -t pbpay 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
+    HOOK_PAYLOAD="$(mktemp -t hook-payload 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
     printf '%s' "${1:-}" > "$HOOK_PAYLOAD" 2>/dev/null || { rm -f "$HOOK_PAYLOAD"; HOOK_PAYLOAD=""; return 0; }
   fi
   bootstrap_settings_get "$HOOK_PAYLOAD" "${2:-}" raw 2>/dev/null

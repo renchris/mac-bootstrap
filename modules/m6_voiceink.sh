@@ -853,7 +853,7 @@ m6_fetch_source() {
     while IFS= read -r rel; do
       [ -n "$rel" ] || continue
       git -C "$src" checkout --quiet -- "$rel" 2>/dev/null
-      rm -f "$src/$rel.pb-bak" 2>/dev/null
+      rm -f "$src/$rel.mac-bootstrap-backup" 2>/dev/null
     done < "$pf"
     rm -f "$pf"
     printf 'm6: reset the path(s) a previous contingency patch had modified\n'
@@ -894,7 +894,7 @@ m6_assert_license_bypass() {
   f="${f%%$'\n'*}"
   [ -n "$f" ] || { printf 'm6: cannot locate the licence state declaration to patch.\n'; return 1; }
   printf 'm6: applying the contingency patch to %s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}"
-  cp "$f" "$f.pb-bak" 2>/dev/null || return 1
+  cp "$f" "$f.mac-bootstrap-backup" 2>/dev/null || return 1
   # Any initialiser, not just `.trial(...)`: at v2.13 the declaration reads `= .unlicensed`, and a
   # regex pinned to the 2025-era `.trial(daysRemaining: 7)` shape matches nothing — which is
   # exactly how apply-local-mods.sh became a no-op that printed success.
@@ -903,7 +903,7 @@ m6_assert_license_bypass() {
   # `.unlicensed` and wrote `.licensednlicensed`. sed is line-oriented, so `.*` is already bounded.
   /usr/bin/sed -i '' -E 's/(licenseState: LicenseState =).*/\1 .licensed/' "$f"
   if grep -q 'licenseState: LicenseState = .licensed' "$f" 2>/dev/null; then
-    rm -f "$f.pb-bak" 2>/dev/null
+    rm -f "$f.mac-bootstrap-backup" 2>/dev/null
     # Record it, so the next run resets exactly this path instead of refusing a tree WE dirtied.
     printf '%s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}" >> "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/m6-patched-paths"
     printf 'm6: patch applied and re-asserted at %s\n' "${f#"$BOOTSTRAP_VOICEINK_SRC"/}"
@@ -911,8 +911,8 @@ m6_assert_license_bypass() {
     printf 'm6: sites. Check in the app that it is not trial-gated before trusting this build.\n'
     return 0
   fi
-  mv -f "$f.pb-bak" "$f" 2>/dev/null
-  rm -f "$f.pb-bak" 2>/dev/null
+  mv -f "$f.mac-bootstrap-backup" "$f" 2>/dev/null
+  rm -f "$f.mac-bootstrap-backup" 2>/dev/null
   printf 'm6: the contingency patch matched nothing; the source was restored. Re-read upstream.\n'
   return 1
 }
@@ -1029,13 +1029,13 @@ m6_deploy() {
   local built="$1" app="$BOOTSTRAP_VOICEINK_APP"
   mkdir -p "$HOME/Applications" || return 1
   /usr/bin/pkill -x VoiceInk 2>/dev/null && sleep 1
-  if [ -d "$app" ]; then rm -rf "$app.pb-old"; mv "$app" "$app.pb-old" || return 1; fi
+  if [ -d "$app" ]; then rm -rf "$app.mac-bootstrap-previous"; mv "$app" "$app.mac-bootstrap-previous" || return 1; fi
   if ! /usr/bin/ditto "$built" "$app"; then
     printf 'm6: ditto failed.\n'
-    [ -d "$app.pb-old" ] && { rm -rf "$app"; mv "$app.pb-old" "$app"; printf 'm6: previous build restored.\n'; }
+    [ -d "$app.mac-bootstrap-previous" ] && { rm -rf "$app"; mv "$app.mac-bootstrap-previous" "$app"; printf 'm6: previous build restored.\n'; }
     return 1
   fi
-  rm -rf "$app.pb-old"
+  rm -rf "$app.mac-bootstrap-previous"
   /usr/bin/xattr -cr "$app" 2>/dev/null || true
   printf 'm6: deployed to %s\n' "$app"
   return 0
@@ -1146,7 +1146,7 @@ install_m6_voiceink() {
 uninstall_m6_voiceink() {
   local app="$BOOTSTRAP_VOICEINK_APP"
   /usr/bin/pkill -x VoiceInk 2>/dev/null && sleep 1
-  rm -rf "$app" "$app.pb-old" 2>/dev/null
+  rm -rf "$app" "$app.mac-bootstrap-previous" 2>/dev/null
   /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks 2>/dev/null
   /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUAutomaticallyUpdate 2>/dev/null
   rm -f "$(m6_steps_file)" "$(m6_sign_script)" 2>/dev/null

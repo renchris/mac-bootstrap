@@ -83,7 +83,7 @@ if [ -n "$PCT" ] && [ -n "$SID" ]; then
   case $SID in ''|*[!A-Za-z0-9._-]*) SID='' ;; esac
 fi
 if [ -n "$PCT" ] && [ -n "$SID" ]; then
-  TD=${BOOTSTRAP_TELEMETRY_DIR:-/tmp/pb-telemetry}
+  TD=${BOOTSTRAP_TELEMETRY_DIR:-/tmp/mac-bootstrap-telemetry}
   if mkdir -p "$TD" 2>/dev/null; then
     TS=$(date +%s 2>/dev/null) || TS=0
     case $TS in ''|*[!0-9]*) TS=0 ;; esac

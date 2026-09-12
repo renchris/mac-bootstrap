@@ -1,5 +1,5 @@
 #!/bin/bash
-# pb-stop.sh — Stop (Claude Code) · Stop→agentStop (Copilot CLI). ONE process, three arms:
+# stop.sh — Stop (Claude Code) · Stop→agentStop (Copilot CLI). ONE process, three arms:
 #
 #   A. THE LEDGER      dirty? committed? pushed? — from LIVE git reads, rendered as one line the
 #                      operator reads and the model cannot fake.
@@ -20,7 +20,7 @@
 # prompt says "in any directory". Measured at 82% fill: in a repo → fires; not a repo → SILENCE;
 # git off PATH → SILENCE. The advisory is the one self-management arm the user asked for.
 #   THE RULE NOW: arm B is computed by bootstrap_ctx_advisory, which reads NO git, NO repo root and NO
-#   ledger, and it is rendered UNCONDITIONALLY. `bash pb-stop.sh --selftest` asserts all four
+#   ledger, and it is rendered UNCONDITIONALLY. `bash stop.sh --selftest` asserts all four
 #   cases — 12% and 82%, each in a git repo and in a bare $TMPDIR — plus a no-git-on-PATH arm.
 #   12% must stay SILENT: an advisory that fires at every stop carries exactly as much
 #   information as one that never fires.
@@ -64,8 +64,8 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || H
 # an EMPTY stdout — which a fixture asserting silence reads as a PASS. (Measured here: C3/4 and
 # B1 both went green while the subject had not run at all.)
 HOOK_SELF="$HOOK_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
-# shellcheck source=pb-lib.sh disable=SC1091
-. "$HOOK_DIR/pb-lib.sh" 2>/dev/null || exit 0
+# shellcheck source=bootstrap-lib.sh disable=SC1091
+. "$HOOK_DIR/bootstrap-lib.sh" 2>/dev/null || exit 0
 
 # ── hook_field <payload> <keypath> — READ A FIELD OUT OF THE HOOK PAYLOAD, WITH OR WITHOUT jq. ──
 # bootstrap_json is the library's reader and is deliberately conservative without jq: it handles only
@@ -87,7 +87,7 @@ hook_field() {
   v="$(bootstrap_json "${1:-}" "${2:-}")"
   [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   if [ -z "$HOOK_PAYLOAD" ]; then
-    HOOK_PAYLOAD="$(mktemp -t pbpay 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
+    HOOK_PAYLOAD="$(mktemp -t hook-payload 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
     printf '%s' "${1:-}" > "$HOOK_PAYLOAD" 2>/dev/null || { rm -f "$HOOK_PAYLOAD"; HOOK_PAYLOAD=""; return 0; }
   fi
   bootstrap_settings_get "$HOOK_PAYLOAD" "${2:-}" raw 2>/dev/null
@@ -138,7 +138,7 @@ hook_block() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-# SHIPPED FIXTURES —  bash pb-stop.sh --selftest
+# SHIPPED FIXTURES —  bash stop.sh --selftest
 # The C3 four-case matrix is the point: a fix with no negative control is a claim. Case 2 and 4
 # (12% SILENT) are what make cases 1, 3 and 5 mean something.
 # ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -185,7 +185,7 @@ XIN
   # this file's C3 section is no longer evidence of anything.
   _tel 82
   out="$( cd "$T/bare" && BOOTSTRAP_TELEMETRY_DIR="$T/tel" /bin/bash -c '
-      . "$1/pb-lib.sh" || exit 0
+      . "$1/bootstrap-lib.sh" || exit 0
       ROOT="$(bootstrap_git "$PWD" rev-parse --show-toplevel)"
       LEDGER=""; [ -n "$ROOT" ] && LEDGER="clean"
       CTX="$(bootstrap_ctx_advisory "$2")"

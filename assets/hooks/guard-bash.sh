@@ -1,5 +1,5 @@
 #!/bin/bash
-# pb-guard-bash.sh — PreToolUse(Bash). Five irreversible shapes, denied by CLASS not by spelling.
+# guard-bash.sh — PreToolUse(Bash). Five irreversible shapes, denied by CLASS not by spelling.
 #
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # 🚨 THIS FILE SHIPS UNWIRED, DELIBERATELY, AND STAYS UNWIRED EVEN THOUGH IT IS NOW FIXED.
@@ -19,7 +19,7 @@
 # by running in anger under a real agent, not by passing its own author's fixtures.
 # `m3_hooks.sh` installs it and does NOT register it; `verify_m3_hooks` ASSERTS it is absent from
 # both settings files, so "unwired" is a checked fact rather than a hope. To wire it deliberately,
-# after reading this paragraph:   bash pb-guard-bash.sh --wire-me-instructions
+# after reading this paragraph:   bash guard-bash.sh --wire-me-instructions
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 #
 # PREVENTS: (1) recursive+force rm reaching $HOME or / ; (2) git clean -x/-X, which deletes
@@ -55,13 +55,13 @@
 # in the measured class and are NOT denied. Do not read this file as a general destructive-command
 # firewall; it denies five named shapes.
 #
-# Seams: BOOTSTRAP_BASH_GUARD_HOOK=0 disables. Self-test: bash pb-guard-bash.sh --selftest
+# Seams: BOOTSTRAP_BASH_GUARD_HOOK=0 disables. Self-test: bash guard-bash.sh --selftest
 set -u
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || HOOK_DIR="."
 HOOK_SELF="$HOOK_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
-# shellcheck source=pb-lib.sh disable=SC1091
-. "$HOOK_DIR/pb-lib.sh" 2>/dev/null || exit 0
+# shellcheck source=bootstrap-lib.sh disable=SC1091
+. "$HOOK_DIR/bootstrap-lib.sh" 2>/dev/null || exit 0
 
 # ── hook_field <payload> <keypath> — READ A FIELD OUT OF THE HOOK PAYLOAD, WITH OR WITHOUT jq. ──
 # bootstrap_json is the library's reader and is deliberately conservative without jq: it handles only
@@ -83,7 +83,7 @@ hook_field() {
   v="$(bootstrap_json "${1:-}" "${2:-}")"
   [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   if [ -z "$HOOK_PAYLOAD" ]; then
-    HOOK_PAYLOAD="$(mktemp -t pbpay 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
+    HOOK_PAYLOAD="$(mktemp -t hook-payload 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
     printf '%s' "${1:-}" > "$HOOK_PAYLOAD" 2>/dev/null || { rm -f "$HOOK_PAYLOAD"; HOOK_PAYLOAD=""; return 0; }
   fi
   bootstrap_settings_get "$HOOK_PAYLOAD" "${2:-}" raw 2>/dev/null
@@ -251,7 +251,7 @@ hook_verdict() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-# SHIPPED FIXTURES — bash pb-guard-bash.sh --selftest
+# SHIPPED FIXTURES — bash guard-bash.sh --selftest
 # Every must-deny row carries at least one QUOTED variant, because the defect this file was
 # rewritten for was invisible to a matrix in which every case was unquoted. The must-allow half
 # is not decoration either: the printer skip and --force-with-lease are what keep it green, and a
@@ -387,18 +387,18 @@ case "${1:-}" in
   --selftest) hook_selftest; exit $? ;;
   --wire-me-instructions)
     cat <<'WIRE'
-pb-guard-bash.sh ships UNWIRED. Read the header paragraph first, then, if you still want it:
+guard-bash.sh ships UNWIRED. Read the header paragraph first, then, if you still want it:
 
   Claude Code   settings.json                       .hooks.PreToolUse[]  matcher "Bash"
   Copilot CLI   ~/.copilot/hooks/00-lifecycle.json  .hooks.PreToolUse[]  matcher "Bash"
 
 Wire it with the repo's own writer, never by hand-editing a settings file:
 
-  . "$HOME/.mac-bootstrap/hooks/pb-lib.sh"
-  bootstrap_hook_wire         "$HOME/.claude/settings.json"            PreToolUse Bash "$HOME/.mac-bootstrap/hooks/pb-guard-bash.sh" 10
-  bootstrap_copilot_hook_wire "$HOME/.copilot/hooks/00-lifecycle.json" PreToolUse Bash "$HOME/.mac-bootstrap/hooks/pb-guard-bash.sh" 10
+  . "$HOME/.mac-bootstrap/hooks/bootstrap-lib.sh"
+  bootstrap_hook_wire         "$HOME/.claude/settings.json"            PreToolUse Bash "$HOME/.mac-bootstrap/hooks/guard-bash.sh" 10
+  bootstrap_copilot_hook_wire "$HOME/.copilot/hooks/00-lifecycle.json" PreToolUse Bash "$HOME/.mac-bootstrap/hooks/guard-bash.sh" 10
 
-Then re-run `bash "$HOME/.mac-bootstrap/hooks/pb-guard-bash.sh" --selftest`, and know that
+Then re-run `bash "$HOME/.mac-bootstrap/hooks/guard-bash.sh" --selftest`, and know that
 verify_m3_hooks will then report FAILED: it asserts this hook is NOT wired, on purpose.
 WIRE
     exit 0 ;;

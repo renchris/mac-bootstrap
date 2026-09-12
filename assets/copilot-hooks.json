@@ -1,6 +1,6 @@
 {
-  "_pb": {
-    "README": "THE WIRE TABLE. This file is the single source of truth for which lifecycle hooks are registered, under which event, on both agents. m3_hooks.sh READS _pb.wire and registers each row through bootstrap_settings_merge (the one writer) — it never copies this file into place, so the _pb block never reaches a user's machine. The top-level hooks object below is the rendered Copilot envelope, kept so a human can see exactly what lands; verify_m3_hooks asserts it still agrees with _pb.wire, because two renderings of one table drift silently.",
+  "_spec": {
+    "README": "THE WIRE TABLE. This file is the single source of truth for which lifecycle hooks are registered, under which event, on both agents. m3_hooks.sh READS _spec.wire and registers each row through bootstrap_settings_merge (the one writer) — it never copies this file into place, so the _spec block never reaches a user's machine. The top-level hooks object below is the rendered Copilot envelope, kept so a human can see exactly what lands; verify_m3_hooks asserts it still agrees with _spec.wire, because two renderings of one table drift silently.",
     "paths": {
       "claude": "$HOME/.claude/settings.json  (hooks.<Event>[].hooks[].command)",
       "copilot": "$HOME/.copilot/hooks/00-lifecycle.json  (hooks.<Event>[].bash)",
@@ -8,19 +8,19 @@
       "why_pascalcase": "MEASURED: PascalCase event names are Copilot's documented VS Code compatible format. Six of them fired; six near-miss controls (SessionStarted, PreToolUsage, AgentStop, USERPROMPTSUBMIT, sessionstart, NotAnEventXYZ) stayed silent, so resolution is an exact-string alias table, not case folding. Registered this way, Copilot's stdin payload is field-for-field Claude Code's snake_case — including tool_name: Bash — so one script serves both agents with no shim. QUALIFIED by the first divergence below: that holds for the FIELD NAMES, not for every tool's payload SHAPE — the edit tool's tool_input is a string, not an object."
     },
     "divergences": [
-      "THE BIG ONE, MEASURED LIVE on 1.0.83 and NOT what the docs imply: Copilot's file-editing tool arrives as tool_name \"Edit\" with tool_input a STRING holding an apply-patch envelope (*** Begin Patch / *** Delete File: <path> / *** Add File: <path>), so tool_input.file_path DOES NOT EXIST and the write is a whole-file delete-then-add. A Claude-Code-shaped write guard matches nothing there and backs up nothing: the first live run of pb-guard-write.sh under Copilot saved NOTHING before this was found. pb-guard-write.sh now reads the paths out of the patch header lines, and its fixtures carry that payload verbatim. Note the corollary: \"Edit\" is the one tool name we deliberately ignore on Claude Code, where an Edit is a targeted replacement.",
+      "THE BIG ONE, MEASURED LIVE on 1.0.83 and NOT what the docs imply: Copilot's file-editing tool arrives as tool_name \"Edit\" with tool_input a STRING holding an apply-patch envelope (*** Begin Patch / *** Delete File: <path> / *** Add File: <path>), so tool_input.file_path DOES NOT EXIST and the write is a whole-file delete-then-add. A Claude-Code-shaped write guard matches nothing there and backs up nothing: the first live run of guard-write.sh under Copilot saved NOTHING before this was found. guard-write.sh now reads the paths out of the patch header lines, and its fixtures carry that payload verbatim. Note the corollary: \"Edit\" is the one tool name we deliberately ignore on Claude Code, where an Edit is a targeted replacement.",
       "PostToolUse gives tool_result{result_type,text_result_for_llm} where Claude Code gives tool_response. None of the three hooks here uses PostToolUse; a future one must branch on that field.",
       "Copilot preToolUse FAILS CLOSED: exit 2, a crash, or any non-zero exit denies the tool call even if stdout says allow. Every exit path in every hook here is an explicit 0.",
-      "Copilot agentStop does not list systemMessage as an output field, so pb-stop.sh sends arms A and B to stderr there and keeps JSON for the decision only.",
+      "Copilot agentStop does not list systemMessage as an output field, so stop.sh sends arms A and B to stderr there and keeps JSON for the decision only.",
       "Copilot's sessionStart additionalContext was observed PARSED (hook.end) but was not observed reaching the model under copilot -p. Emitting it is free; do not depend on it."
     ],
-    "matcher_policy": "Claude Code matches PreToolUse on tool_name, so the write guard carries Write|MultiEdit there. Copilot's write tool turned out to be called \"Edit\" (measured), which a Write|MultiEdit matcher would have missed entirely, so the Copilot row carries NO matcher — an omitted matcher is every tool — and pb-guard-write.sh filters in-script. An empty matcher string is NOT a wildcard in Copilot (it is a regex), which is why the field is omitted rather than set to \"\".",
+    "matcher_policy": "Claude Code matches PreToolUse on tool_name, so the write guard carries Write|MultiEdit there. Copilot's write tool turned out to be called \"Edit\" (measured), which a Write|MultiEdit matcher would have missed entirely, so the Copilot row carries NO matcher — an omitted matcher is every tool — and guard-write.sh filters in-script. An empty matcher string is NOT a wildcard in Copilot (it is a regex), which is why the field is omitted rather than set to \"\".",
     "unwired": {
-      "pb-guard-bash.sh": "INSTALLED BUT DELIBERATELY NOT REGISTERED. It false-allowed rm -rf on a quoted $HOME and a quoted force-push to trunk; the rewrite fixes that and proves it with a quoted matrix, but a guard believed present and inert is worse than one known absent. verify_m3_hooks ASSERTS its absence from both settings files. See the header of pb-guard-bash.sh and its --wire-me-instructions."
+      "guard-bash.sh": "INSTALLED BUT DELIBERATELY NOT REGISTERED. It false-allowed rm -rf on a quoted $HOME and a quoted force-push to trunk; the rewrite fixes that and proves it with a quoted matrix, but a guard believed present and inert is worse than one known absent. verify_m3_hooks ASSERTS its absence from both settings files. See the header of guard-bash.sh and its --wire-me-instructions."
     },
     "wire": [
       {
-        "script": "pb-session-start.sh",
+        "script": "session-start.sh",
         "event": "SessionStart",
         "claude_matcher": "",
         "copilot_matcher": "",
@@ -28,7 +28,7 @@
         "does": "Injects the frozen scope, the previous session's ledger and a LIVE git read as additionalContext. Never blocks."
       },
       {
-        "script": "pb-stop.sh",
+        "script": "stop.sh",
         "event": "Stop",
         "claude_matcher": "",
         "copilot_matcher": "",
@@ -36,7 +36,7 @@
         "does": "Ledger + context-fill advisory + a BOUNDED auto-continue that may return decision:block. Bounded by stop_hook_active and a per-session counter (BOOTSTRAP_STOP_MAX, default 3)."
       },
       {
-        "script": "pb-guard-write.sh",
+        "script": "guard-write.sh",
         "event": "PreToolUse",
         "claude_matcher": "Write|MultiEdit",
         "copilot_matcher": "",
@@ -48,13 +48,13 @@
   "version": 1,
   "hooks": {
     "SessionStart": [
-      { "type": "command", "bash": "$HOME/.mac-bootstrap/hooks/pb-session-start.sh", "timeoutSec": 10 }
+      { "type": "command", "bash": "$HOME/.mac-bootstrap/hooks/session-start.sh", "timeoutSec": 10 }
     ],
     "Stop": [
-      { "type": "command", "bash": "$HOME/.mac-bootstrap/hooks/pb-stop.sh", "timeoutSec": 15 }
+      { "type": "command", "bash": "$HOME/.mac-bootstrap/hooks/stop.sh", "timeoutSec": 15 }
     ],
     "PreToolUse": [
-      { "type": "command", "bash": "$HOME/.mac-bootstrap/hooks/pb-guard-write.sh", "timeoutSec": 10 }
+      { "type": "command", "bash": "$HOME/.mac-bootstrap/hooks/guard-write.sh", "timeoutSec": 10 }
     ]
   }
 }

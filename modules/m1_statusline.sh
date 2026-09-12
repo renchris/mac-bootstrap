@@ -33,7 +33,7 @@ M1_FIX_NEG='{"session_id":"pb-m1-probe3","cwd":"/tmp/pb-m1","model":{"display_na
 M1_FIX_ZERO='{"session_id":"pb-m1-probe4","cwd":"/tmp/pb-m1","model":{"display_name":"probe"},"context_window":{"used_percentage":0,"remaining_percentage":100}}'
 
 # m1_source — where the asset bytes come from: the clone, then the state-dir cache, then the
-# pinned raw URL. NOT in pb-lib (the library deliberately does no network), so it lives here.
+# pinned raw URL. NOT in bootstrap-lib.sh (the library deliberately does no network), so it lives here.
 m1_source() {
   local c t
   for c in "${BOOTSTRAP_ASSETS:-}/agent-statusline.sh" \
@@ -208,7 +208,7 @@ install_m1_statusline() {
   mkdir -p "$bin" 2>/dev/null || { bootstrap_warn "m1: cannot create $bin"; return 1; }
 
   if ! cmp -s "$src" "$sl" 2>/dev/null; then           # idempotent: identical bytes ⇒ no write
-    tmp="$sl.pb-tmp.$$"
+    tmp="$sl.mac-bootstrap-tmp.$$"
     cp -f "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m1: cannot stage the script"; return 1; }
     chmod 755 "$tmp" 2>/dev/null
     mv -f "$tmp" "$sl" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m1: cannot place $sl"; return 1; }
@@ -229,7 +229,7 @@ install_m1_statusline() {
   return 0
 }
 
-# m1_settings_remove <file> <keypath> — the un-write. pb-lib has ONE writer and no remover, so
+# m1_settings_remove <file> <keypath> — the un-write. bootstrap-lib.sh has ONE writer and no remover, so
 # this lives here, with the same discipline: back up, work on a temp copy, read the removal back
 # THERE, and only then let it land. It refuses exactly what the writer refuses.
 m1_settings_remove() {

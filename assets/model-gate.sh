@@ -1,7 +1,7 @@
 #!/bin/bash
 # model-gate.sh — the acceptance gate for VoiceInk's LOCAL rewrite model.
 #
-# Standalone: no pb-lib, no repo, no python. bash 3.2, /usr/bin/curl, /usr/bin/plutil, optional jq.
+# Standalone: no bootstrap-lib.sh, no repo, no python. bash 3.2, /usr/bin/curl, /usr/bin/plutil, optional jq.
 #
 #   bash model-gate.sh --model voiceink-rewrite
 #   bash model-gate.sh --model voiceink-rewrite --runs 5 --json

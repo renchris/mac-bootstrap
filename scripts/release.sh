@@ -27,7 +27,7 @@
 #
 # ── IT VERIFIES BY INDEPENDENT READ-BACK ─────────────────────────────────────────────────────
 # Never by grepping for a phrase it just wrote. It re-fetches the published bootstrap.sh
-# anonymously, reads the pin back OUT of those bytes, then fetches pb-lib.sh and every module
+# anonymously, reads the pin back OUT of those bytes, then fetches bootstrap-lib.sh and every module
 # and asset at that pin and compares each sha256 against `git show <pin>:<path>`. A release that
 # cannot be fetched is not a release — which is the one thing the first one was never asked.
 

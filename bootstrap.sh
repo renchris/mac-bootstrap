@@ -123,25 +123,25 @@ export BOOTSTRAP_STATE_DIR="$BOOTSTRAP_STATE_DIR"
 
 # ── the shared library. One copy, sourced by the driver, the modules and the hooks. ──────────
 BOOTSTRAP_LIB=""
-for c in "$BOOTSTRAP_HERE/assets/hooks/pb-lib.sh" "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh"; do
+for c in "$BOOTSTRAP_HERE/assets/hooks/bootstrap-lib.sh" "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh"; do
   [ -r "$c" ] && { BOOTSTRAP_LIB="$c"; break; }
 done
 if [ -z "$BOOTSTRAP_LIB" ]; then
   mkdir -p "$BOOTSTRAP_STATE_DIR/assets/hooks" 2>/dev/null
-  if driver_fetch_ok=$(curl -sS -L -o "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh.part" -w '%{http_code}' \
-        "$BOOTSTRAP_RAW/assets/hooks/pb-lib.sh" 2>/dev/null) && [ "$driver_fetch_ok" = "200" ] \
-        && [ -s "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh.part" ]; then
-    mv -f "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh.part" "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh"
-    BOOTSTRAP_LIB="$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh"
+  if driver_fetch_ok=$(curl -sS -L -o "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" -w '%{http_code}' \
+        "$BOOTSTRAP_RAW/assets/hooks/bootstrap-lib.sh" 2>/dev/null) && [ "$driver_fetch_ok" = "200" ] \
+        && [ -s "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" ]; then
+    mv -f "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh"
+    BOOTSTRAP_LIB="$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh"
   else
-    rm -f "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh.part" 2>/dev/null
-    printf 'bootstrap: cannot find or fetch assets/hooks/pb-lib.sh (pin=%s).\n' "$BOOTSTRAP_PIN" >&2
+    rm -f "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" 2>/dev/null
+    printf 'bootstrap: cannot find or fetch assets/hooks/bootstrap-lib.sh (pin=%s).\n' "$BOOTSTRAP_PIN" >&2
     printf '  Run this from a clone of the repo, or cut a release and set BOOTSTRAP_PIN.\n' >&2
     exit 30
   fi
 fi
-# shellcheck source=assets/hooks/pb-lib.sh
-. "$BOOTSTRAP_LIB" || { printf 'bootstrap: pb-lib.sh did not load\n' >&2; exit 30; }
+# shellcheck source=assets/hooks/bootstrap-lib.sh
+. "$BOOTSTRAP_LIB" || { printf 'bootstrap: bootstrap-lib.sh did not load\n' >&2; exit 30; }
 export BOOTSTRAP_LIB="$BOOTSTRAP_LIB"
 
 # ── THE ENVIRONMENT CONTRACT (C10). A sourced module cannot take flags, so parameters arrive

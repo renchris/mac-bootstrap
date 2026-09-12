@@ -1,7 +1,7 @@
 # The module contract
 
 This is the document you write a `modules/mN_name.sh` against. The rail — `bootstrap.sh`,
-`verify.sh`, `assets/hooks/pb-lib.sh` — is finished and will not change shape under you. Read
+`verify.sh`, `assets/hooks/bootstrap-lib.sh` — is finished and will not change shape under you. Read
 §1, §2 and §8; the rest is reference.
 
 ---
@@ -12,7 +12,7 @@ A file at `modules/<name>.sh` that defines six shell functions and **no top-leve
 It is `.`-sourced, never executed. `<name>` is the function suffix: a module at
 `modules/m1_statusline.sh` defines `verify_m1_statusline`, `gate_m1_statusline`, and so on.
 
-**Every verb runs in its own subshell, with `pb-lib.sh` and your module freshly sourced.**
+**Every verb runs in its own subshell, with `bootstrap-lib.sh` and your module freshly sourced.**
 That is not an implementation detail you may ignore:
 
 - **No state survives between verbs.** A variable `install_` sets is gone by the time `verify_`
@@ -125,19 +125,19 @@ are the contract.
 | `BOOTSTRAP_BENCH` | `--bench <model>` | the candidate `bench_` should measure. `BOOTSTRAP_BENCH` is its alias. |
 | `BOOTSTRAP_STATE_DIR` | the driver | `$HOME/.mac-bootstrap`. **All runtime state goes here**, never in the repo. |
 | `BOOTSTRAP_ASSETS` | the driver | the `assets/` directory beside `bootstrap.sh`, when running from a clone. |
-| `BOOTSTRAP_LIB` | the driver | the absolute path to the `pb-lib.sh` in force. |
+| `BOOTSTRAP_LIB` | the driver | the absolute path to the `bootstrap-lib.sh` in force. |
 | `BOOTSTRAP_PIN` / `BOOTSTRAP_RAW` | the driver | the release sha and the raw URL prefix, for a module that must fetch an asset. |
 | `BOOTSTRAP_LOG` | the driver | the log file. `bootstrap_warn` writes there as well as to stderr. |
 | `BOOTSTRAP_MODULES` | tests | overrides module discovery. |
 | `BOOTSTRAP_NO_JQ` | tests | forces every library path onto its plutil arm, so the no-jq degrade is *tested* rather than asserted. |
-| `BOOTSTRAP_TELEMETRY_DIR` · `BOOTSTRAP_CONTEXT_THRESHOLD_PCT` · `BOOTSTRAP_CONTEXT_MAX_AGE_S` | seams | context-advisory tuning; defaults `/tmp/pb-telemetry`, `70`, `600`. |
+| `BOOTSTRAP_TELEMETRY_DIR` · `BOOTSTRAP_CONTEXT_THRESHOLD_PCT` · `BOOTSTRAP_CONTEXT_MAX_AGE_S` | seams | context-advisory tuning; defaults `/tmp/mac-bootstrap-telemetry`, `70`, `600`. |
 
 ---
 
 ## 6. The library — and the ONE writer rule
 
-`assets/hooks/pb-lib.sh` is the only shared code. It is sourced by the driver, by every module
-and by every lifecycle hook. Run its fixtures any time: `bash assets/hooks/pb-lib.sh --selftest`.
+`assets/hooks/bootstrap-lib.sh` is the only shared code. It is sourced by the driver, by every module
+and by every lifecycle hook. Run its fixtures any time: `bash assets/hooks/bootstrap-lib.sh --selftest`.
 
 ### 🚨 `bootstrap_settings_merge` is the only thing in this repo that writes a JSON settings file.
 
@@ -159,7 +159,7 @@ It is:
   normalisation, the file is not opened for writing at all.
 - **atomic** — all work happens on a temp copy which is read back *there*; a failed write never
   lands. A half-written `settings.json` makes the agent start with **no hooks at all**, silently.
-- **backed up** — `<file>.pb-bak.<utc>`, once per file per run.
+- **backed up** — `<file>.mac-bootstrap-backup.<utc>`, once per file per run.
 - **degrading** — jq by absolute path when present, plutil when not. It **never** returns
   non-zero merely because jq is absent.
 - **refusing** — a keypath or file that authorizes the agent is refused, at the chokepoint.
@@ -273,7 +273,7 @@ writes — a guard on the act rather than on the text.
 ## 10. How to know your module is done
 
 ```sh
-bash assets/hooks/pb-lib.sh --selftest            # the shared library's own fixtures
+bash assets/hooks/bootstrap-lib.sh --selftest            # the shared library's own fixtures
 /bin/bash -n modules/<name>.sh                    # bash 3.2 parses it
 shellcheck -S warning modules/<name>.sh           # clean, or a targeted disable with a reason
 

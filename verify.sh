@@ -16,7 +16,7 @@
 # and the first divergence would be invisible. So the state machine lives in bootstrap.sh, once,
 # and this file adds the two things a wrapper can add honestly:
 #
-#   1. A POSITIVE CONTROL ON THE INSTRUMENT, run BEFORE the verdict. `pb-lib.sh --selftest`
+#   1. A POSITIVE CONTROL ON THE INSTRUMENT, run BEFORE the verdict. `bootstrap-lib.sh --selftest`
 #      exercises the shared library's own fixtures — including the C1 pre-fix arm, which asserts
 #      that `plutil -replace` against an empty root dict still FAILS. If the instrument cannot
 #      reproduce the defect it repairs, a green verdict from it means nothing, so this exits 30
@@ -46,8 +46,8 @@ while [ $# -gt 0 ]; do
 done
 
 VERIFY_BOOTSTRAP="$VERIFY_HERE/bootstrap.sh"
-VERIFY_LIB="$VERIFY_HERE/assets/hooks/pb-lib.sh"
-[ -r "$VERIFY_LIB" ] || VERIFY_LIB="$VERIFY_STATE/assets/hooks/pb-lib.sh"
+VERIFY_LIB="$VERIFY_HERE/assets/hooks/bootstrap-lib.sh"
+[ -r "$VERIFY_LIB" ] || VERIFY_LIB="$VERIFY_STATE/assets/hooks/bootstrap-lib.sh"
 
 if [ ! -r "$VERIFY_BOOTSTRAP" ]; then
   printf 'verify: bootstrap.sh is not beside this file (%s).\n' "$VERIFY_HERE" >&2
@@ -58,7 +58,7 @@ fi
 # ── 1. the control arm ───────────────────────────────────────────────────────────────────────
 if [ "$VERIFY_SELFTEST" = 1 ]; then
   if [ -r "$VERIFY_LIB" ]; then
-    printf 'control: pb-lib fixtures ... '
+    printf 'control: bootstrap-lib.sh fixtures ... '
     if VERIFY_OUT="$(/bin/bash "$VERIFY_LIB" --selftest 2>&1)"; then
       printf '%s\n' "$(printf '%s' "$VERIFY_OUT" | tail -1)"
     else
@@ -69,7 +69,7 @@ if [ "$VERIFY_SELFTEST" = 1 ]; then
       exit 30
     fi
   else
-    printf 'verify: cannot find assets/hooks/pb-lib.sh — no control arm available.\n' >&2
+    printf 'verify: cannot find assets/hooks/bootstrap-lib.sh — no control arm available.\n' >&2
     exit 30
   fi
 fi
@@ -82,7 +82,7 @@ VERIFY_RC=$?
 
 # ── 3. the render ────────────────────────────────────────────────────────────────────────────
 if [ -r "$VERIFY_LIB" ] && [ -r "$VERIFY_RECEIPT" ]; then
-  # shellcheck source=assets/hooks/pb-lib.sh
+  # shellcheck source=assets/hooks/bootstrap-lib.sh
   . "$VERIFY_LIB" 2>/dev/null || true
   printf '\n%s\n' "----------------------------------------------------------------------"
   verify_i=0; verify_gestures=""

@@ -74,7 +74,7 @@ AH_VERSION=2
 # Resolved ONCE, before any command can cd. MEASURED DEFECT: this was `dirname "$0"` evaluated
 # lazily inside the library search, and $0 is RELATIVE when the script is invoked as
 # `assets/agent-handoff` — so the first `cd` in any code path silently repointed the search at a
-# directory that does not exist, pb-lib was never found, and every context read answered UNKNOWN.
+# directory that does not exist, bootstrap-lib.sh was never found, and every context read answered UNKNOWN.
 # The symptom is indistinguishable from "no statusline installed", which is the one answer that
 # must never be produced by a bug.
 AH_SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)" || AH_SELF_DIR=""
@@ -95,7 +95,7 @@ BOOTSTRAP_PLUTIL=/usr/bin/plutil
 ah_say()  { printf '%s\n' "$*"; }
 ah_err()  { printf '%s\n' "$*" >&2; }
 
-# ── pb-lib, if it is reachable. ──────────────────────────────────────────────────────────────
+# ── bootstrap-lib.sh, if it is reachable. ──────────────────────────────────────────────────────────────
 # The context-fill RULES (600 s freshness, a null is not 0, a float truncates, an absent window
 # is never imputed) live in bootstrap_ctx_pct and are NOT re-implemented here. Two implementations of
 # one rule is two rules. If the library cannot be found, `status` says UNKNOWN and names that as
@@ -105,8 +105,8 @@ ah_load_lib() {
   [ -n "$AH_LIB" ] && return 0
   local c d
   d="${AH_SELF_DIR:-.}"
-  for c in "${BOOTSTRAP_LIB:-}" "$BOOTSTRAP_STATE_DIR/assets/hooks/pb-lib.sh" \
-           "$d/../assets/hooks/pb-lib.sh" "$d/hooks/pb-lib.sh" "$d/pb-lib.sh"; do
+  for c in "${BOOTSTRAP_LIB:-}" "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh" \
+           "$d/../assets/hooks/bootstrap-lib.sh" "$d/hooks/bootstrap-lib.sh" "$d/bootstrap-lib.sh"; do
     [ -n "$c" ] && [ -r "$c" ] || continue
     # shellcheck disable=SC1090  # resolved at runtime by design
     . "$c" >/dev/null 2>&1 || continue
@@ -176,8 +176,8 @@ ah_bridge() { printf '%s/%s.md' "$AH_DIR" "$(ah_key "$(ah_root)")"; }
 # a number no one should act on.
 ah_fill() {
   local want="${1:-}" dir f sid pct now mtime age n=0 newest=""
-  ah_load_lib || { printf 'no-pb-lib'; return 1; }
-  dir="${BOOTSTRAP_TELEMETRY_DIR:-/tmp/pb-telemetry}"
+  ah_load_lib || { printf 'no-bootstrap-lib.sh'; return 1; }
+  dir="${BOOTSTRAP_TELEMETRY_DIR:-/tmp/mac-bootstrap-telemetry}"
   [ -d "$dir" ] || { printf 'no-telemetry-dir'; return 1; }
   if [ -n "$want" ]; then
     [ -f "$dir/$want.json" ] || { printf 'no-row-for-session'; return 1; }

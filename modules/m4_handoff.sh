@@ -68,7 +68,7 @@ _m4_parts()   { printf 'oracle.sh seed.sh driver-tmux.sh driver-kitty.sh driver-
 
 # ── _m4_source <asset-relpath> — print a readable path to the shipped asset, or nothing. ────
 # Three places, in order: the clone beside bootstrap.sh; the cache this module fills; the pinned
-# raw URL. A helper of this shape is not in pb-lib (the library has no fetcher by design — the
+# raw URL. A helper of this shape is not in bootstrap-lib.sh (the library has no fetcher by design — the
 # driver owns fetching), so it lives here, which is where the contract says it belongs.
 _m4_source() {
   local rel="${1:-}" c dest code
@@ -295,15 +295,15 @@ install_m4_handoff() {
       || { rm -f "$succ/$p.m4-tmp" 2>/dev/null; bootstrap_warn "m4: cannot land $succ/$p"; return 1; }
   done
 
-  # 3. pb-lib, where the installed agent-handoff looks for it.
+  # 3. bootstrap-lib.sh, where the installed agent-handoff looks for it.
   #    It carries the context-fill rules (600 s freshness · a null is not 0 · a float truncates ·
   #    never impute a window) and they are deliberately not re-implemented in the tool: two
   #    implementations of one rule are two rules. $state/assets/hooks/ is the rail's OWN fallback
   #    location for the library, so this puts a copy where the rail already looks — it does not
   #    invent a path. Refreshed every run so a stale copy cannot outlive an upgrade.
   lib="${BOOTSTRAP_LIB:-}"
-  if [ -n "$lib" ] && [ -r "$lib" ] && [ "$lib" != "$state/assets/hooks/pb-lib.sh" ]; then
-    mkdir -p "$state/assets/hooks" 2>/dev/null && cp -f "$lib" "$state/assets/hooks/pb-lib.sh" 2>/dev/null
+  if [ -n "$lib" ] && [ -r "$lib" ] && [ "$lib" != "$state/assets/hooks/bootstrap-lib.sh" ]; then
+    mkdir -p "$state/assets/hooks" 2>/dev/null && cp -f "$lib" "$state/assets/hooks/bootstrap-lib.sh" 2>/dev/null
   fi
 
   # 4. the document, in both tiers, from ONE source — so the two copies cannot drift.

@@ -317,7 +317,7 @@ profile_m8_screenshot() { printf '%s' 'full'; }
 
 verify_m8_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
   m8_app_ok         || { bootstrap_warn "m8: $M8_APP is not installed."; return 1; }
   m8_repo_ok        || { bootstrap_warn "m8: no config checkout at $(m8_repo_dir)."; return 1; }
@@ -427,7 +427,7 @@ m8_def_write() {
 
 install_m8_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
   local brew git dir hs out i rc want src unfinished=0
 
@@ -493,7 +493,7 @@ install_m8_screenshot() {
     printf '   ok   %s/init.lua -> %s\n' "$(m8_hs_dir)" "$want"
   else
     if [ -e "$(m8_hs_dir)/init.lua" ] || [ -L "$(m8_hs_dir)/init.lua" ]; then
-      out="$(m8_hs_dir)/init.lua.pb-bak.$(date -u +%Y%m%dT%H%M%SZ)"
+      out="$(m8_hs_dir)/init.lua.mac-bootstrap-backup.$(date -u +%Y%m%dT%H%M%SZ)"
       mv "$(m8_hs_dir)/init.lua" "$out" 2>/dev/null \
         && printf '   ok   your existing init.lua was MOVED to %s — nothing was overwritten\n' "$out"
     fi
@@ -632,7 +632,7 @@ uninstall_m8_screenshot() {
     t="$(readlink "$l" 2>/dev/null)" || t=""
     if [ "$t" = "$(m8_repo_dir)/init.lua" ]; then
       rm -f "$l" 2>/dev/null
-      b="$(ls -1 "$(m8_hs_dir)"/init.lua.pb-bak.* 2>/dev/null | tail -1)" || b=""
+      b="$(ls -1 "$(m8_hs_dir)"/init.lua.mac-bootstrap-backup.* 2>/dev/null | tail -1)" || b=""
       [ -n "$b" ] && mv "$b" "$l" 2>/dev/null && printf '   ok   restored %s from %s\n' "$l" "$b"
     fi
   fi

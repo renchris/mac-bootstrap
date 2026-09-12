@@ -9,8 +9,8 @@ bootstrap.log
 /backups/
 
 # Backups and half-written files made by the one settings writer.
-*.pb-bak.*
-*.pb-tmp.*
+*.mac-bootstrap-backup.*
+*.mac-bootstrap-tmp.*
 *.part
 
 # Anything that would carry this machine's specifics into a public repo.

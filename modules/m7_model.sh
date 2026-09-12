@@ -350,7 +350,7 @@ profile_m7_model() { printf '%s' 'standard'; }
 
 verify_m7_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
   local show want got sel t
   m7_machine_ready || return 1
@@ -473,7 +473,7 @@ gesture_m7_model() {
 
 install_m7_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
-  # HOME would silently rewrite the REAL machine. Refuse instead. (pb-lib: bootstrap_defaults_home_ok)
+  # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
   local base ollama brew mf rendered show dg g rc waited sel t prev
 

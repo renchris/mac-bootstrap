@@ -45,7 +45,7 @@ m2i_tpl()     { printf '%s/templates/repo-CLAUDE.md' "$(m2i_state)"; }
 m2i_init()    { printf '%s/bin/agent-repo-init' "$(m2i_state)"; }
 
 # ── m2i_asset <name> — a readable path to assets/<name>, fetching it if this is a curl'd run ──
-# CONTRACT DEVIATION, declared: pb-lib has no asset resolver, so this one lives here rather than
+# CONTRACT DEVIATION, declared: bootstrap-lib.sh has no asset resolver, so this one lives here rather than
 # in the rail. It mirrors the driver's own order — beside the script, then the state dir, then
 # the pinned raw URL — and it refuses a moving ref exactly as driver_fetch does.
 m2i_asset() {
@@ -285,7 +285,7 @@ m2i_place_guarded() {
     return 1
   fi
   mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$dst")"; return 1; }
-  tmp="$dst.pb-tmp.$$"
+  tmp="$dst.mac-bootstrap-tmp.$$"
   cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m2: cannot stage $dst"; return 1; }
   mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m2: cannot place $dst"; return 1; }
   return 0
@@ -297,7 +297,7 @@ m2i_place_ours() {
   local src="$1" dst="$2" mode="${3:-}" tmp
   cmp -s "$src" "$dst" 2>/dev/null && { [ "$mode" = exec ] && chmod 0755 "$dst" 2>/dev/null; return 0; }
   mkdir -p "$(dirname "$dst")" 2>/dev/null || { bootstrap_warn "m2: cannot create $(dirname "$dst")"; return 1; }
-  tmp="$dst.pb-tmp.$$"
+  tmp="$dst.mac-bootstrap-tmp.$$"
   cp "$src" "$tmp" 2>/dev/null || { bootstrap_warn "m2: cannot stage $dst"; return 1; }
   [ "$mode" = exec ] && chmod 0755 "$tmp" 2>/dev/null
   mv -f "$tmp" "$dst" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; bootstrap_warn "m2: cannot place $dst"; return 1; }

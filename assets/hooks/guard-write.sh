@@ -1,5 +1,5 @@
 #!/bin/bash
-# pb-guard-write.sh — PreToolUse(Write|MultiEdit). The INTEGRATE-never-overwrite guard.
+# guard-write.sh — PreToolUse(Write|MultiEdit). The INTEGRATE-never-overwrite guard.
 #
 # PREVENTS: a full-file Write silently destroying sections of a file that accumulates state
 # across sessions — a plan, a spec, AGENTS.md, a memory index. The loss is invisible: the write
@@ -45,13 +45,13 @@
 #
 # Seams: BOOTSTRAP_WRITE_GUARD_HOOK=0 disables · BOOTSTRAP_STATE_DIR · BOOTSTRAP_GUARD_KEEP (default 10 backups per path)
 #        BOOTSTRAP_GUARD_MAX_BYTES (default 20000000 — above it, advise without copying).
-# NO `set -e`, no `pipefail` (CONTRACT.md §7.8). Self-test: bash pb-guard-write.sh --selftest
+# NO `set -e`, no `pipefail` (CONTRACT.md §7.8). Self-test: bash guard-write.sh --selftest
 set -u
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || HOOK_DIR="."
 HOOK_SELF="$HOOK_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
-# shellcheck source=pb-lib.sh disable=SC1091
-. "$HOOK_DIR/pb-lib.sh" 2>/dev/null || exit 0
+# shellcheck source=bootstrap-lib.sh disable=SC1091
+. "$HOOK_DIR/bootstrap-lib.sh" 2>/dev/null || exit 0
 
 # ── hook_field <payload> <keypath> — READ A FIELD OUT OF THE HOOK PAYLOAD, WITH OR WITHOUT jq. ──
 # bootstrap_json is the library's reader and is deliberately conservative without jq: it handles only
@@ -73,7 +73,7 @@ hook_field() {
   v="$(bootstrap_json "${1:-}" "${2:-}")"
   [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   if [ -z "$HOOK_PAYLOAD" ]; then
-    HOOK_PAYLOAD="$(mktemp -t pbpay 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
+    HOOK_PAYLOAD="$(mktemp -t hook-payload 2>/dev/null)" || { HOOK_PAYLOAD=""; return 0; }
     printf '%s' "${1:-}" > "$HOOK_PAYLOAD" 2>/dev/null || { rm -f "$HOOK_PAYLOAD"; HOOK_PAYLOAD=""; return 0; }
   fi
   bootstrap_settings_get "$HOOK_PAYLOAD" "${2:-}" raw 2>/dev/null
@@ -185,7 +185,7 @@ hook_backup_one() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
-# SHIPPED FIXTURES — bash pb-guard-write.sh --selftest
+# SHIPPED FIXTURES — bash guard-write.sh --selftest
 # The negative controls are the point: a guard that fires on everything proves nothing about the
 # one case it exists for, and "the hook fired" is unfalsifiable without a tool name that must NOT
 # fire and an event name that does not exist.

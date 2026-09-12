@@ -190,7 +190,7 @@ _m5_conflict() {
 # would be a permanent, file-wide false negative that names the key it was not about — and for
 # the same reason bootstrap_json_ok, which runs `plutil -convert json`, must never be pointed at this
 # file. `raw` is right for these values anyway: they are scalars, and plutil cannot render a
-# top-level scalar as JSON at all (pb-lib's own trap 5).
+# top-level scalar as JSON at all (bootstrap-lib.sh's own trap 5).
 _m5_iterm_verify() {
   local p v rc
   p="$(_m5_iterm_plist)"
