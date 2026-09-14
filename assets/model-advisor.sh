@@ -161,6 +161,7 @@ fi
 # `need_gib` is the resident weight at num_ctx 4096, rounded UP to a whole GiB.
 # `status` is the evidence class, and it is the most important column here:
 #   measured-good  scored PASS on this repo's own gate, this month
+#   measured-unfit scored FAIL on that gate. Shown, not hidden, so the ban stays re-testable
 #   contested      the repo asserts it and a later probe disagreed — re-measure before trusting
 #   unmeasured     catalogue-verified, never scored. A candidate, not a recommendation.
 adv_candidates() {
@@ -169,7 +170,7 @@ adv_candidates() {
 7|qwen3.5:9b|6.6 GB|Apache-2.0|contested|like-for-like replacement for the incumbent; one probe cleaned better than qwen3:8b, an earlier one rejected it for inventing an AM/PM qualifier
 6|granite4.2:8b|5.3 GB|Apache-2.0|unmeasured|newest Apache-2.0 text-only 8B (2026-08-25); IBM ships a full provenance trail, which is the easiest licence review in the set
 6|qwen3:8b|5.2 GB|Apache-2.0|contested|THE INCUMBENT. The module claims byte-identical 5/5; a later probe of the base tag retained fillers and dropped a terminal question mark. Re-measure before keeping it
-4|ministral-3:3b|3.0 GB|Apache-2.0|unmeasured|its API REFUSES think:true, so determinism comes from the architecture rather than from a flag someone must remember to send
+4|ministral-3:3b|3.0 GB|Apache-2.0|measured-unfit|REJECTED by the gate 2/2: it ANSWERS the dictated question, pasting "Paris" into the document. Listed rather than hidden because a ban nobody can re-test is a ban nobody can retire — `--bench ministral-3:3b` still measures it
 3|granite4.2:3b|2.2 GB|Apache-2.0|unmeasured|smallest Apache-2.0 candidate with a real vendor behind it
 2|qwen3.5:0.8b|1.0 GB|Apache-2.0|unmeasured|the reason an 8 GB Mac is a question and not a refusal — it fits at 1.66 GB resident with room to spare
 CANDIDATES
