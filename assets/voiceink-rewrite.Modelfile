@@ -45,6 +45,32 @@
 #
 # top_k 20 / top_p 0.9 / repeat_penalty 1.0 are qwen3's own published sampling settings, restated
 # here rather than inherited so a different FROM base gets them too.
+#
+# ── WHY THERE IS NO keep_alive HERE, AND WHY THAT IS A DECISION RATHER THAN AN OMISSION ───────
+#
+# VoiceInk sends no `keep_alive`, so ollama unloads this model on its idle default and the first
+# dictation after a pause pays a cold load — measured ~5 s for this model and ~25 s for
+# gemma4:12b-it-qat, against an EnhancementTimeoutSeconds of 15. Past that budget VoiceInk
+# abandons the call and pastes the RAW transcript, which looks to the user like the feature
+# simply did nothing.
+#
+# There are exactly three levers, and MEASURED 2026-09-13 only the third is reachable from here:
+#
+#   1. per-request  `"keep_alive":"30m"` in the generate body — WORKS (verified: expires_at moved
+#      out by 30 minutes), but VoiceInk does not send the field. Fixing this belongs upstream.
+#   2. Modelfile    `PARAMETER keep_alive 30m` — DOES NOT EXIST. `ollama create` refuses it:
+#      "Error: unknown parameter 'keep_alive'". So it cannot be pinned per-model, which is the
+#      shape that would have made it safe to ship.
+#   3. server env   OLLAMA_KEEP_ALIVE — works, and is GLOBAL. It would hold every model this
+#      machine ever loads, for every purpose, not just this one.
+#
+# We do not set (3). This module writes exactly two preference keys, by name, and declines to
+# touch anything it does not own; a server-wide residency policy set by a dictation bootstrap is
+# precisely that kind of reach. The cost of declining is bounded and visible — a slow first call,
+# which assets/model-gate.sh already measures and reports — while the cost of taking it lands on
+# unrelated workloads and on exactly the small Macs whose headroom the advisor spends its time
+# protecting. If the latency matters more than the memory on a particular machine, it is one line
+# in that user's own shell profile, and it is theirs to write.
 
 FROM qwen3:8b
 PARAMETER num_ctx 4096
