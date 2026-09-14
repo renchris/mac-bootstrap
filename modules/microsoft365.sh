@@ -26,6 +26,12 @@
 # THE SIGN-IN IS THE HUMAN'S. It is a device-code flow in a browser, and the token it produces is a
 # credential; this module never performs it and never reads it. It is the gate this module reports.
 #
+# THE AGENT NEVER SENDS MAIL ON ITS OWN SAY-SO. assets/hooks/guard-mail-send.sh is installed beside
+# the server and wired on both agents (PreToolUse + UserPromptSubmit) BEFORE the server is
+# registered, so the send tools are never reachable unguarded: compose-and-send is denied outright,
+# and a draft may be sent only in a later turn than the one that wrote it. The guard's header
+# carries the measurements. Without it this module is not satisfied.
+#
 # No permission, no credential, no allow-list keypath is written here or anywhere below.
 
 MICROSOFT365_SERVER_VERSION="0.143.0"
@@ -39,6 +45,16 @@ microsoft365_dir()      { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstr
 microsoft365_entry()    { printf '%s/node_modules/%s/dist/index.js' "$(microsoft365_dir)" "$MICROSOFT365_PACKAGE"; }
 microsoft365_claude_config()  { printf '%s' "$HOME/.claude.json"; }
 microsoft365_copilot_config() { printf '%s' "$HOME/.copilot/mcp-config.json"; }
+microsoft365_guard()          { printf '%s/hooks/guard-mail-send.sh' "$(microsoft365_dir)"; }
+microsoft365_claude_settings() { printf '%s' "$HOME/.claude/settings.json"; }
+# Copilot loads every file in hooks/ (measured with a probe file of another name), so the guard gets
+# its own file and never shares one with the hooks module's 00-lifecycle.json.
+microsoft365_copilot_hooks()   { printf '%s' "$HOME/.copilot/hooks/microsoft365-mail.json"; }
+# Claude Code matches PreToolUse on tool_name, so only this server's tools spawn the guard there.
+# Copilot's names are ms365-<tool> and its matcher semantics were not measured, so its rows carry
+# no matcher — every tool — and the guard's own fast path drops the rest.
+MICROSOFT365_CLAUDE_MATCHER="mcp__ms365__.*"
+MICROSOFT365_GUARD_EVENTS="PreToolUse UserPromptSubmit"
 
 # The tenant and client id in force: the environment when set, else what install_ recorded, else the
 # work-account default. Every verb re-derives them this way, so verify agrees with what install wrote.
@@ -223,9 +239,85 @@ microsoft365_installed() {
   [ "$(microsoft365_run "$node" "$(microsoft365_entry)" --version 2>/dev/null)" = "$MICROSOFT365_SERVER_VERSION" ]
 }
 
+# microsoft365_guard_source — the guard's bytes: the clone, then the pinned raw URL. Never partial.
+microsoft365_guard_source() {
+  local t code
+  if [ -r "${BOOTSTRAP_ASSETS:-}/hooks/guard-mail-send.sh" ]; then
+    printf '%s' "${BOOTSTRAP_ASSETS}/hooks/guard-mail-send.sh"; return 0
+  fi
+  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
+  command -v curl >/dev/null 2>&1 || return 1
+  t="$(microsoft365_dir)/guard-mail-send.sh.part"
+  mkdir -p "$(dirname "$t")" 2>/dev/null || return 1
+  code="$(curl -sS -L -o "$t" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/hooks/guard-mail-send.sh" 2>/dev/null)" || {
+    rm -f "$t" 2>/dev/null; return 1; }
+  [ "$code" = "200" ] && [ -s "$t" ] || { rm -f "$t" 2>/dev/null; return 1; }
+  printf '%s' "$t"
+}
+
+# microsoft365_copilot_wired <file> <event> <command> — parse-based, like bootstrap_hook_present.
+microsoft365_copilot_wired() {
+  local i=0 b
+  [ -f "$1" ] || return 1
+  while [ "$i" -lt 64 ]; do
+    b="$(bootstrap_settings_get "$1" "hooks.$2.$i.bash" raw 2>/dev/null)" || return 1
+    [ "$b" = "$3" ] && return 0
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# microsoft365_guarded — rc 0 iff the send guard is installed, RUNS and discriminates (its shipped
+# fixtures include the negative controls: a read tool and another server's send-mail stay silent),
+# and is wired for both events on both agents.
+microsoft365_guarded() {
+  local g ev
+  g="$(microsoft365_guard)"
+  [ -x "$g" ] && [ -f "$(dirname "$g")/bootstrap-lib.sh" ] || return 1
+  if [ -r "${BOOTSTRAP_ASSETS:-}/hooks/guard-mail-send.sh" ]; then
+    cmp -s "${BOOTSTRAP_ASSETS}/hooks/guard-mail-send.sh" "$g" || return 1
+  fi
+  /bin/bash "$g" --selftest >/dev/null 2>&1 || return 1
+  for ev in $MICROSOFT365_GUARD_EVENTS; do
+    bootstrap_hook_present "$(microsoft365_claude_settings)" "$ev" "$g" || return 1
+    microsoft365_copilot_wired "$(microsoft365_copilot_hooks)" "$ev" "$g" || return 1
+  done
+  return 0
+}
+
+# microsoft365_install_guard — stage, PROVE it runs, land it with the library beside it, then wire.
+microsoft365_install_guard() {
+  local src g d ev
+  g="$(microsoft365_guard)"; d="$(dirname "$g")"
+  src="$(microsoft365_guard_source)" || { bootstrap_warn "microsoft365: cannot find or fetch assets/hooks/guard-mail-send.sh"; return 1; }
+  [ -r "${BOOTSTRAP_LIB:-}" ] || { bootstrap_warn "microsoft365: BOOTSTRAP_LIB is not readable"; return 1; }
+  mkdir -p "$d" 2>/dev/null || { bootstrap_warn "microsoft365: cannot create $d"; return 1; }
+  cmp -s "$BOOTSTRAP_LIB" "$d/bootstrap-lib.sh" 2>/dev/null || cp -f "$BOOTSTRAP_LIB" "$d/bootstrap-lib.sh" 2>/dev/null \
+    || { bootstrap_warn "microsoft365: cannot place the library beside the guard"; return 1; }
+  # Staged beside the library and PROVEN before it lands: a guard that fails its own fixtures must
+  # never replace a working one, nor be wired — on Copilot it sees every tool call.
+  if ! cmp -s "$src" "$g" 2>/dev/null; then
+    cp -f "$src" "$g.tmp" 2>/dev/null && chmod 755 "$g.tmp" 2>/dev/null || { rm -f "$g.tmp"; return 1; }
+    /bin/bash "$g.tmp" --selftest >/dev/null 2>&1 || {
+      rm -f "$g.tmp"; bootstrap_warn "microsoft365: the mail guard failed its self-test — not installing it"; return 1; }
+    mv -f "$g.tmp" "$g" 2>/dev/null || { rm -f "$g.tmp"; return 1; }
+  fi
+  case "$src" in *.part) rm -f "$src" 2>/dev/null ;; esac
+  /bin/bash "$g" --selftest >/dev/null 2>&1 || { bootstrap_warn "microsoft365: the installed mail guard failed its self-test — not wiring it"; return 1; }
+  for ev in $MICROSOFT365_GUARD_EVENTS; do
+    if [ "$ev" = PreToolUse ]; then
+      bootstrap_hook_wire "$(microsoft365_claude_settings)" "$ev" "$MICROSOFT365_CLAUDE_MATCHER" "$g" 10 || return 1
+    else
+      bootstrap_hook_wire "$(microsoft365_claude_settings)" "$ev" "" "$g" 10 || return 1
+    fi
+    bootstrap_copilot_hook_wire "$(microsoft365_copilot_hooks)" "$ev" "" "$g" 10 || return 1
+  done
+  return 0
+}
+
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_microsoft365()    { printf '%s' 'Outlook mail, calendar, contacts and OneDrive for both agents, through a local MCP server that talks only to Microsoft'; }
+what_microsoft365()    { printf '%s' 'Outlook mail, calendar, contacts and OneDrive for both agents, through a local MCP server that talks only to Microsoft; the agent drafts mail but never sends it on its own'; }
 cost_microsoft365()    { printf '%s' '~85 MB. Needs node (brew install node) and one Microsoft sign-in in your browser; a corporate tenant may also need IT to approve the app.'; }
 profile_microsoft365() { printf '%s' 'standard'; }
 
@@ -240,6 +332,9 @@ verify_microsoft365() {
   microsoft365_registered "$(microsoft365_claude_config)" stdio "$node" || return 1
   microsoft365_registered "$(microsoft365_copilot_config)" local "$node" || return 1
   [ "$(bootstrap_settings_get "$(microsoft365_copilot_config)" "mcpServers.$MICROSOFT365_SERVER_KEY.tools.0" raw 2>/dev/null)" = "*" ] || return 1
+
+  # The send guard: installed, passing its own fixtures, wired for both events on both agents.
+  microsoft365_guarded || return 1
 
   # The server starts under the registered env and answers MCP with its mail tools…
   out="$(microsoft365_probe "$node" tools/list)" || return 1
@@ -256,7 +351,8 @@ verify_microsoft365() {
 # about, rc 1 if none. gate_ and note_ both read this, so they can never name different files.
 microsoft365_gated_file() {
   local f a
-  for f in "$(microsoft365_claude_config)" "$(microsoft365_copilot_config)"; do
+  for f in "$(microsoft365_claude_config)" "$(microsoft365_copilot_config)" \
+           "$(microsoft365_claude_settings)" "$(microsoft365_copilot_hooks)"; do
     if [ -f "$f" ]; then
       bootstrap_is_json_text "$f" >/dev/null 2>&1 || { printf '%s|unparseable' "$f"; return 0; }
       bootstrap_json_ok "$f" >/dev/null 2>&1 || { printf '%s|unparseable' "$f"; return 0; }
@@ -283,7 +379,8 @@ microsoft365_ready_for_sign_in() {
   node="$(microsoft365_node)" || return 1
   microsoft365_installed || return 1
   microsoft365_registered "$(microsoft365_claude_config)" stdio "$node" || return 1
-  microsoft365_registered "$(microsoft365_copilot_config)" local "$node"
+  microsoft365_registered "$(microsoft365_copilot_config)" local "$node" || return 1
+  microsoft365_guarded
 }
 
 gate_microsoft365() {
@@ -364,6 +461,10 @@ install_microsoft365() {
   out="$(microsoft365_probe "$node" tools/list)" || { bootstrap_warn "microsoft365: the installed server did not answer tools/list — not registering it"; return 1; }
   case "$out" in *list-mail-messages*) : ;; *) bootstrap_warn "microsoft365: the server answered without its mail tools — not registering it"; return 1 ;; esac
 
+  # The send guard goes in BEFORE either agent learns the server exists, so there is no window in
+  # which the send tools are reachable unguarded.
+  microsoft365_install_guard || { bootstrap_warn "microsoft365: the mail guard is not in place — not registering the server"; return 1; }
+
   envj="$(microsoft365_env_json)"
   ent="{\"type\":\"stdio\",\"command\":\"$(bootstrap_json_escape "$node")\",\"args\":[\"$(bootstrap_json_escape "$(microsoft365_entry)")\"],\"env\":$envj}"
   bootstrap_settings_merge "$(microsoft365_claude_config)" "mcpServers.$MICROSOFT365_SERVER_KEY" "$ent"; rc=$?
@@ -404,13 +505,29 @@ microsoft365_settings_remove() {
 # server's own cache ($HOME/Library/Application Support/ms-365-mcp-server). To drop it too, run the
 # server with --logout before uninstalling.
 uninstall_microsoft365() {
-  local f a rc=0
+  local f a g ev i b keep=0 rc=0
   for f in "$(microsoft365_claude_config)" "$(microsoft365_copilot_config)"; do
     [ -f "$f" ] || continue
     a="$(bootstrap_settings_get "$f" "mcpServers.$MICROSOFT365_SERVER_KEY.args.0" raw 2>/dev/null)" || a=""
     [ "$a" = "$(microsoft365_entry)" ] || continue       # someone else's ms365 is not ours to remove
     microsoft365_settings_remove "$f" "mcpServers.$MICROSOFT365_SERVER_KEY" || rc=1
   done
+  # The guard comes out LAST, after the server it guards is gone. Ownership is the directory.
+  g="$(microsoft365_guard)"
+  bootstrap_hook_unwire "$(microsoft365_claude_settings)" "$(dirname "$g")/" >/dev/null 2>&1 || rc=1
+  # The Copilot file is ours by name; remove it only if every entry in it is ours.
+  f="$(microsoft365_copilot_hooks)"
+  if [ -f "$f" ]; then
+    for ev in $(bootstrap_hook_events "$f"); do
+      i=0
+      while b="$(bootstrap_settings_get "$f" "hooks.$ev.$i.bash" raw 2>/dev/null)"; do
+        case "$b" in "$(dirname "$g")/"*) : ;; *) keep=1 ;; esac
+        i=$((i + 1))
+      done
+    done
+    if [ "$keep" = 0 ]; then rm -f "$f" 2>/dev/null
+    else bootstrap_warn "microsoft365: $f holds a hook that is not ours, so it was left in place"; rc=1; fi
+  fi
   rm -rf "$(microsoft365_dir)" 2>/dev/null
   return "$rc"
 }
