@@ -92,10 +92,10 @@ procedure** — and writes only to `$HOME/.mac-bootstrap/`.
 
 ### If an agent is already running, paste this
 
-Replace `ee25a157d7af06c2442573108dd186c2d0019c81` with the release commit — never `main`, whose
+Replace `df3b25cb23a401c229211b282d44701cf5c9d6b8` with the release commit — never `main`, whose
 raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured). At
 that pinned commit `bootstrap.sh` is 846 lines and `shasum -a 256` reads
-`630f1f3e42b0ab4360576b8affb5ff84089575681b4fd1b67fb242c8a8c026fc`; step 1 shows you the checksum,
+`55ab8401023733b3f6b82e1731b82b9c63df86ab1d013bad425d8b86f2890377`; step 1 shows you the checksum,
 and anything else means stop. Fetched on its own it has no `modules/` beside it, so it makes a
 second fetch, from the commit pinned *inside* it — which is this one's parent, because a commit
 cannot contain its own sha. `scripts/release.sh --check` re-walks both hops anonymously, and CI
@@ -105,7 +105,7 @@ runs it on every push to `main`.
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
 
 1. FETCH — never pipe a script into a shell. Save it, then show me its checksum and first lines:
-     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/ee25a157d7af06c2442573108dd186c2d0019c81/bootstrap.sh
+     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/df3b25cb23a401c229211b282d44701cf5c9d6b8/bootstrap.sh
      shasum -a 256 /tmp/mac-bootstrap.sh && wc -l /tmp/mac-bootstrap.sh && head -20 /tmp/mac-bootstrap.sh
    If the download fails or the file is under 100 lines, stop and tell me. Do not find another source.
 
@@ -159,7 +159,7 @@ Everything else is fetched — inline text is re-paid on every paste.
 ### If not, four lines — and read it before you run it
 
 ```bash
-curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/ee25a157d7af06c2442573108dd186c2d0019c81/bootstrap.sh \
+curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/df3b25cb23a401c229211b282d44701cf5c9d6b8/bootstrap.sh \
   && shasum -a 256 /tmp/mac-bootstrap.sh \
   && less /tmp/mac-bootstrap.sh \
   && bash /tmp/mac-bootstrap.sh
