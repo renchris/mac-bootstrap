@@ -27,13 +27,23 @@
 # THE GUI STEP (this is this module's whole point). VoiceInk resolves its AI provider PER MODE:
 # ModeRuntimeConfiguration reads mode?.selectedAIProvider and falls back to `resolvedProvider`,
 # which returns `aiService.connectedProviders.first` — and connectedProviders filters
-# AIProvider.allCases IN DECLARATION ORDER, where gemini is 3rd and ollama is 13th. So ANY
-# surviving cloud key silently wins the fallback and the local model is never called. Worse,
-# ollama qualifies for that list only if `ollamaService.isConnected`, which is set by a LIVE
-# checkConnection() probe and by nothing else:
+# AIProvider.allCases IN DECLARATION ORDER, where gemini is 3rd and ollama is far down it. So ANY
+# surviving cloud key silently wins the fallback and the local model is never called. Worse still,
+# setting the mode is not sufficient either: ModeRuntimeConfiguration honours an explicit per-mode
+# selectedAIProvider ONLY IF connectedProviders already contains it.
 #
-#   *** NO `defaults write` CAN EVER SELECT OLLAMA. The Connect click is not advisable, it is
-#   *** STRUCTURALLY REQUIRED, and a module that reported SATISFIED without it would be lying.
+#   *** THE CLOUD-KEY FALLBACK IS WHY THE HUMAN GESTURE IS REQUIRED — and a module that reported
+#   *** SATISFIED without evidence of it would be lying about which provider actually runs.
+#
+# 🚨 CORRECTED 2026-09-13. This block used to say "NO `defaults write` CAN EVER SELECT OLLAMA; the
+# Connect click is STRUCTURALLY REQUIRED", on the reasoning that ollama joins connectedProviders
+# only via a live checkConnection() probe. The premise is true and the conclusion does not follow:
+# VoiceInk.swift:97 calls refreshOllamaAvailabilityInBackground() UNCONDITIONALLY in the App's
+# init(), so that probe runs at every launch and ollama auto-connects whenever its server is up —
+# the button is labelled "Refresh" once connected, not "Connect". The end state this module holds
+# out for survives unchanged, but it rests on the cloud-key race above, NOT on an unreachable
+# preference key. Kept as a correction rather than a silent edit because the false version was
+# load-bearing in a way that would have made a future reader trust the wrong mechanism.
 #
 # So rewrite_model does every reversible thing itself, and then REFUSES to call itself done until the one
 # irreducibly-human gesture has left its mark in ollamaSelectedModel.
@@ -60,6 +70,12 @@
 #   >= 12 GB unified memory -> qwen3:8b   (resident 5.65 GB at num_ctx 4096; byte-identical 5/5
 #                                          on all four fixtures, reproduced twice independently;
 #                                          0.64-1.50 s median on an M1 Max)
+#
+#   🚨 "all four fixtures" was FALSE when written and is true as of 2026-09-13. assets/model-gate.sh
+#   shipped TWO (F4, F2) while this comment claimed four and the ban on qwen3.5:9b cited a
+#   time-invention fixture that existed nowhere — so the gate could not reproduce its own bans,
+#   and would have PASSED the model this file records rejecting. F5 (an invented AM/PM qualifier)
+#   and F13 (an invented number) now ship, and the claim above is checkable again.
 #   <  12 GB                -> NOTHING is installed. Every model measured at <= 2.5 GB that
 #                              passed the question-rephrasing fixture lost content elsewhere, and
 #                              every one that cleaned well answered the question. Leaving AI
@@ -160,9 +176,39 @@ rewrite_model_base() {
 # spelling: qwen3:4b, qwen3:4b-q8_0 and qwen3:4b-instruct all carry the same template.
 rewrite_model_forbidden() {
   case "${1:-}" in
-    qwen3:4b|qwen3:4b-*) return 0 ;;
+    # Every spelling of the family, not one tag. `qwen3:4b` was the only pattern here, so a
+    # DERIVED model built from it — vi-qwen3-4b, which already exists on the development
+    # machine — carried the identical broken template straight past the ban.
+    qwen3:4b|qwen3:4b-*|*qwen3-4b*|*qwen3_4b*|*qwen3.4b*) return 0 ;;
+    *deepseek-r1*) return 0 ;;
   esac
   return 1
+}
+
+# rewrite_model_thinking_base <tag> — rc 0 if ollama reports this model as a THINKING fine-tune.
+# The name-matching above is a convenience that catches the two families we have measured; THIS
+# is the property that actually predicts the defect, and it is read from the server's own
+# manifest rather than from a list someone has to remember to update.
+#
+# It is deliberately NOT a gate. A thinking base is a reason to look, not a conviction: polarity
+# is per-family (qwen3:4b leaks at think:false and is clean at think:true; granite4.2:3b is the
+# exact mirror), so only a generation can settle it. assets/model-gate.sh clause E does that, by
+# behaviour, for every model regardless of its name — which is why the ban list no longer has to
+# be complete to be safe.
+#
+# 🚨 THIS IS THE ONE READ IN THIS MODULE THAT DOES NOT GO THROUGH bootstrap_settings_get, AND THE
+# REASON IS STRUCTURAL, NOT LAZINESS. The field is `model_info` -> `"general.finetune"` — a JSON
+# key that CONTAINS A DOT. The library splits keypaths on `.` (CONTRACT.md §1 states the segment
+# rule outright), so `model_info.general.finetune` addresses a nested object that does not exist
+# and the value is unreachable through the house parser. Verified: plutil returns nothing for the
+# keypath while the key holds "Thinking". So this reads the server's own reply with a targeted
+# pattern — which is still an independent read of a document this module did not write, not the
+# grep-for-what-you-just-wrote that the house rule forbids.
+rewrite_model_thinking_base() {
+  local f
+  f="$(rewrite_model_state rewrite-model-cache-think.json)"
+  rewrite_model_show "${1:-}" "$f" || return 1
+  LC_ALL=C /usr/bin/grep -q '"general\.finetune"[[:space:]]*:[[:space:]]*"[^"]*[Tt]hinking' "$f"
 }
 
 # ── the ollama HTTP API. Every read-back goes through this, and NEVER through the `ollama` CLI
