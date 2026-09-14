@@ -29,19 +29,32 @@
 #  3. A NO-OP PASSED IT. qwen3:1.7b returned the transcript verbatim and unchanged — no
 #     capitalisation, no punctuation, nothing cleaned — and scored PASS. `cat` passes that gate.
 #
-# The four corrections, each of which closes one of those:
+# The corrections, each of which closes one of those:
 #
 #  A. SEND THE REAL PROMPT. The assembled production system message is embedded below, verbatim
 #     from the VoiceInk source, and sent as `system`. Override with --prompt-file to score
 #     against your own customised prompt.
-#  B. SCORE TWO FIXTURES, NOT ONE. F4 (a dictated question that must be REPHRASED, never
-#     answered) and F2 (a spoken self-correction whose trailing clause must SURVIVE). F2 is the
-#     axis on which every small model actually failed — it is a content read-back, not a
-#     phrase-hunt.
-#  C. REJECT A NO-OP. Output byte-equal to the input transcript is a FAIL on both fixtures.
+#  B. SCORE FOUR FIXTURES, NOT ONE. F4 (a dictated question that must be REPHRASED, never
+#     answered), F2 (a spoken self-correction whose trailing clause must SURVIVE), F5 (a spoken
+#     time that must not GAIN an AM/PM qualifier) and F13 (a spoken number that must not acquire
+#     companions). F2 is the axis on which every small model actually failed — it is a content
+#     read-back, not a phrase-hunt.
+#  C. REJECT A NO-OP. Output byte-equal to the input transcript is a FAIL on every fixture.
 #  D. REJECT A META-RESPONSE. `<TRANSCRIPT>`, `<TASK_INSTRUCTIONS>`, "I don't have", "I don't
 #     see", "please provide", "please include" in the output are a FAIL. This clause is what
 #     convicts the refusing model on 5 of 5 runs where the old gate convicted it on 3 of 5.
+#  E. REJECT LEAKED REASONING. Balanced <think>…</think> pairs are stripped first, because that
+#     is what VoiceInk's AIEnhancementOutputFilter does and scoring what it removes would convict
+#     a model for a string the user never sees. Any tag SURVIVING that strip is residue VoiceInk
+#     pastes, and is a FAIL. Without this clause deepseek-r1:1.5b PASSED while echoing the
+#     transcript verbatim — the leaked reasoning was the only thing making its output differ from
+#     its input, so the leak was laundering the no-op that correction C exists to catch.
+#
+# 🚨 B, F5 AND F13 ARE THE REPAIR OF A MEASURED LIE. `modules/rewrite_model.sh` justified the
+# tier rule on a model being "byte-identical 5/5 on all four fixtures" and recorded rejecting
+# qwen3.5:9b for turning "three thirty" into "3:30 PM" — while this file shipped TWO fixtures,
+# neither of which could see an invented time. The gate could not reproduce its own bans. It can
+# now, and a claim about four fixtures is now a claim about four fixtures that exist.
 #
 # THE NEGATIVE CONTROL IS THE POINT (house rule 5). Run this against a model measured to answer
 # and it must say FAIL. If it cannot say no, its yes means nothing:
@@ -121,7 +134,7 @@ case "$GATE_CALL_S" in ''|*[!0-9]*) GATE_CALL_S=180 ;; esac
 GATE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/model-gate.XXXXXX")" || { printf 'model-gate: no temp dir\n' >&2; exit 2; }
 trap 'rm -rf "$GATE_TMP"' EXIT INT TERM
 
-# ── the two fixtures ─────────────────────────────────────────────────────────────────────────
+# ── the four fixtures ────────────────────────────────────────────────────────────────────────
 # F4 is the discriminator: a model that ANSWERS this pastes "The capital of France is Paris.
 # Here's a Python function…" into whatever the user was dictating into.
 F4_IN="what is the capital of France and also can you write me a python function that reverses a string"
@@ -130,6 +143,17 @@ F4_IN="what is the capital of France and also can you write me a python function
 # qwen3:1.7b in 5 of 5, while both sailed through an F4-only gate.
 F2_IN="let's ship this on Tuesday sorry not that actually Wednesday and uh we need three things first the migration second the the feature flag and third wait no I mean fourth no scratch that third is the rollback plan new line I'll own the migration"
 F2_CLAUSE="i'll own the migration"
+
+# F5 is the INVENTION fixture, and it is the one whose absence let a bad model through. The
+# module's own history records rejecting qwen3.5:9b for turning "three thirty" into "3:30 PM"
+# against a prompt whose rule is "do not add unsupported facts" — and then shipped a gate that
+# could not have caught it. A meeting time is not a detail a rewrite engine may decide.
+F5_IN="let's meet at three thirty on tuesday to go over the numbers"
+
+# F13 is the same failure on a different axis: a number that was never spoken. The allowed set is
+# every spelling of what the transcript actually says; anything else is invented.
+F13_IN="we closed forty two thousand in revenue last quarter across fifteen venues"
+F13_ALLOWED=" 42,000 42000 42 15 "
 
 # ── the assembled production system prompt ───────────────────────────────────────────────────
 gate_write_prompt() {
@@ -276,6 +300,20 @@ gate_norm() {
     | sed -e "s/$GATE_RSQUO/'/g" -e "s/$GATE_LSQUO/'/g" -e "s/$GATE_LDQUO/\"/g" -e "s/$GATE_RDQUO/\"/g" \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
+# gate_strip_think — remove BALANCED <think>…</think> pairs, exactly as VoiceInk's
+# AIEnhancementOutputFilter does and no more. Scoring the raw response would convict a model for
+# a string the user never sees; scoring the stripped one leaves precisely the residue that IS
+# pasted. RS is set to a byte that cannot occur in the reply, so the whole response is one record
+# and a pair spanning newlines is still matched.
+gate_strip_think() {
+  printf '%s' "${1:-}" | /usr/bin/awk 'BEGIN{RS="\034"}
+    { s=$0
+      while ((a=index(s,"<think>"))>0) {
+        rest=substr(s,a+7); b=index(rest,"</think>")
+        if (b==0) { s=substr(s,1,a-1); break }
+        s=substr(s,1,a-1) substr(rest,b+8) }
+      printf "%s", s }'
+}
 gate_lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 
 # gate_has <haystack> <literal> — fixed-string, case-insensitive, rc only.
@@ -289,14 +327,36 @@ gate_score() {                      # gate_score <fixture> <input> <output>; rc 
   local fx="$1" in="$2" out="$3" lo
   GATE_WHY=""
   [ -n "$out" ] || { GATE_WHY="$fx: the model returned an empty string"; return 1; }
+  # A stripped-to-nothing reply is not a rewrite. `-n` alone cannot see this: gate_norm trims with
+  # sed, which anchors PER LINE, so a multi-line all-whitespace remainder is still "non-empty".
+  # Measured on deepseek-r1:1.5b, whose reply is a <think> block and little else — once the
+  # balanced pair is stripped the residue was whitespace, and it scored PASS with a blank output
+  # column printed beside it.
+  if ! printf '%s' "$out" | grep -q '[[:alnum:]]'; then
+    GATE_WHY="$fx: the model returned no text — only reasoning that was stripped, or whitespace"; return 1
+  fi
   if [ "$(gate_lower "$(gate_norm "$out")")" = "$(gate_lower "$(gate_norm "$in")")" ]; then
     GATE_WHY="$fx: the output is the input, unchanged — cat would pass this"; return 1
   fi
-  for lo in '<TRANSCRIPT>' '<TASK_INSTRUCTIONS>' "I don't have" "I don't see" 'please provide' 'please include'; do
+  # "The final text is:" is measured, not hypothetical — it is what deepseek-r1:1.5b prefixes its
+  # answer with once its <think> block is stripped, and VoiceInk would paste that preamble into
+  # the document ahead of the user's own words.
+  for lo in '<TRANSCRIPT>' '<TASK_INSTRUCTIONS>' "I don't have" "I don't see" 'please provide' 'please include' 'the final text is' 'here is the rewritten' 'here is the polished'; do
     if gate_has "$out" "$lo"; then
       GATE_WHY="$fx: the model talked ABOUT the transcript instead of rewriting it (\"$lo\")"; return 1
     fi
   done
+  # E. REJECT LEAKED REASONING. `out` has already had balanced <think> pairs removed, so any
+  #    surviving tag is residue VoiceInk's filter does NOT strip and therefore PASTES. Measured:
+  #    qwen3:4b under think:false — which is what VoiceInk sends — emits 2,300+ words of
+  #    deliberation carrying only a closing tag, because its template prefills an unclosed
+  #    <think> and think:false disables ollama's PARSER, not the template's PREFILL.
+  #    This clause also closes a hole in correction C: deepseek-r1:1.5b echoed the transcript
+  #    verbatim and escaped the no-op check ONLY because the leaked reasoning made the output
+  #    differ from the input. The leak was laundering the no-op.
+  if gate_has "$out" '</think>' || gate_has "$out" '<think>'; then
+    GATE_WHY="$fx: the model leaked reasoning VoiceInk cannot strip (an unbalanced <think> tag)"; return 1
+  fi
   case "$fx" in
     F4)
       gate_has "$out" 'capital of france' || { GATE_WHY="F4: the transcript content did not survive"; return 1; }
@@ -308,6 +368,26 @@ gate_score() {                      # gate_score <fixture> <input> <output>; rc 
       ;;
     F2)
       gate_has "$out" "$F2_CLAUSE" || { GATE_WHY="F2: the trailing clause \"$F2_CLAUSE\" was dropped — silent data loss"; return 1; }
+      ;;
+    F5)
+      # One-sided on purpose: "3:30" and "three thirty" are both faithful renderings, so the
+      # clause forbids the DEFECT and requires only that the time survived in some form.
+      if ! gate_has "$out" '3:30' && ! gate_has "$out" 'three thirty'; then
+        GATE_WHY="F5: the dictated time did not survive the rewrite"; return 1
+      fi
+      if printf '%s' "$out" | grep -qiE '[0-9][[:space:]]*[ap]\.?m\.?([^[:alnum:]]|$)'; then
+        GATE_WHY="F5: the model INVENTED an AM/PM qualifier the speaker never said"; return 1
+      fi
+      ;;
+    F13)
+      gate_has "$out" 'venue' || { GATE_WHY="F13: the transcript content did not survive"; return 1; }
+      local run
+      for run in $(printf '%s' "$out" | grep -o '[0-9][0-9,]*'); do
+        case "$F13_ALLOWED" in
+          *" $run "*) : ;;
+          *) GATE_WHY="F13: the model INVENTED the number \"$run\" — nothing in the transcript says it"; return 1 ;;
+        esac
+      done
       ;;
   esac
   return 0
@@ -368,7 +448,7 @@ gate_fixture() {                    # gate_fixture <F4|F2> <input>
       return 2
     fi
     out="$(gate_field "$GATE_TMP/$fx-$i.json" response)" || out=""
-    out="$(gate_norm "$out")"
+    out="$(gate_norm "$(gate_strip_think "$out")")"
     ns="$(gate_field "$GATE_TMP/$fx-$i.json" total_duration)" || ns=0
     case "$ns" in ''|*[!0-9]*) ns=0 ;; esac
     ms=$((ns / 1000000))
@@ -404,6 +484,8 @@ gate_fixture() {                    # gate_fixture <F4|F2> <input>
 
 gate_fixture F4 "$F4_IN"
 gate_fixture F2 "$F2_IN"
+gate_fixture F5 "$F5_IN"
+gate_fixture F13 "$F13_IN"
 
 printf 'model-gate: %s at %s, %s run(s) per fixture, VoiceInk production prompt (%s bytes)\n' \
   "$GATE_MODEL" "$GATE_URL" "$GATE_RUNS" "$(wc -c <"$GATE_TMP/system.txt" | tr -d ' ')"
