@@ -131,10 +131,14 @@ You are setting up a Mac for an agent workflow. Work only in this terminal. Do n
    $HOME/.mac-bootstrap/bootstrap.log, say the cause in one line, fix it only if the cause is
    yours, then re-run `--only <module>`. Never retry a module unchanged.
 
-6. ONLY IF rewrite_model is in the selection — your judgment call, and it is yours:
-     sysctl -n hw.memsize ; sysctl -n machdep.cpu.brand_string
-   At 16 GB or more use qwen3:8b. Under 16 GB do not guess: `--only rewrite_model --bench <model>`
-   on two candidates and choose on the printed output. Tell me the pick in one sentence.
+6. ONLY IF rewrite_model is in the selection — read the machine, then MEASURE. Never pick on size:
+     bash assets/model-advisor.sh
+   It writes nothing and prints this Mac's real budget for a model — which is not its RAM — plus
+   the candidates that fit, each marked `measured-good`, `contested` or `unmeasured`. Take them in
+   that order: `--only rewrite_model --bench <tag>` exits 0 on PASS, 1 on REJECTED, 2 if nothing
+   was measured. Install the first that passes; if none passes, install nothing and say so.
+   The full procedure, including the macOS 27 no-download path, is assets/agent-model-brief.md.
+   Tell me the pick in one sentence, with the exit code that decided it.
 
 7. VERIFY, then REPORT and stop.
      bash /tmp/mac-bootstrap.sh --verify
