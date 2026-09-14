@@ -7,6 +7,7 @@ flowchart LR
   LITE --> panes["pane_equalize<br/><i>⌘⇧E evens panes</i>"]
   STD --> handoff["handoff<br/><i>self-recycling /handoff</i>"]
   STD --> rewrite["rewrite_model<br/><i>local rewrite model</i>"]
+  STD --> microsoft365["microsoft365<br/><i>Outlook for both agents</i>"]
   FULL --> voiceink["voiceink<br/><i>local VoiceInk build</i>"]
   FULL --> screenshot["screenshot<br/><i>⌘⇧4 to clipboard</i>"]
   handoff -.->|"needs — added out loud"| statusline
@@ -16,6 +17,6 @@ flowchart LR
   classDef full fill:@red-bg,stroke:@red-fg,color:@text
   classDef prof fill:@gray-bg,stroke:@blue-fg,color:@text-bright
   class statusline,instructions,hooks,panes lite
-  class handoff,rewrite std
+  class handoff,rewrite,microsoft365 std
   class voiceink,screenshot full
   class LITE,STD,FULL prof

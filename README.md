@@ -37,7 +37,7 @@ anything else here.
 
 | | Gate | Exact gesture | Blocks |
 |---|---|---|---|
-| **`homebrew`** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | the VoiceInk build, the local model, the screenshot pipeline — and `node`, therefore Copilot itself |
+| **`homebrew`** | Homebrew | `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` → RETURN → login password | the VoiceInk build, the local model, the screenshot pipeline — and `node`, therefore Copilot itself and the Microsoft 365 server |
 | **`cmake`** | **cmake** — absent from `/usr/bin`, from Xcode *and* from the CLT, all three probed | `brew install cmake` | the VoiceInk build; whisper.cpp will not build |
 | **`tmux`** | **tmux** — macOS ships none. Without it the drivers fall back to `direct` mode, where the successor dies with the terminal app | `brew install tmux` | `handoff`'s fault tolerance (`agent-handoff doctor` names it) |
 | **`xcode-command-line-tools`** | Xcode Command Line Tools | if `/usr/bin/git --version` fails: `xcode-select --install` → **Install** → **Agree** | the VoiceInk build, and git everywhere — `/usr/bin/git` is an `xcrun` shim until these exist |
@@ -67,7 +67,7 @@ for you and then asks which profile you want.
 <!-- Diagram source: assets/diagrams/module-selection.mmd — edit it, run `npm run diagrams`, commit the SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/module-selection-dark.svg">
-  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs statusline, instructions, hooks and pane_equalize; standard adds handoff and rewrite_model; full adds voiceink and screenshot. handoff needs statusline and hooks, which are added out loud when missing.">
+  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs statusline, instructions, hooks and pane_equalize; standard adds handoff, microsoft365 and rewrite_model; full adds voiceink and screenshot. handoff needs statusline and hooks, which are added out loud when missing.">
 </picture>
 
 Profiles are cut by blast radius; `lite` is the default because it is the largest set that asks
@@ -76,7 +76,7 @@ nothing of you and leaves nothing to clean up.
 | Profile | You get | It costs |
 |---|---|---|
 | **lite** — the default | status line · instructions file · lifecycle hooks · ⌘⇧E pane equalize | config files only. No Homebrew, no permissions, no Apple ID, no network beyond the fetch — it asks nothing of you *once a terminal emulator is installed*, and records `terminal-emulator` until one is |
-| **standard** | + `/handoff` self-recycle · a local speech-rewrite model | Homebrew, tmux, a ~5 GB model download |
+| **standard** | + `/handoff` self-recycle · a local speech-rewrite model · Outlook mail and calendar for both agents | Homebrew, tmux, node, a ~5 GB model download, one Microsoft sign-in |
 | **full** | + the VoiceInk build · the screenshot pipeline | Xcode ~9 GB and an Apple ID, plus two permission toggles only you can grant |
 
 `--verify` re-reads the machine cold and changes nothing; `--uninstall` reverses a run. Dependencies
@@ -117,7 +117,7 @@ You are setting up a Mac for an agent workflow. Work only in this terminal. Do n
 
 3. ASK me which profile, and wait. Recommend one and say why in a sentence, based on what this
    machine already has. If I have already told you, skip this step and use what I said.
-   Profiles: lite (config only) · standard (+ self-recycle, + a local model) · full (+ app build,
+   Profiles: lite (config only) · standard (+ self-recycle, + a local model, + Outlook) · full (+ app build,
    + screenshots). You can also propose --only or --except if some single module is the real fit.
 
 4. RUN it with my answer, e.g.  bash /tmp/mac-bootstrap.sh --profile standard
@@ -188,13 +188,14 @@ permission toggles, then the two things only your eyes can settle.
 | **`voiceink-permissions`** | VoiceInk Microphone + Accessibility | Click **OK** on the Microphone prompt. Then Privacy & Security → Accessibility → **+** → `~/Applications/VoiceInk.app` → toggle on | `voiceink` |
 | **`transcription-model`** | Transcription model, ~1.5 GB, in-app, no CLI path | VoiceInk → AI Models → download **parakeet-unified-0.6b** (English, ANE-resident, self-punctuating) or `ggml-large-v3-turbo` | `voiceink` |
 | **`voiceink-ollama-provider`** | **Selecting the Ollama provider inside VoiceInk** — GUI-only. A `defaults write` is not sufficient and can be wrong: the provider resolves **per mode**, and the fallback takes the first connected one in declaration order, where a cloud provider sits 10 places ahead of Ollama | VoiceInk → Settings → AI Models → **Ollama → Connect** → pick `voiceink-rewrite`. If any cloud key is still in the keychain, **also** pin Ollama on the active mode: Settings → Modes → *your mode* → AI Provider | `rewrite_model`'s whole point |
+| **`microsoft365-sign-in`** | **Signing in to Microsoft 365** — a device-code flow in your browser; the token it mints is a credential only you can create. A work tenant may refuse Softeria's app: then IT approves it, or registers its own and you re-run with `BOOTSTRAP_MICROSOFT_CLIENT_ID=<that app's id>` | The one command the receipt prints (`… dist/index.js --login`) → open the URL → type the code → sign in with the work account → **Accept** | `microsoft365` |
 | **`relaunch-iterm2`** | Relaunch iTerm2 — `NSUserKeyEquivalents` takes effect at the next launch | Quit and reopen iTerm2, split twice, drag a divider, press ⌘⇧E | `pane_equalize` |
 | **`look-and-paste`** | **Two observations no script can make**, both on Copilot | (a) look at the status line for one second — does a percentage appear? (b) take a ⌘⇧4, then press **Ctrl+V**, not ⌘V, in the agent — does an image attach? | the two UNPROVEN rows below |
 
 ## What you get, and the three places Copilot differs
 
-All five work on Claude Code. On Copilot one is degraded and two are unproven — and both unproven
-ones are `look-and-paste`, one second of looking each.
+All of them work on Claude Code. On Copilot one is degraded and three are unproven — two of them
+`look-and-paste`, one second of looking each, and the third a first Outlook tool call.
 
 | Module | Deliverable | Claude Code | Copilot 1.0.83 | Notes |
 |---|---|---|---|---|
@@ -204,6 +205,7 @@ ones are `look-and-paste`, one second of looking each.
 | `handoff` | self-recycle via `/handoff` | **DELIVERED** | **DEGRADED** | The *actuator* is identical and measured on both; the *typed gesture* is not. Copilot has no `/name` registration at all, so it is `/handoff` here and `copilot --agent handoff` there, and only the frontmatter description reaches Copilot's context. |
 | `pane_equalize` | ⌘⇧E evens out split panes | **DELIVERED** | **DELIVERED** | Terminal-level, no agent involved. kitty gets `equalize_on_window_close` — its own docs name the wrong option, and the wrong spelling is a silent no-op. iTerm2 gets an undocumented native menu item via `NSUserKeyEquivalents`: no Python API, no Hammerspoon, no Accessibility grant. |
 | `voiceink` + `rewrite_model` | local VoiceInk build + rewrite model | **DELIVERED — gated** | same | Agent-independent; gated on Xcode, `cmake`, a codesigning identity and TCC prompts. Fully scriptable **except** `voiceink-ollama-provider` — which is the point, because a surviving cloud key otherwise wins the provider race silently. |
+| `microsoft365` | Outlook mail, calendar, contacts and OneDrive through a local MCP server | **DELIVERED — after your sign-in** | **REGISTERED — a live tool call UNPROVEN** | A node process each agent starts over stdio; it calls only `graph.microsoft.com` and `login.microsoftonline.com`, with no relay and no hosted part. Claude Code started it from the sandbox install and reported **Connected**; `copilot mcp get` reads the registration back **Enabled**. Tenant `organizations` by default (`BOOTSTRAP_MICROSOFT_TENANT` overrides it), and no `--org-mode`, whose Teams and SharePoint scopes need a tenant admin. Whatever a tool returns still goes to the agent's model provider. |
 | `screenshot` | ⌘⇧4 → thumbnail → clipboard → paste | **DELIVERED** | **UNPROVEN** | The ⌘V→⌃V eventtap is required in every design: an image-only clipboard has zero text flavour, so ⌘V is a silent no-op in kitty and iTerm2 alike. On Copilot two dated primary sources point opposite ways and nobody ran the path. |
 
 The design predicted a further `handoff` degradation — one human paste per recycle — and the oracle refuted

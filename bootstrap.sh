@@ -75,7 +75,7 @@ BOOTSTRAP_RC=0
 # This list is ALSO the manifest of last resort, used when there is no modules/ directory beside
 # this script — i.e. when bootstrap.sh was curl'd on its own. A module that is not in the release
 # at this pin is recorded SKIPPED, a precondition error (30), never a silent absence.
-BOOTSTRAP_MODULE_ORDER="statusline instructions hooks handoff pane_equalize voiceink rewrite_model screenshot"
+BOOTSTRAP_MODULE_ORDER="statusline instructions hooks handoff microsoft365 pane_equalize voiceink rewrite_model screenshot"
 
 driver_self_dir() {
   local s="${BASH_SOURCE[0]:-$0}" d
@@ -359,7 +359,7 @@ driver_cmd_list() {
   done
   printf '  PROFILES\n'
   printf '    lite      config files only. No Homebrew, no permissions, no Apple ID. THE DEFAULT.\n'
-  printf '    standard  lite + the succession engine and a local rewrite model.\n'
+  printf '    standard  lite + the succession engine, a local rewrite model and Outlook.\n'
   printf '    full      standard + the app build and the screenshot pipeline. Apple ID, ~9 GB.\n\n'
   printf '  SELECT      --profile <name>   --only a,b,c   --except x\n'
   printf '  INSPECT     --list   --plan   --manifest   --verify\n\n'

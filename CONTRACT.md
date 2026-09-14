@@ -131,6 +131,8 @@ are the contract.
 | `BOOTSTRAP_MODULES` | tests | overrides module discovery. |
 | `BOOTSTRAP_NO_JQ` | tests | forces every library path onto its plutil arm, so the no-jq degrade is *tested* rather than asserted. |
 | `BOOTSTRAP_TELEMETRY_DIR` · `BOOTSTRAP_CONTEXT_THRESHOLD_PCT` · `BOOTSTRAP_CONTEXT_MAX_AGE_S` | seams | context-advisory tuning; defaults `/tmp/mac-bootstrap-telemetry`, `70`, `600`. |
+| `BOOTSTRAP_MICROSOFT_TENANT` | the operator | the Microsoft sign-in tenant `microsoft365` registers: `organizations` (the default — any work account), a tenant id, or `consumers` for a personal account. Recorded at install, so a cold verify agrees. |
+| `BOOTSTRAP_MICROSOFT_CLIENT_ID` | the operator | the id of an app IT registered, for a tenant that refuses the default one. An app id is public, not a secret. Recorded at install. |
 
 ---
 
