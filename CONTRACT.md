@@ -226,6 +226,13 @@ them, and do not "fix" the code back.
     whole script's stderr to `/dev/null` for the rest of the run. (This one was found in this
     driver, by running it: the terminal showed eight modules and not one word about why none of
     them ran, while the log recorded every error perfectly.)
+12. **plutil's JSON rendering does not put dictionary keys in a stable order.** The same five-key
+    object renders `type,env,args,tools,command` from the value about to be written and
+    `tools,env,args,command,type` from the file it landed in, so a string compare of two JSON
+    renders fails a correct write and misses an identical value. It hid until the first five-key
+    value (a Copilot MCP registration); two- and three-key entries happened to agree. plutil's
+    **XML** rendering sorts the keys, so `bootstrap_settings_merge` compares containers as `xml1`
+    and the selftest carries the red case (`key order`) on both engines.
 
 ---
 

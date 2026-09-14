@@ -143,9 +143,15 @@ bootstrap_json_fmt() {
 # Normalising both sides through the same engine makes idempotence exact rather than hopeful.
 # Containers come back as JSON; scalars come back in `raw` form, which is what bootstrap_settings_get
 # will hand back for them too.
+# 🚨 MEASURED: plutil's JSON rendering does NOT put dictionary keys in a stable order — the same
+#     five keys render in one order from {"_v":…} here and in another from the file they landed in,
+#     so two JSON renders of one value can differ. Its XML rendering SORTS the keys. Pass `canonical`
+#     as the second argument to get that form for a container; any comparison must use it on both
+#     sides (bootstrap_settings_get "$f" "$k" xml1).
 bootstrap_json_norm() {
   local t fmt out rc
   fmt="$(bootstrap_json_fmt "${1:-}")" || return 1
+  [ "${2:-}" = canonical ] && [ "$fmt" = json ] && fmt=xml1
   t="$(mktemp -t pbnorm 2>/dev/null)" || return 1
   printf '{"_v":%s}' "${1:-}" > "$t" 2>/dev/null || { rm -f "$t"; return 1; }
   out="$("$BOOTSTRAP_PLUTIL" -extract _v "$fmt" -o - "$t" 2>/dev/null)"
@@ -280,8 +286,11 @@ bootstrap_settings_merge() {
 
   # VALIDATE FIRST. fmt is the only extract format that can render this value, and therefore the
   # format BOTH sides of every comparison below must use — a scalar cannot be rendered as json.
+  # Containers are then COMPARED in plutil's XML form, whose dictionary keys are sorted; its JSON
+  # form is not in a stable key order (see bootstrap_json_norm).
   fmt="$(bootstrap_json_fmt "$v")"  || { bootstrap_warn "bootstrap_settings_merge: value is not valid JSON: $v"; return 2; }
-  norm="$(bootstrap_json_norm "$v")" || { bootstrap_warn "bootstrap_settings_merge: cannot normalise: $v"; return 2; }
+  [ "$fmt" = json ] && fmt=xml1
+  norm="$(bootstrap_json_norm "$v" canonical)" || { bootstrap_warn "bootstrap_settings_merge: cannot normalise: $v"; return 2; }
 
   mkdir -p "$(dirname "$f")" 2>/dev/null || true
 
@@ -678,6 +687,20 @@ bootstrap_selftest() {
     bootstrap_settings_merge "$T/s.json" statusLine '{"type":"command","command":"/tmp/sl.sh"}' >/dev/null 2>&1
     B="$(shasum -a 256 "$T/s.json" | cut -d' ' -f1)"
     bootstrap_is "[$arm] idempotent: second merge is a no-op" "$A" "$B"
+
+    # 3b. KEY ORDER. plutil's JSON rendering of a dictionary is not in a stable key order: the same
+    #     five keys come back in a different order from the value we wrote than from the file it
+    #     landed in. A string compare of the two then fails a correct write, and misses an identical
+    #     value on the idempotence check. The object is the shape a Copilot MCP registration has.
+    rm -f "$T/k.json"
+    bootstrap_settings_merge "$T/k.json" mcpServers.probe '{"type":"local","command":"/n","args":["/e"],"env":{"B":"2","A":"1"},"tools":["*"]}' >/dev/null 2>&1
+    bootstrap_is "[$arm] key order: a five-key object is written and read back" "$?" "0"
+    A="$(shasum -a 256 "$T/k.json" 2>/dev/null | cut -d' ' -f1)"
+    bootstrap_settings_merge "$T/k.json" mcpServers.probe '{"tools":["*"],"env":{"A":"1","B":"2"},"args":["/e"],"command":"/n","type":"local"}' >/dev/null 2>&1
+    B="$(shasum -a 256 "$T/k.json" 2>/dev/null | cut -d' ' -f1)"
+    bootstrap_is "[$arm] key order: the same object in another key order is a no-op" "$A" "$B"
+    bootstrap_settings_merge "$T/k.json" mcpServers.probe '{"type":"local","command":"/n","args":["/e"],"env":{"B":"2","A":"CHANGED"},"tools":["*"]}' >/dev/null 2>&1
+    bootstrap_is "[$arm] key order: a changed nested value is still written" "$(bootstrap_settings_get "$T/k.json" mcpServers.probe.env.A raw)" "CHANGED"
 
     # 4. ADDITIVE: an unrelated key the user owns survives, and so does its value.
     printf '%s\n' '{"model":"claude-opus-5","env":{"FOO":"bar"}}' > "$T/a.json"
