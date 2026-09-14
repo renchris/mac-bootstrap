@@ -10,6 +10,9 @@
 #   bash bootstrap.sh --verify         re-read the machine cold; change nothing
 #   bash bootstrap.sh --only statusline      re-drive ONE module (merges into the receipt)
 #   bash bootstrap.sh --only rewrite_model --bench qwen3:8b     measure a candidate, write nothing
+#         --bench exits on the GATE's scale, not the install scale: 0 the model is fit ·
+#         1 it was measured and REJECTED · 2 nothing was measured. It also prints one
+#         BENCH_RESULT=... line for a caller that would rather parse than branch.
 #   bash bootstrap.sh --only rewrite_model --model qwen3:8b     install with a parameter
 #   bash bootstrap.sh --uninstall      reverse it
 #
@@ -584,7 +587,17 @@ driver_run_module() {
     bench)
       if driver_has_verb "$mf" "$m" bench; then
         driver_say "   bench: $BOOTSTRAP_BENCH"
-        if driver_call "$mf" "$m" bench; then BOOTSTRAP_BENCHED=1; else driver_fail "bench_$m exited non-zero"; BOOTSTRAP_RC=20; fi
+        # A bench VERDICT is not a driver failure. `--bench` asks "is this model fit?", and
+        # REJECTED is a successful measurement with a negative answer — mapping it onto exit 20
+        # ("something FAILED, read the log") both mis-describes it and, before this, was not
+        # propagated at all. 90/91 are driver_call's own sentinels and ARE real failures.
+        driver_call "$mf" "$m" bench
+        BOOTSTRAP_BENCH_RC=$?
+        case "$BOOTSTRAP_BENCH_RC" in
+          90|91) driver_fail "bench_$m could not be sourced, or the module does not define it"
+                 BOOTSTRAP_BENCH_RC=2; BOOTSTRAP_RC=30 ;;
+          *)     BOOTSTRAP_BENCHED=1 ;;
+        esac
       fi
       return 0 ;;
   esac
@@ -722,6 +735,7 @@ driver_rows_recover
 
 BOOTSTRAP_MANIFEST="$(driver_manifest)"
 BOOTSTRAP_BENCHED=0
+BOOTSTRAP_BENCH_RC=2          # 0 PASS · 1 REJECTED · 2 nothing was measured. 2 until a bench says otherwise.
 BOOTSTRAP_ERR=""
 
 if [ -z "$BOOTSTRAP_MANIFEST" ]; then
@@ -802,7 +816,10 @@ case "$BOOTSTRAP_MODE" in
     fi
     driver_say ""
     driver_say "bench only: no state changed, and $BOOTSTRAP_RECEIPT was not touched."
-    exit "$BOOTSTRAP_RC" ;;
+    # --bench carries the GATE's verdict, not the 0/10/20/30 install scale: a rejected candidate
+    # says nothing about the machine, which is what that scale describes.
+    [ "$BOOTSTRAP_RC" = 30 ] && exit 30
+    exit "$BOOTSTRAP_BENCH_RC" ;;
   uninstall)
     BOOTSTRAP_RECEIPT_PATH="$BOOTSTRAP_RECEIPT" ;;
   verify)

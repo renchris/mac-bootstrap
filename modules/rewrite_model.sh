@@ -690,13 +690,13 @@ bench_rewrite_model() {
   local cand ollama tmpname mf rendered show g rc resident mem headroom gb hr
 
   cand="${BOOTSTRAP_BENCH:-${BOOTSTRAP_BENCH:-}}"
-  [ -n "$cand" ] || { printf 'bench: no candidate. Pass --bench <model tag>, e.g. --bench qwen3.5:4b\n'; return 1; }
+  [ -n "$cand" ] || { printf 'bench: no candidate. Pass --bench <model tag>, e.g. --bench qwen3.5:4b\n'; return 2; }
 
-  ollama="$(rewrite_model_ollama)" || { printf 'bench: ollama is not installed — nothing was measured.\n'; return 1; }
-  rewrite_model_server_up || { printf 'bench: no ollama server at %s — nothing was measured.\n' "$REWRITE_MODEL_URL"; return 1; }
+  ollama="$(rewrite_model_ollama)" || { printf 'bench: ollama is not installed — nothing was measured.\n'; return 2; }
+  rewrite_model_server_up || { printf 'bench: no ollama server at %s — nothing was measured.\n' "$REWRITE_MODEL_URL"; return 2; }
 
   case "$cand" in
-    *[!A-Za-z0-9._:/-]*) printf 'bench: %s is not a well-formed ollama model tag.\n' "$cand"; return 1 ;;
+    *[!A-Za-z0-9._:/-]*) printf 'bench: %s is not a well-formed ollama model tag.\n' "$cand"; return 2 ;;
   esac
 
   if rewrite_model_forbidden "$cand"; then
@@ -707,7 +707,7 @@ bench_rewrite_model() {
 
   if ! rewrite_model_model_present "$cand"; then
     printf 'bench: pulling %s (this leaves it on the disk; `%s rm %s` removes it)\n' "$cand" "$ollama" "$cand"
-    "$ollama" pull "$cand" || { printf 'bench: could not pull %s — nothing was measured.\n' "$cand"; return 1; }
+    "$ollama" pull "$cand" || { printf 'bench: could not pull %s — nothing was measured.\n' "$cand"; return 2; }
   fi
 
   # A fixed scratch name, so it is obvious and easy to remove — but never at the cost of
@@ -717,20 +717,20 @@ bench_rewrite_model() {
   if rewrite_model_model_present "$tmpname"; then
     printf 'bench: a model named %s already exists. Remove it first — `%s rm %s` — or wait for\n' "$tmpname" "$ollama" "$tmpname"
     printf '       the bench that is using it. Refusing to overwrite it. Nothing was measured.\n'
-    return 1
+    return 2
   fi
-  mf="$(rewrite_model_asset voiceink-rewrite.Modelfile)" || { printf 'bench: cannot find assets/voiceink-rewrite.Modelfile\n'; return 1; }
+  mf="$(rewrite_model_asset voiceink-rewrite.Modelfile)" || { printf 'bench: cannot find assets/voiceink-rewrite.Modelfile\n'; return 2; }
   rendered="$(rewrite_model_state voiceink-bench.Modelfile)"
   sed "s|^FROM .*|FROM $cand|" "$mf" >"$rendered" || { printf 'bench: could not render the Modelfile\n'; return 1; }
   "$ollama" create "$tmpname" -f "$rendered" >/dev/null 2>&1 \
-    || { printf 'bench: ollama create failed for %s\n' "$cand"; rm -f "$rendered"; return 1; }
+    || { printf 'bench: ollama create failed for %s\n' "$cand"; rm -f "$rendered"; return 2; }
 
   show="$(rewrite_model_state rewrite-model-cache-bench-show.json)"
   if rewrite_model_show "$tmpname" "$show" && ! rewrite_model_params_ok "$show"; then
     printf 'bench: WARNING — the server does not report num_ctx 4096 / temperature 0.2 for this base.\n'
   fi
 
-  g="$(rewrite_model_asset model-gate.sh)" || { printf 'bench: cannot find assets/model-gate.sh\n'; return 1; }
+  g="$(rewrite_model_asset model-gate.sh)" || { printf 'bench: cannot find assets/model-gate.sh\n'; return 2; }
   printf 'bench: %s -> derived %s, running the same acceptance gate the installer uses\n' "$cand" "$tmpname"
   printf '\n'
   BOOTSTRAP_MODEL="$tmpname" MODEL_GATE_BASE_URL="$REWRITE_MODEL_URL" MODEL_GATE_MAX_MS="$((REWRITE_MODEL_TIMEOUT_S * 1000))" \
@@ -769,7 +769,8 @@ bench_rewrite_model() {
   printf 'BENCH  candidate=%s  derived=%s  resident=%s  unified_memory=%sGB  headroom=%s  gate_rc=%s\n' \
     "$cand" "$tmpname" "${resident:-unknown}" "$mem" "$hr" "$rc"
   case "$rc" in
-    0) if [ -z "$headroom" ]; then
+    0) printf 'BENCH_RESULT=PASS model=%s resident=%s headroom=%s\n' "$cand" "${resident:-unknown}" "${headroom:-unknown}"
+       if [ -z "$headroom" ]; then
          printf 'VERDICT: PASSES, FOOTPRINT UNKNOWN. The gate passed, but the server did not report this\n'
          printf '         model as resident, so how much memory it leaves for macOS, VoiceInk, the ASR model\n'
          printf '         and a browser was not measured. Re-run the bench before installing it on a small Mac.\n'
@@ -782,15 +783,20 @@ bench_rewrite_model() {
          printf '         browser (5 GB is the floor this repo uses). Expect swapping, which collapses generation\n'
          printf '         speed by an order of magnitude. Leaving AI enhancement off is the more honest setting.\n'
        fi ;;
-    1) printf 'VERDICT: REJECTED. The WHY line above names the clause it failed, on the run that failed it.\n'
+    1) printf 'BENCH_RESULT=REJECTED model=%s\n' "$cand"
+       printf 'VERDICT: REJECTED. The WHY line above names the clause it failed, on the run that failed it.\n'
        printf '         Do not install it. Both clauses are silent in production: a model that answers a\n'
        printf '         dictated question pastes its answer into the document, and one that drops a trailing\n'
        printf '         clause loses a sentence the user said, with nothing to show that it happened.\n' ;;
-    *) printf 'VERDICT: NOT MEASURED. The gate could not run, so this is neither a pass nor a fail.\n' ;;
+    *) printf 'BENCH_RESULT=NOT-MEASURED model=%s\n' "$cand"
+       printf 'VERDICT: NOT MEASURED. The gate could not run, so this is neither a pass nor a fail.\n' ;;
   esac
   printf 'Cleaning up: removing the derived %s. The base %s stays — remove it with `%s rm %s`.\n' \
     "$tmpname" "$cand" "$ollama" "$cand"
   "$ollama" rm "$tmpname" >/dev/null 2>&1 || true
   rm -f "$rendered" "$show" "$(rewrite_model_state rewrite-model-cache-bench-ps.json)" 2>/dev/null || true
-  return 0
+  # The GATE's verdict, propagated. Returning 0 here regardless — which is what this line used to
+  # do — told every caller that a REJECTED model had passed, and an agent scripting on $? would
+  # install it. 0 = PASS, 1 = REJECTED, 2 = nothing was measured.
+  return "$rc"
 }
