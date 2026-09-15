@@ -379,10 +379,16 @@ driver_cmd_manifest() {
     printf '    %-16s %s  %s\n' "$m" "$(shasum -a 256 "$f" 2>/dev/null | cut -c1-16)" "$f"
   done
   printf '\n  Assets:\n'
-  for f in "$BOOTSTRAP_HERE"/assets/*.sh "$BOOTSTRAP_HERE"/assets/*.md "$BOOTSTRAP_HERE"/assets/hammerspoon/init.lua; do
+  # Every regular file under assets/, at any depth, in byte order — a fixed list of globs missed every
+  # subfolder a module installs from (hooks/, succession/, microsoft365-archive/ and its fixtures,
+  # shared-folders/). assets/diagrams/ is the README's pictures and is never installed; hidden files
+  # (a Finder .DS_Store) are never in a release.
+  while IFS= read -r f; do
     [ -r "$f" ] || continue
     printf '    %s  %s\n' "$(shasum -a 256 "$f" 2>/dev/null | cut -c1-16)" "${f#"$BOOTSTRAP_HERE"/}"
-  done
+  done <<EOF
+$([ -d "$BOOTSTRAP_HERE/assets" ] && find "$BOOTSTRAP_HERE/assets" -type f ! -path "$BOOTSTRAP_HERE/assets/diagrams/*" ! -name '.*' 2>/dev/null | LC_ALL=C sort)
+EOF
   printf '\n  Nothing above has been written. Run --plan to see what would change.\n\n'
 }
 
