@@ -51,7 +51,7 @@ set -u
 {
 BOOTSTRAP_VERSION=1
 BOOTSTRAP_REPO="renchris/mac-bootstrap"
-BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-3579f3b78d48c60cbebc7873d018a87a3abef8c1}"          # replaced at release time. NEVER "main": a main-pinned
+BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-ac0b4de5cdf555db547bff29dc3fbab2b49ebfb8}"          # replaced at release time. NEVER "main": a main-pinned
                                          # raw URL serves up to 5 minutes of stale Fastly bytes.
 # A company whose proxy blocks raw.githubusercontent.com points BOOTSTRAP_RAW at its own mirror of the
 # same tree. That is safe to allow because nothing fetched is trusted by where it came from — see the
@@ -67,7 +67,7 @@ BOOTSTRAP_RAW="${BOOTSTRAP_RAW:-https://raw.githubusercontent.com/$BOOTSTRAP_REP
 # BOOTSTRAP_PIN that names another tree is refused, because this list cannot vouch for that one.
 driver_release_manifest() {
   cat <<'BOOTSTRAP_RELEASE_MANIFEST'
-pin 3579f3b78d48c60cbebc7873d018a87a3abef8c1
+pin ac0b4de5cdf555db547bff29dc3fbab2b49ebfb8
 a2be666d40d8c0b84c65484d24287d8f4faf7ffd6712b6be6a5826aadf93aef8  assets/agent-handoff
 b695d8ed51e343d9c76a504ba3e3effe203b84391db14cb1797212d723fa9f7a  assets/agent-model-brief.md
 5666f93dea01b8ae04e48fd6d8569ddf28df5fae20e3779eb786bbbbfc86b6e6  assets/agent-repo-init
@@ -79,7 +79,7 @@ acc61bb5f4a25ccb52bdd2ef59c343eb2c92c76606bf62cdfa587fb21509670d  assets/global-
 60cf7c2ee5c67ec76952748468562191b4e7f5988fce02bece9a97f801f639f9  assets/handoff.md
 e3189a67928a5acc22e511b2e65c672a5968c25dc04b92b65a35a17999d5407a  assets/hooks/bootstrap-lib.sh
 38946bee0784cbd5480949da3681ceeeb143142c732c7dc3853fdd4220a2e3a5  assets/hooks/guard-bash.sh
-dd2328425b80b74b2dc04a41b88bf3359cbb355dd777ccc96fef123a94ab90c7  assets/hooks/guard-mail-send.sh
+e83ab3ac5a54d86f80ec1282cd7af453b0974f53e6163a70a7dc0c220b4aa06e  assets/hooks/guard-mail-send.sh
 d92b05aba3779627afdf55578a433615fae3a44924d5c199e97e20c5169229c8  assets/hooks/guard-write.sh
 2a7cdf1aa8a1d4650c8e1735030c92b0c1cafa59f409cb8f80f1e480a466efac  assets/hooks/session-start.sh
 0245b37dc5ad5e34da519164ffaa95abfb5cde94d004f28421b6e7dbde0211e8  assets/hooks/stop.sh
@@ -114,7 +114,7 @@ ee4b4d8264a56fa34f4114d1f18a1cdb28fd8e7e7860f132a3cdd5640f9830f0  assets/voicein
 df805376a9297683b890fae5f2302e5e1c8713117c8e18b900f3ce7d8121fab6  modules/handoff.sh
 317ccd17b70076339aedd95fbdd5512f5a73480b1edcccf6e46a69e20c594569  modules/hooks.sh
 334ab144f51c90d7e4129bac66ec4471a85b45c94d3f66bc25a6d9666341dae1  modules/instructions.sh
-77ac2d4b73b71f298002d5ddec9f4940b3e39ea82bf5ba6b8f07b7c655dbf173  modules/microsoft365.sh
+e07a45358da1313921b37b739820114525528d377becb8252b8bd0cf71787666  modules/microsoft365.sh
 d7f16c8caf244f9e3059b03ce2018b39ed4503e4a6739a9c32233cbeaf1f4756  modules/microsoft365_archive.sh
 897e0834a95d03a61f4db5b523f3c3c791436165f90a6001c4aebfa5903c2bac  modules/pane_equalize.sh
 29c599051e9949d3ca58d035958a7b68ea422f603d65aa609ccb92191ec059ea  modules/reporting_off.sh
