@@ -34,7 +34,9 @@ BOOTSTRAP_CONTEXT_MAX_AGE_S="${BOOTSTRAP_CONTEXT_MAX_AGE_S:-600}"    # telemetry
 BOOTSTRAP_LIB_VERSION=1
 BOOTSTRAP_BACKED_UP=""                            # files this process has already backed up
 
-mkdir -p "$BOOTSTRAP_STATE_DIR" 2>/dev/null || true
+# Not for the driver's looking modes (BOOTSTRAP_READ_ONLY=1): --list, --plan and friends promise to
+# change nothing, and this line alone used to leave an empty ~/.mac-bootstrap behind them.
+[ "${BOOTSTRAP_READ_ONLY:-0}" = 1 ] || mkdir -p "$BOOTSTRAP_STATE_DIR" 2>/dev/null || true
 
 BOOTSTRAP_PLUTIL=/usr/bin/plutil
 

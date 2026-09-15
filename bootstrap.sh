@@ -11,6 +11,7 @@
 #   bash bootstrap.sh --verify         re-read the machine cold; change nothing
 #   bash bootstrap.sh --egress         every host each module can reach, and a check that no local
 #                                      data can reach a cloud AI service; changes nothing
+#   bash bootstrap.sh --advise-model   this Mac's real budget for a local model, and which candidates fit
 #   bash bootstrap.sh --only statusline      re-drive ONE module (merges into the receipt)
 #   bash bootstrap.sh --only rewrite_model --bench qwen3:8b     measure a candidate, write nothing
 #         --bench exits on the GATE's scale, not the install scale: 0 the model is fit ·
@@ -116,14 +117,14 @@ driver_log()  { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&3 2>/dev/null; retu
 # itself, and sed on that binary printed an error), so a short form is printed instead.
 driver_help() {
   if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
-    sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     return 0
   fi
   cat <<'HELP'
 mac-bootstrap — set up a Mac for Claude Code and Copilot CLI, one module at a time.
   (no flags)            in a terminal: a menu to pick modules. With nobody to ask: the default profile
   --pick | --no-pick    always | never show the menu
-  --list  --plan  --manifest  --egress      look; change nothing
+  --list  --plan  --manifest  --egress  --advise-model      look; change nothing
   --profile lite|standard|full   --only a,b   --except x      choose without the menu
   --verify   --uninstall   --bench <model> --only rewrite_model
 Exit: 0 all satisfied · 10 some steps are yours · 20 something failed · 30 not a verdict about this Mac.
@@ -145,6 +146,7 @@ while [ $# -gt 0 ]; do
     --list)      BOOTSTRAP_MODE=list ;;
     --plan)      BOOTSTRAP_MODE=plan ;;
     --manifest)  BOOTSTRAP_MODE=manifest ;;
+    --advise-model) BOOTSTRAP_MODE=advise ;;
     --egress)    BOOTSTRAP_MODE=egress ;;
     --profile)   [ $# -ge 2 ] || { printf 'bootstrap: --profile needs a name (lite|standard|full|all)\n' >&2; exit 30; }
                  BOOTSTRAP_PROFILE="$2"; shift ;;
@@ -163,8 +165,17 @@ while [ $# -gt 0 ]; do
 done
 
 # ── state ────────────────────────────────────────────────────────────────────────────────────
-mkdir -p "$BOOTSTRAP_STATE_DIR" "$BOOTSTRAP_ROWS" "$BOOTSTRAP_STATE_DIR/backups" 2>/dev/null || {
-  printf 'bootstrap: cannot create %s\n' "$BOOTSTRAP_STATE_DIR" >&2; exit 30; }
+# The LOOKING modes change nothing: no rows, no backups, no log line, and in a clone not even the state
+# directory. (Measured before: --list and --plan created all four, so "writes nothing" was false.) The one
+# exception is a curl'd run, which must keep its verified copy of the release to have anything to show.
+case "$BOOTSTRAP_MODE" in list|plan|manifest|egress|advise) BOOTSTRAP_READ_ONLY=1 ;; *) BOOTSTRAP_READ_ONLY=0 ;; esac
+export BOOTSTRAP_READ_ONLY
+if [ "$BOOTSTRAP_READ_ONLY" = 1 ]; then
+  BOOTSTRAP_LOG=/dev/null
+else
+  mkdir -p "$BOOTSTRAP_STATE_DIR" "$BOOTSTRAP_ROWS" "$BOOTSTRAP_STATE_DIR/backups" 2>/dev/null || {
+    printf 'bootstrap: cannot create %s\n' "$BOOTSTRAP_STATE_DIR" >&2; exit 30; }
+fi
 # fd 3 is the durable log; stdout stays human-readable and stderr stays STDERR.
 # NOT `exec 3>>"$BOOTSTRAP_LOG" 2>/dev/null`: that spelling is two redirections on one exec, and the
 # second one silently sends THE WHOLE SCRIPT'S stderr to /dev/null for the rest of the run —
@@ -344,7 +355,8 @@ BOOTSTRAP_ENTRY=""
 if [ "$BOOTSTRAP_TREE" = "$BOOTSTRAP_HERE" ]; then
   [ -r "$BOOTSTRAP_HERE/bootstrap.sh" ] && BOOTSTRAP_ENTRY="$BOOTSTRAP_HERE/bootstrap.sh"
 elif [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
-  cp -f "${BASH_SOURCE[0]}" "$BOOTSTRAP_STATE_DIR/bootstrap.sh" 2>/dev/null && BOOTSTRAP_ENTRY="$BOOTSTRAP_STATE_DIR/bootstrap.sh"
+  if [ "$BOOTSTRAP_READ_ONLY" = 1 ]; then BOOTSTRAP_ENTRY="${BASH_SOURCE[0]}"
+  else cp -f "${BASH_SOURCE[0]}" "$BOOTSTRAP_STATE_DIR/bootstrap.sh" 2>/dev/null && BOOTSTRAP_ENTRY="$BOOTSTRAP_STATE_DIR/bootstrap.sh"; fi
 fi
 export BOOTSTRAP_ENTRY="$BOOTSTRAP_ENTRY"
 
@@ -421,6 +433,12 @@ driver_renamed_to() {
   esac
 }
 
+driver_rows_selection() {                           # the manifest modules this Mac has a row for, in order
+  local m out=""
+  for m in $BOOTSTRAP_MANIFEST; do [ -r "$BOOTSTRAP_ROWS/$m.state" ] && out="$out $m"; done
+  printf '%s' "${out# }"
+}
+
 driver_profile_rank() {                             # lite=1 standard=2 full=3, anything else=2
   case "$1" in lite) printf 1 ;; standard) printf 2 ;; full) printf 3 ;; all) printf 9 ;; *) printf 2 ;; esac
 }
@@ -433,6 +451,19 @@ driver_profile_rank() {                             # lite=1 standard=2 full=3, 
 driver_select() {
   local m f p want rank sel="" add chg guard bad=""
   rank="$(driver_profile_rank "${BOOTSTRAP_PROFILE:-$BOOTSTRAP_PROFILE_DEFAULT}")"
+
+  # --verify and --uninstall with nothing chosen act on WHAT IS HERE — every module this Mac has a row
+  # for — never on the default profile. Measured before: `--only statusline,hooks,microsoft365` exited
+  # 10, then a plain --verify judged lite instead, reported instructions and pane_equalize "not
+  # installed" and exited 20 over a successful install; a plain --uninstall would have left
+  # microsoft365 in place. With no rows at all, the default profile is still the answer.
+  if [ -z "$BOOTSTRAP_ONLY$BOOTSTRAP_EXCEPT$BOOTSTRAP_PROFILE" ]; then
+    case "$BOOTSTRAP_MODE" in
+      verify|uninstall)
+        sel="$(driver_rows_selection)"
+        if [ -n "$sel" ]; then printf '%s' "$sel"; return 0; fi ;;
+    esac
+  fi
 
   # A name that is in no manifest is a typo. Selecting nothing and exiting 0 would report a clean
   # run over an empty set — the false-green shape this driver already had to have removed twice.
@@ -527,6 +558,17 @@ driver_cmd_list() {
   printf '    full      standard + the app build, the screenshot pipeline, the Microsoft 365 markdown archive and shared-folder links. Apple ID, ~9 GB.\n\n'
   printf '  SELECT      --pick (a menu)   --profile <name>   --only a,b,c   --except x\n'
   printf '  INSPECT     --list   --plan   --manifest   --egress   --verify\n\n'
+}
+
+# ── --advise-model — this Mac's real budget for a local model, and the candidates that fit. ─────
+# Runs the VERIFIED tree's advisor, so the one prompt can name a command rather than a path: a curl'd
+# run has no assets/ in the working directory (measured: `bash assets/model-advisor.sh` → rc 127).
+driver_cmd_advise() {
+  local f="$BOOTSTRAP_ASSETS/model-advisor.sh" rc
+  [ -r "$f" ] || { driver_note_out "bootstrap: this release has no assets/model-advisor.sh"; return 30; }
+  /bin/bash "$f" </dev/null; rc=$?
+  printf '\n  The whole procedure, including how to read those labels: %s\n\n' "$BOOTSTRAP_ASSETS/agent-model-brief.md"
+  return "$rc"
 }
 
 # ── --egress — where your data can go. Writes nothing. ───────────────────────────────────────
@@ -1127,7 +1169,7 @@ driver_verdict() {
 driver_say "mac-bootstrap $BOOTSTRAP_VERSION · mode=$BOOTSTRAP_MODE · pin=$BOOTSTRAP_PIN · $(sw_vers -productVersion 2>/dev/null) $(uname -m 2>/dev/null)"
 bootstrap_have_jq || driver_say "note: jq is not on this machine — every step below uses the plutil path instead."
 
-driver_rows_recover
+[ "$BOOTSTRAP_READ_ONLY" = 1 ] || driver_rows_recover
 
 BOOTSTRAP_MANIFEST="$(driver_manifest)"
 BOOTSTRAP_BENCHED=0
@@ -1146,6 +1188,7 @@ else
     plan)     driver_cmd_plan;     exit $? ;;
     manifest) driver_cmd_manifest; exit $? ;;
     egress)   driver_cmd_egress;   exit $? ;;
+    advise)   driver_cmd_advise;   exit $? ;;
   esac
 
   # THE MENU, before anything is judged or written. It is closed again before any module runs, so
@@ -1176,7 +1219,9 @@ else
     BOOTSTRAP_ERR="the selection is empty: profile '${BOOTSTRAP_PROFILE:-$BOOTSTRAP_PROFILE_DEFAULT}'${BOOTSTRAP_ONLY:+, --only$BOOTSTRAP_ONLY}${BOOTSTRAP_EXCEPT:+, --except$BOOTSTRAP_EXCEPT} leaves no module to act on. Try --list."
     driver_fail "$BOOTSTRAP_ERR"
   else
-    [ -z "$BOOTSTRAP_ONLY" ] && driver_say "selection: ${BOOTSTRAP_PROFILE:-$BOOTSTRAP_PROFILE_DEFAULT} -> $(printf '%s' "$BOOTSTRAP_SELECTED" | wc -w | tr -d ' ') of $(printf '%s' "$BOOTSTRAP_MANIFEST" | wc -w | tr -d ' ') modules  (--list to see the rest)"
+    driver_selection_label="${BOOTSTRAP_PROFILE:-$BOOTSTRAP_PROFILE_DEFAULT}"
+    case "$BOOTSTRAP_MODE" in verify|uninstall) [ -z "$BOOTSTRAP_EXCEPT$BOOTSTRAP_PROFILE" ] && [ -n "$(driver_rows_selection)" ] && driver_selection_label="what is installed here" ;; esac
+    [ -z "$BOOTSTRAP_ONLY" ] && driver_say "selection: $driver_selection_label -> $(printf '%s' "$BOOTSTRAP_SELECTED" | wc -w | tr -d ' ') of $(printf '%s' "$BOOTSTRAP_MANIFEST" | wc -w | tr -d ' ') modules  (--list to see the rest)"
     # shellcheck disable=SC2086  # the selection is a deliberately word-split list
     for driver_m in $BOOTSTRAP_SELECTED; do driver_run_module "$driver_m"; done
   fi
