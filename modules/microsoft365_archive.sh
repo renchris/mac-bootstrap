@@ -106,29 +106,65 @@ microsoft365_archive_client_id() {
   return 0
 }
 
-# microsoft365_archive_node_ok <path> — an executable node >= 18 at a path that survives a node
-# upgrade. A per-shell fnm_multishells path is refused, because it vanishes with the shell and the
-# hourly job would die with it, silently. A "|" is refused because the server pick below is "|"-joined.
+# microsoft365_archive_node_ok <path> — an executable node >= 20 (the Softeria server's dependency tree
+# needs it: @azure/msal-node 5.6.0 says so) at a path that survives a node upgrade. A per-shell
+# fnm_multishells path is refused, because it vanishes with the shell and the hourly job would die
+# with it, silently. A "|" is refused because the server pick below is "|"-joined.
 microsoft365_archive_node_ok() {
   local c="$1" major
   [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || return 1
   case "$c" in */fnm_multishells/*|*'|'*) return 1 ;; esac
   major="$("$c" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" || return 1
   case "$major" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$major" -ge 18 ]
+  [ "$major" -ge 20 ]
 }
 
-# microsoft365_archive_node — the same candidate list, in the same order, as microsoft365_node. It is
-# the node that probes candidate servers, and the one that runs the microsoft365 module's server;
-# a server an agent already runs is run by that agent's node (microsoft365_archive_node_beside).
+# microsoft365_archive_node — the same candidate list, in the same order, as microsoft365_node: the
+# library's search first (the pinned node microsoft365 fetches on a Mac with none, Homebrew's two
+# prefixes, PATH), then the fixed list, because that search stops at its first hit. It is the node
+# that probes candidate servers, and the one that runs the microsoft365 module's server; a server an
+# agent already runs is run by that agent's node (microsoft365_archive_node_beside).
 microsoft365_archive_node() {
   local c
-  for c in /opt/homebrew/bin/node /usr/local/bin/node \
+  for c in "$(bootstrap_find_tool node 2>/dev/null)" "$(bootstrap_tools_dir)/bin/node" \
+           /opt/homebrew/bin/node /usr/local/bin/node \
            "$HOME/Library/Application Support/fnm/aliases/default/bin/node" \
            "$(command -v node 2>/dev/null)"; do
     microsoft365_archive_node_ok "$c" && { printf '%s' "$c"; return 0; }
   done
   return 1
+}
+
+# ── TLS ──────────────────────────────────────────────────────────────────────────────────────
+# The hourly job is a node process that reaches Microsoft through the server, so behind an inspecting
+# proxy it needs NODE_EXTRA_CA_CERTS in the LaunchAgent's environment (node ignores the keychain).
+# Asked per host, because proxies bypass inspection per host; BOOTSTRAP_TLS_PROBE_URL replaces both
+# (a test seam). Loaded once per verb, at its top — each probe is two HTTPS requests.
+MICROSOFT365_ARCHIVE_TLS_LOADED=""; MICROSOFT365_ARCHIVE_TLS_VAR=""; MICROSOFT365_ARCHIVE_TLS_RC=1
+microsoft365_archive_tls_load() {
+  local u out rc known=1 untrusted=0
+  [ -n "$MICROSOFT365_ARCHIVE_TLS_LOADED" ] && return 0
+  MICROSOFT365_ARCHIVE_TLS_VAR=""
+  for u in ${BOOTSTRAP_TLS_PROBE_URL:-https://login.microsoftonline.com/ https://graph.microsoft.com/}; do
+    out="$(bootstrap_node_ca_env "$u" 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0) known=0; [ -n "$out" ] && MICROSOFT365_ARCHIVE_TLS_VAR="$out" ;;
+      2) untrusted=1 ;;
+    esac
+  done
+  MICROSOFT365_ARCHIVE_TLS_RC="$known"; [ "$untrusted" = 1 ] && MICROSOFT365_ARCHIVE_TLS_RC=2
+  MICROSOFT365_ARCHIVE_TLS_LOADED=1
+}
+# The CA file the job is started with, or nothing: the one this network needs now, else one an earlier
+# run exported — kept, so a Mac set up at the office and verified at home does not lose it (it holds
+# only roots the OS already trusts). The path is the one bootstrap_node_ca_env writes.
+microsoft365_archive_ca_path() {
+  local pem
+  microsoft365_archive_tls_load
+  [ -n "$MICROSOFT365_ARCHIVE_TLS_VAR" ] && { printf '%s' "${MICROSOFT365_ARCHIVE_TLS_VAR#NODE_EXTRA_CA_CERTS=}"; return 0; }
+  pem="$(microsoft365_archive_state_dir)/trusted-roots.pem"
+  [ -s "$pem" ] && printf '%s' "$pem"
+  return 0
 }
 
 # microsoft365_archive_real_file <node> <path> — the physical path of a FILE, symlinks resolved, read
@@ -155,22 +191,16 @@ microsoft365_archive_short_path() {
 }
 
 # microsoft365_archive_rerun <module> [<VAR=value …>] — the command a person re-runs to finish a module,
-# with the given environment on the bootstrap run itself: the clone's bootstrap.sh when there is one;
-# from a curl'd bootstrap (no clone) the same pinned release fetched again. The fetched entry script is
-# the one AT the pin, which pins an older tree, so BOOTSTRAP_PIN is passed to hold it to this release.
-# Nothing is printed when neither can be spelled — a command that does not run as typed is worse.
+# with the given environment on the run itself: the entry script the driver names in BOOTSTRAP_ENTRY
+# (the clone's bootstrap.sh, or the copy a file-run kept). Nothing under `curl … | bash`, where there
+# is no file to name, nor for a path that would break out of its quotes — a command that does not run
+# as typed is worse than none. (The old curl-with-BOOTSTRAP_PIN form is gone: the driver now refuses
+# a pin that does not match its own manifest.)
 microsoft365_archive_rerun() {
-  local module="$1" env="${2:-}" root pin raw
+  local module="$1" env="${2:-}"
+  case "${BOOTSTRAP_ENTRY:-}" in ''|*'"'*|*'$'*|*'`'*|*'\'*) return 0 ;; esac
   [ -n "$env" ] && env="$env "
-  if [ -n "${BOOTSTRAP_ASSETS:-}" ]; then
-    root="$(dirname "$BOOTSTRAP_ASSETS")"
-    [ -r "$root/bootstrap.sh" ] && { printf '%sbash "%s/bootstrap.sh" --only %s' "$env" "$(microsoft365_archive_short_path "$root")" "$module"; return 0; }
-  fi
-  pin="${BOOTSTRAP_PIN:-}"; raw="${BOOTSTRAP_RAW:-}"
-  case "$pin" in ''|*[!0-9A-Fa-f]*) return 0 ;; esac
-  case "$raw" in "https://raw.githubusercontent.com/"*"/$pin") : ;; *) return 0 ;; esac
-  case "$raw" in *[!A-Za-z0-9._/:-]*) return 0 ;; esac
-  printf 'curl -fsSL -o /tmp/mac-bootstrap.sh %s/bootstrap.sh && %sBOOTSTRAP_PIN=%s bash /tmp/mac-bootstrap.sh --only %s' "$raw" "$env" "$pin" "$module"
+  printf '%sbash "%s" --only %s' "$env" "$(microsoft365_archive_short_path "$BOOTSTRAP_ENTRY")" "$module"
 }
 
 # ── bounded execution ────────────────────────────────────────────────────────────────────────
@@ -471,112 +501,25 @@ microsoft365_archive_root_in_engine() {
 }
 
 # ── the asset set ────────────────────────────────────────────────────────────────────────────
-# Asset paths are relative to assets/: microsoft365-archive/<file> and markdown-convert.sh. From a
-# clone the engine's file list is the directory itself; a curl'd bootstrap has no directory to list,
-# so it reads assets/microsoft365-archive/MANIFEST (one path per line, relative to that folder).
-microsoft365_archive_clone() {
+# Asset paths are relative to assets/: microsoft365-archive/<file> and markdown-convert.sh, read ONLY
+# from $BOOTSTRAP_ASSETS — the verified release tree, a clone's or the one a curl'd driver checked
+# against its sha256 manifest. This module used to fetch its own copy from raw.githubusercontent.com
+# when there was no clone; that copy was the one set of bytes the manifest never saw, so it is gone,
+# and with it the engine's own MANIFEST, which existed only to list what to fetch.
+microsoft365_archive_source() {
   [ -r "${BOOTSTRAP_ASSETS:-}/microsoft365-archive/archive.js" ] && [ -r "${BOOTSTRAP_ASSETS}/markdown-convert.sh" ] \
     && { printf '%s' "$BOOTSTRAP_ASSETS"; return 0; }
   return 1
 }
 
-# microsoft365_archive_part_ok <relpath> — a manifest line we are willing to turn into a path.
-microsoft365_archive_part_ok() {
-  case "$1" in
-    ''|/*|*/|*//*|.*|*/.*|*[!A-Za-z0-9._/-]*) return 1 ;;
-  esac
-  return 0
-}
-
-# microsoft365_archive_listing <clone> — the engine's files, from the directory, relative to it:
-# every file but the MANIFEST and hidden ones. Every file, not a fixed four: the folder's own
-# package.json ("type": "commonjs") is what keeps node from reading the engine as ES modules under
-# a package.json higher up (the repo's root one declares "type": "module"), and a fixed list would
-# have silently dropped it.
-microsoft365_archive_listing() {
-  [ -d "$1/microsoft365-archive" ] || return 1
-  (cd "$1/microsoft365-archive" && find . -type f ! -name MANIFEST ! -name '.*' ! -path '*/.*' 2>/dev/null) \
-    | sed 's#^\./##' | LC_ALL=C sort
-}
-
-# microsoft365_archive_manifest_lines <file> — the MANIFEST's paths, validated; rc 1 on any bad line
-# or when an engine file is missing from it.
-microsoft365_archive_manifest_lines() {
-  local line out="" f
-  [ -s "$1" ] || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue ;; esac
-    microsoft365_archive_part_ok "$line" || return 1
-    out="$out$line
-"
-  done < "$1"
-  for f in $MICROSOFT365_ARCHIVE_ENGINE_FILES; do
-    case "
-$out" in *"
-$f
-"*) : ;; *) return 1 ;; esac
-  done
-  printf '%s' "$out"
-}
-
-# microsoft365_archive_curl <url> <dest> — a real 200 with a body, or nothing at all.
-microsoft365_archive_curl() {
-  local code
-  code="$(curl -sS -L -o "$2.part" -w '%{http_code}' "$1" 2>/dev/null)" || code=""
-  if [ "$code" = "200" ] && [ -s "$2.part" ]; then mv -f "$2.part" "$2"; return $?; fi
-  rm -f "$2.part" 2>/dev/null
-  return 1
-}
-
-# microsoft365_archive_fetched — the pinned release's asset set, fetched ONCE per pin into a cache
-# keyed by the pin (a cache shared across pins would let a stale copy satisfy a newer release).
-# Filled into a .part directory and renamed only when complete, so a half fetch is never a source.
-microsoft365_archive_fetched() {
-  local pin="${BOOTSTRAP_PIN:-}" cache part rel lines
-  case "$pin" in __PIN_SHA__|main|master|'') return 1 ;; esac      # a moving ref is not a pin
-  case "$pin" in *[!0-9A-Za-z]*) return 1 ;; esac
-  cache="$(microsoft365_archive_dir)/.fetched/$pin"
-  [ -f "$cache/.complete" ] && { printf '%s' "$cache"; return 0; }
-  command -v curl >/dev/null 2>&1 || return 1
-  part="$cache.part.$$"
-  rm -rf "$part" 2>/dev/null
-  mkdir -p "$part/microsoft365-archive" 2>/dev/null || return 1
-  microsoft365_archive_curl "${BOOTSTRAP_RAW:-}/assets/microsoft365-archive/MANIFEST" "$part/microsoft365-archive/MANIFEST" \
-    || { rm -rf "$part"; return 1; }
-  lines="$(microsoft365_archive_manifest_lines "$part/microsoft365-archive/MANIFEST")" || { rm -rf "$part"; return 1; }
-  for rel in $lines; do
-    mkdir -p "$(dirname "$part/microsoft365-archive/$rel")" 2>/dev/null || { rm -rf "$part"; return 1; }
-    microsoft365_archive_curl "${BOOTSTRAP_RAW:-}/assets/microsoft365-archive/$rel" "$part/microsoft365-archive/$rel" \
-      || { rm -rf "$part"; return 1; }
-  done
-  microsoft365_archive_curl "${BOOTSTRAP_RAW:-}/assets/markdown-convert.sh" "$part/markdown-convert.sh" || { rm -rf "$part"; return 1; }
-  : > "$part/.complete"
-  rm -rf "$cache" 2>/dev/null
-  mv -f "$part" "$cache" 2>/dev/null || { rm -rf "$part"; return 1; }
-  printf '%s' "$cache"
-}
-
-# microsoft365_archive_source — the root to copy from: the clone, else the pinned fetch. rc 1 = none.
-microsoft365_archive_source() {
-  microsoft365_archive_clone && return 0
-  microsoft365_archive_fetched
-}
-
-# microsoft365_archive_parts <source-root> — the engine file list for that root.
+# microsoft365_archive_parts <source-root> — the engine's files, from the directory, relative to it:
+# every file but hidden ones. Every file, not a fixed four: the folder's own package.json ("type":
+# "commonjs") is what keeps node from reading the engine as ES modules under a package.json higher
+# up (the repo's root one declares "type": "module"), and a fixed list would have silently dropped it.
 microsoft365_archive_parts() {
-  if [ "$1" = "${BOOTSTRAP_ASSETS:-}" ]; then microsoft365_archive_listing "$1"
-  else microsoft365_archive_manifest_lines "$1/microsoft365-archive/MANIFEST"; fi
-}
-
-# microsoft365_archive_manifest_agrees <clone> — from a clone, the MANIFEST must name exactly the
-# files the directory holds. A clone can never see a curl'd install's file set otherwise, and a
-# MANIFEST that forgot a fixture ships an engine whose selftest fails only on a stranger's Mac.
-microsoft365_archive_manifest_agrees() {
-  local a b
-  a="$(microsoft365_archive_manifest_lines "$1/microsoft365-archive/MANIFEST")" || return 1
-  a="$(printf '%s' "$a" | LC_ALL=C sort)"
-  b="$(microsoft365_archive_listing "$1" | LC_ALL=C sort)"
-  [ "$a" = "$b" ]
+  [ -d "$1/microsoft365-archive" ] || return 1
+  (cd "$1/microsoft365-archive" && find . -type f ! -name '.*' ! -path '*/.*' 2>/dev/null) \
+    | sed 's#^\./##' | LC_ALL=C sort
 }
 
 # ── generated files: the wrapper and the config ──────────────────────────────────────────────
@@ -654,10 +597,12 @@ microsoft365_archive_land() {
 }
 
 # ── the LaunchAgent ──────────────────────────────────────────────────────────────────────────
-# microsoft365_archive_plist_build <dest> — built with plutil, key by key, never as a string.
+# microsoft365_archive_plist_build <dest> — built with plutil, key by key, never as a string. Behind an
+# inspecting proxy the job's environment carries NODE_EXTRA_CA_CERTS: the engine and the server it
+# starts both inherit it, and without it every hourly run dies at TLS.
 microsoft365_archive_plist_build() {
-  local p="$1" log
-  log="$(microsoft365_archive_log)"
+  local p="$1" log ca
+  log="$(microsoft365_archive_log)"; ca="$(microsoft365_archive_ca_path)"
   rm -f "$p" 2>/dev/null
   plutil -create xml1 "$p" >/dev/null 2>&1 \
     && plutil -insert Label -string "$MICROSOFT365_ARCHIVE_LABEL" "$p" >/dev/null 2>&1 \
@@ -668,7 +613,10 @@ microsoft365_archive_plist_build() {
     && plutil -insert StartCalendarInterval.Minute -integer "$MICROSOFT365_ARCHIVE_MINUTE" "$p" >/dev/null 2>&1 \
     && plutil -insert RunAtLoad -bool true "$p" >/dev/null 2>&1 \
     && plutil -insert StandardOutPath -string "$log" "$p" >/dev/null 2>&1 \
-    && plutil -insert StandardErrorPath -string "$log" "$p" >/dev/null 2>&1
+    && plutil -insert StandardErrorPath -string "$log" "$p" >/dev/null 2>&1 || return 1
+  [ -n "$ca" ] || return 0
+  plutil -insert EnvironmentVariables -dictionary "$p" >/dev/null 2>&1 \
+    && plutil -insert EnvironmentVariables.NODE_EXTRA_CA_CERTS -string "$ca" "$p" >/dev/null 2>&1
 }
 
 # microsoft365_archive_plist_get <key> — plutil emits its failure SENTENCE on stdout (CONTRACT §7.3),
@@ -682,7 +630,7 @@ microsoft365_archive_plist_get() {
 # microsoft365_archive_plist_ok — parses, and every field reads back as the job needs it. The array
 # length is read too: an extra argument would change what launchd runs.
 microsoft365_archive_plist_ok() {
-  local p
+  local p ca
   p="$(microsoft365_archive_plist)"
   [ -f "$p" ] || return 1
   plutil -lint "$p" >/dev/null 2>&1 || return 1
@@ -694,6 +642,15 @@ microsoft365_archive_plist_ok() {
   [ "$(microsoft365_archive_plist_get RunAtLoad)" = true ] || return 1
   [ "$(microsoft365_archive_plist_get StandardOutPath)" = "$(microsoft365_archive_log)" ] || return 1
   [ "$(microsoft365_archive_plist_get StandardErrorPath)" = "$(microsoft365_archive_log)" ] || return 1
+  # The environment is exactly the CA file in force, or absent: nothing else may ride into the job.
+  ca="$(microsoft365_archive_ca_path)"
+  if [ -n "$ca" ]; then
+    [ "$(plutil -extract EnvironmentVariables xml1 -o - "$p" 2>/dev/null | grep -c '<key>')" = 1 ] || return 1
+    [ "$(microsoft365_archive_plist_get EnvironmentVariables.NODE_EXTRA_CA_CERTS)" = "$ca" ] || return 1
+  else
+    plutil -type EnvironmentVariables "$p" >/dev/null 2>&1 && return 1
+  fi
+  return 0
 }
 
 # microsoft365_archive_loaded_path [label] — the plist launchd loaded the label from, read out of
@@ -725,7 +682,7 @@ microsoft365_archive_home_ok() { bootstrap_defaults_home_ok >/dev/null 2>&1; }
 
 # ── the read-backs ───────────────────────────────────────────────────────────────────────────
 # microsoft365_archive_files_ok — every engine file and the converter present, and byte-identical to
-# the source whenever a source is reachable (the clone, or this pin's fetched set).
+# the verified release tree whenever the driver provides one.
 microsoft365_archive_files_ok() {
   local dir src rel parts
   dir="$(microsoft365_archive_dir)"
@@ -811,6 +768,8 @@ microsoft365_archive_gate_reason() {
   microsoft365_archive_pick >/dev/null; rc=$?
   case "$rc" in 0) : ;; 2) printf 'server-named'; return 0 ;; *) printf 'server'; return 0 ;; esac
   node="$(microsoft365_archive_run_node)" || { printf 'node'; return 0; }
+  microsoft365_archive_tls_load
+  [ "$MICROSOFT365_ARCHIVE_TLS_RC" = 2 ] && { printf 'tls-untrusted'; return 0; }
   root="$(microsoft365_archive_root)"
   microsoft365_archive_root_shape_ok "$root" || { printf 'relative-root'; return 0; }
   microsoft365_archive_under_cloud "$root" && { printf 'cloud'; return 0; }
@@ -834,11 +793,26 @@ what_microsoft365_archive()    { printf '%s' 'every Teams meeting you attend, an
 cost_microsoft365_archive()    { printf '%s' 'under 1 MB plus your archive. Needs the microsoft365 sign-in; transcripts, AI notes and Copilot history each need a Microsoft grant your tenant may not have given, and the archive records which.'; }
 profile_microsoft365_archive() { printf '%s' 'full'; }
 needs_microsoft365_archive()   { printf '%s' 'microsoft365'; }
+# One host per line: <host> <install|run> <purpose>. The engine's own downloads go to whatever
+# pre-authenticated https URL Graph hands back (private and loopback addresses refused); these are
+# the Microsoft content hosts that serves in practice.
+egress_microsoft365_archive() { cat <<'E'
+login.microsoftonline.com run hourly job (and at load) token refresh via the ms365 server; the TLS check at install and verify
+graph.microsoft.com run hourly job Graph GETs: calendar, meetings, chats, OneDrive folders, /shares link resolution; the TLS check
+*.sharepoint.com run pre-authenticated document downloads Graph returns (GET, no Authorization header)
+*.files.1drv.com run pre-authenticated OneDrive downloads Graph returns (GET, no Authorization header)
+*.svc.ms run pre-authenticated downloads Graph returns (GET, no Authorization header)
+my.microsoftpersonalcontent.com run pre-authenticated personal-account downloads Graph returns (GET, no Authorization header)
+E
+}
 
 verify_microsoft365_archive() {
   local node account list
   microsoft365_archive_pick >/dev/null || return 1
   node="$(microsoft365_archive_run_node)" || return 1
+  [ -f "$(microsoft365_archive_plist)" ] || return 1       # nothing installed: say no before any request leaves
+  microsoft365_archive_tls_load
+  [ "$MICROSOFT365_ARCHIVE_TLS_RC" = 2 ] && return 1
 
   # Installed bytes against the shipped bytes, the folder, and the plist parsing to what launchd must
   # run — all local reads, so a Mac with nothing installed says no before any server is started.
@@ -874,12 +848,14 @@ verify_microsoft365_archive() {
 
 gate_microsoft365_archive() {
   microsoft365_archive_pick >/dev/null 2>&1
+  microsoft365_archive_tls_load
   [ -n "$(microsoft365_archive_gate_reason)" ]
 }
 
 note_microsoft365_archive() {
   local r
   microsoft365_archive_pick >/dev/null 2>&1
+  microsoft365_archive_tls_load
   r="$(microsoft365_archive_gate_reason)"
   # The account gate is reported before the sandboxed-HOME one, but when both hold the line says so,
   # or the reader signs in, re-runs, and only then learns the job still will not load from here.
@@ -891,7 +867,8 @@ note_microsoft365_archive() {
 microsoft365_archive_note_text() {
   local r="$1"
   case "$r" in
-    node)          printf 'the meeting archive runs on node 18 or later, and this Mac has none.' ;;
+    node)          printf 'the meeting archive runs on node 20 or later, and this Mac has none yet; the microsoft365 module fetches one from nodejs.org, with no Homebrew and no admin.' ;;
+    tls-untrusted) printf 'your network intercepts TLS with a certificate this Mac does not trust, so the hourly job could never reach Microsoft; ask IT to install that certificate on this Mac.' ;;
     server)        printf 'the meeting archive reads through Softeria'\''s Microsoft 365 server, and there is none here it can run: the microsoft365 module has not installed it, and no ms365 server registered in $HOME/.claude.json runs as one.' ;;
     server-named)  printf 'the meeting archive was pointed at %s (BOOTSTRAP_MICROSOFT_SERVER, now or at an earlier install), and that does not run as Softeria'\''s Microsoft 365 server; re-run the bootstrap with BOOTSTRAP_MICROSOFT_SERVER set to its dist/index.js or its bin link.' \
                      "$(microsoft365_archive_short_path "$(microsoft365_archive_server_named)")" ;;
@@ -915,8 +892,10 @@ microsoft365_archive_note_text() {
 gesture_microsoft365_archive() {
   local node id pre
   microsoft365_archive_pick >/dev/null 2>&1
+  microsoft365_archive_tls_load
   case "$(microsoft365_archive_gate_reason)" in
-    node)          printf 'brew install node' ;;
+    node)          microsoft365_archive_rerun microsoft365 ;;       # it fetches the pinned node
+    tls-untrusted) : ;;                                              # IT's certificate: no command exists
     server)        microsoft365_archive_rerun microsoft365 ;;
     server-named)  : ;;   # the right path is the person's to name; a command with one filled in would guess it
     relative-root|cloud|root-in-engine)
@@ -939,7 +918,9 @@ gesture_microsoft365_archive() {
 
 install_microsoft365_archive() {
   local node dir root account written list src parts rel stage out rc tmp f lp i
-  microsoft365_archive_node >/dev/null || { bootstrap_warn "microsoft365_archive: no node 18+ on this Mac"; return 1; }
+  microsoft365_archive_node >/dev/null || { bootstrap_warn "microsoft365_archive: no node 20+ on this Mac"; return 1; }
+  microsoft365_archive_tls_load
+  [ "$MICROSOFT365_ARCHIVE_TLS_RC" = 2 ] && { bootstrap_warn "microsoft365_archive: TLS to Microsoft is intercepted by a certificate this Mac does not trust"; return 1; }
   microsoft365_archive_pick >/dev/null 2>&1
   microsoft365_archive_server >/dev/null || { bootstrap_warn "microsoft365_archive: no Softeria server here runs as one (BOOTSTRAP_MICROSOFT_SERVER, the microsoft365 module's, the ms365 one in \$HOME/.claude.json)"; return 1; }
   node="$(microsoft365_archive_run_node)" || return 1
@@ -964,12 +945,8 @@ install_microsoft365_archive() {
   rm -f "$tmp" 2>/dev/null
 
   # ── the engine: staged whole, PROVEN on this node, and only then landed ──────────────────
-  src="$(microsoft365_archive_source)" || { bootstrap_warn "microsoft365_archive: cannot find or fetch assets/microsoft365-archive"; return 1; }
-  if [ "$src" = "${BOOTSTRAP_ASSETS:-}" ] && ! microsoft365_archive_manifest_agrees "$src"; then
-    bootstrap_warn "microsoft365_archive: assets/microsoft365-archive/MANIFEST does not list exactly the files in that folder — a curl'd install would ship a different engine than this clone"
-    return 1
-  fi
-  parts="$(microsoft365_archive_parts "$src")" || { bootstrap_warn "microsoft365_archive: the asset manifest is unreadable"; return 1; }
+  src="$(microsoft365_archive_source)" || { bootstrap_warn "microsoft365_archive: the release tree has no assets/microsoft365-archive (BOOTSTRAP_ASSETS)"; return 1; }
+  parts="$(microsoft365_archive_parts "$src")" || { bootstrap_warn "microsoft365_archive: cannot list assets/microsoft365-archive"; return 1; }
   stage="$(mktemp -d "$(microsoft365_archive_state_dir)/microsoft365-archive-stage.XXXXXX")" || return 1
   for rel in $parts; do
     mkdir -p "$(dirname "$stage/$rel")" 2>/dev/null && cp -f "$src/microsoft365-archive/$rel" "$stage/$rel" 2>/dev/null \
@@ -998,13 +975,8 @@ $f
 $(cd "$dir" && find fixtures -type f 2>/dev/null)
 EOF
   fi
-  # Fetched sets of other pins are dead weight once this one is installed.
-  if [ -d "$dir/.fetched" ]; then
-    for f in "$dir/.fetched"/*; do
-      [ -e "$f" ] || continue
-      [ "${f##*/}" = "${BOOTSTRAP_PIN:-}" ] || rm -rf "$f" 2>/dev/null
-    done
-  fi
+  # The download cache an older release kept for its own fetch is dead weight now.
+  rm -rf "$dir/.fetched" 2>/dev/null
 
   # ── the archive folder, then the generated files ─────────────────────────────────────────
   # The folder first, and judged again once it EXISTS (its real path is then fully resolved), before
