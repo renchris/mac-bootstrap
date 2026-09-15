@@ -784,6 +784,21 @@ egress_rewrite_model() {
     'dd20bb891979d25aebc8bec07b2b3bbc.r2.cloudflarestorage.com install the model blobs registry.ollama.ai redirects to'
 }
 
+# rewrite_model_local_only — the second, independent reader of VoiceInk: assets/local-only-check.sh
+# decides, from every key store, every enabled mode and every cloud transcription model, whether
+# VoiceInk can still reach a cloud service. The per-mode proof above cannot see a SAVED cloud key,
+# which wins the fork build's fallback on the first Ollama outage, nor a cloud transcription model.
+# Executed, never sourced. Prints its FAIL lines (names only, never a key); rc 0 = VoiceInk is local.
+rewrite_model_local_only() {
+  local c="${BOOTSTRAP_ASSETS:-}/local-only-check.sh"
+  if [ ! -r "$c" ]; then printf '    FAIL  assets/local-only-check.sh is missing, so VoiceInk cannot be shown to be local\n'; return 1; fi
+  if [ -n "${BOOTSTRAP_REWRITE_MODEL_DOMAIN:-}" ]; then
+    LOCAL_ONLY_VOICEINK_DOMAIN="${BOOTSTRAP_REWRITE_MODEL_DOMAIN%.plist}" /bin/bash "$c" --only voiceink --quiet 2>/dev/null
+  else
+    /bin/bash "$c" --only voiceink --quiet 2>/dev/null
+  fi
+}
+
 verify_rewrite_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
@@ -810,6 +825,7 @@ verify_rewrite_model() {
   # The GUI evidence, per mode. rewrite_model never writes a mode, so this can only have come from
   # a human in VoiceInk — and it is the setting that decides which provider each dictation reaches.
   rewrite_model_modes_pinned >/dev/null 2>&1 || return 1
+  rewrite_model_local_only >/dev/null 2>&1 || return 1
 
   # An optional live re-measurement. Off by default because it costs a model load, and the
   # receipt is already bound to the digest; on when you want the end-to-end answer rather than
@@ -857,6 +873,7 @@ rewrite_model_pending() {
     t="$(rewrite_model_preference EnhancementTimeoutSeconds)" || t=""
     if [ "$t" != "$REWRITE_MODEL_TIMEOUT_S" ] && rewrite_model_voiceink_running; then printf 'QUIT'; return 0; fi
     rewrite_model_modes_pinned >/dev/null 2>&1 || { printf 'GUI'; return 0; }
+    rewrite_model_local_only >/dev/null 2>&1 || { printf 'GUI'; return 0; }
   fi
   printf 'NONE'
   return 0
@@ -886,7 +903,7 @@ note_rewrite_model() {
     printf 'this run has a sandboxed HOME ($HOME is not your real home), and `defaults` ignores $HOME — writing would hit your REAL preferences. Nothing was written.'
     return 0
   fi
-  local why
+  local why lo
   case "$(rewrite_model_pending)" in
     FETCH)
       if bootstrap_is_admin && ! rewrite_model_brew >/dev/null 2>&1; then
@@ -908,6 +925,9 @@ note_rewrite_model() {
       printf 'VoiceInk is running and it rewrites its own preferences when it quits, so the %s-second enhancement timeout cannot be written underneath it — quit VoiceInk and run this again.\n' "$REWRITE_MODEL_TIMEOUT_S" ;;
     GUI)
       why="$(rewrite_model_modes_pinned 2>/dev/null)"
+      # What the independent check found, joined onto this one line: names only, never a key.
+      lo="$(rewrite_model_local_only | sed 's/^ *FAIL *//' | tr '\n' ';' | sed 's/;$//')"
+      [ -n "$lo" ] && why="${why:+$why; }$lo"
       printf 'In VoiceInk, Settings > Modes: for every mode with AI enhancement on, choose provider Ollama and model %s — a mode that names a cloud provider sends your dictation there (%s). While you are in Settings > Transcription, download parakeet-unified-0.6b from its model card and select it — it is faster, more accurate and lighter than the whisper turbo default, and it punctuates its own output, which is work the rewrite model then does not have to do.\n' "$REWRITE_MODEL_NAME" "${why:-the modes could not be read}" ;;
     *)
       printf 'nothing is waiting on you for the local rewrite model.\n' ;;

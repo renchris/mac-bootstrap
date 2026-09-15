@@ -50,7 +50,8 @@ chmod +x "$RM_DIR/bin/curl" "$RM_DIR/bin/ollama" "$RM_DIR/bin/ollama-broken"
 
 # rm_api — a server that is certified, cloud off, and serves the derived model with the right parameters.
 rm_api() {
-  rm -rf "$RM_DIR/api"; mkdir -p "$RM_DIR/api"
+  rm -rf "$RM_DIR/api"; mkdir -p "$RM_DIR/api" "$RM_DIR/lo/api"
+  ln -sfn "$RM_DIR/api/tags.json" "$RM_DIR/lo/api/tags"   # the same bytes, in the local-only reader's file:// layout
   printf '{"version":"0.34.0"}' > "$RM_DIR/api/version.json"
   printf '{"models":[{"name":"voiceink-rewrite:latest","digest":"d1g3st","size":5225387842}]}' > "$RM_DIR/api/tags.json"
   printf '{"details":{"parent_model":"qwen3:8b"},"parameters":"num_ctx                        4096\\ntemperature                    0.2"}' > "$RM_DIR/api/show.json"
@@ -81,7 +82,7 @@ rm_call() {
   ( export HOME="$h" BOOTSTRAP_STATE_DIR="$h/.mac-bootstrap" BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1 \
            BOOTSTRAP_REWRITE_MODEL_DOMAIN="$RM_DOMAIN" \
            BOOTSTRAP_REWRITE_MODEL_OLLAMA="${RM_OLLAMA:-$RM_DIR/bin/ollama}" \
-           BOOTSTRAP_REWRITE_MODEL_CURL="$RM_DIR/bin/curl" RM_FAKE_API="$RM_DIR/api" \
+           BOOTSTRAP_REWRITE_MODEL_CURL="$RM_DIR/bin/curl" RM_FAKE_API="$RM_DIR/api" LOCAL_ONLY_OLLAMA_URL="file://$RM_DIR/lo" BOOTSTRAP_ASSETS="$CHECK_ROOT/assets" \
            BOOTSTRAP_REWRITE_MODEL_APP_PROCESS=no-such-voiceink-process
     unset BOOTSTRAP_LOG
     . "$RM_LIB" >/dev/null 2>&1; . "$RM_MOD" >/dev/null 2>&1
@@ -278,3 +279,17 @@ same "cloud-gate-server-already-off" "$(rm_call "$h" rm_nolabel rewrite_model_pe
 printf '{"cloud":{"disabled":false,"source":"none"}}' > "$RM_DIR/api/status.json"
 same "cloud-gate-unmanaged-server-on" "$(rm_call "$h" rm_nolabel rewrite_model_pending 2>/dev/null)" CLOUD
 rm_call "$h" rm_nolabel gate_rewrite_model; same "cloud-gate-is-needs-human" "$?" 0
+
+# The second reader: a SAVED cloud key alone — no mode naming it — must stop rewrite_model reading as
+# local, because the fork build falls back to any connected provider. The per-mode proof cannot see it;
+# assets/local-only-check.sh can. Fixture domain only: the real VoiceInk preferences are never read here.
+RM_FX="$CHECK_TMP/rm-voiceink-fixture"
+plutil -create xml1 "$RM_FX.plist" 2>/dev/null || printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict/></plist>\n' > "$RM_FX.plist"
+RM_CLEAN="$( ( . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh"; . "$CHECK_ROOT/modules/rewrite_model.sh"
+               BOOTSTRAP_ASSETS="$CHECK_ROOT/assets" BOOTSTRAP_REWRITE_MODEL_DOMAIN="$RM_FX" rewrite_model_local_only >/dev/null; echo $? ) 2>/dev/null)"
+plutil -insert LocalKeychain_geminiAPIKey -data AA== "$RM_FX.plist" 2>/dev/null
+RM_KEYED="$( ( . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh"; . "$CHECK_ROOT/modules/rewrite_model.sh"
+               BOOTSTRAP_ASSETS="$CHECK_ROOT/assets" BOOTSTRAP_REWRITE_MODEL_DOMAIN="$RM_FX" rewrite_model_local_only ) 2>/dev/null)"
+same "rewrite-model-second-reader-clean-fixture" "$RM_CLEAN" 0
+case "$RM_KEYED" in *Gemini*) pass "rewrite-model-second-reader-sees-a-saved-key" ;;
+  *) fail "rewrite-model-second-reader-sees-a-saved-key" "${RM_KEYED:-no FAIL line}" ;; esac
