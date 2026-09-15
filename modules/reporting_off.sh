@@ -61,6 +61,9 @@ what_reporting_off()    { printf '%s' "switches off optional reporting that can 
 cost_reporting_off()    { printf '%s' "three keys in Claude Code's settings and Homebrew's own switch. No installs, no permissions. Keeps feature flags, so nothing you use goes away. Copilot CLI has no such switch."; }
 profile_reporting_off() { printf '%s' 'standard'; }
 egress_reporting_off()  { :; }
+# Declared empty, deliberately: it only switches reporting OFF (three settings keys, Homebrew's own
+# switch). Nothing runs, nothing starts at login, no grant, no trust, no app.
+clearance_reporting_off() { :; }
 
 verify_reporting_off() {
   [ -z "$(reporting_off_claude_missing)" ] || return 1

@@ -134,6 +134,10 @@ cost_statusline()    { printf '%s' 'a ~4 KB script plus one key in each settings
 profile_statusline() { printf '%s' 'lite'; }
 # No network of its own: the script reads the JSON the agent pipes to it and the local git branch.
 egress_statusline()  { :; }
+# The one thing IT governs here: a command the agent runs by itself, on every redraw, with no prompt.
+clearance_statusline() {
+  printf '%s\n' "agent a status-line command (agent-statusline.sh) that Claude Code and Copilot CLI run on their own at every screen redraw, registered in both agents' settings"
+}
 
 verify_statusline() {
   local sl f cur out

@@ -227,3 +227,26 @@ else agent_config_local_has "route-report-remote-provider-not-fully-local" "$out
 # NEGATIVE CONTROL: with neither exported, neither line appears
 out="$(agent_config_local)"
 same "route-report-neither-set-prints-neither" "$(printf '%s\n' "$out" | grep -cE 'GH_HOST|COPILOT_OFFLINE')" 0
+
+# 12. clearance_<m>: each of the five config modules declares what IT usually governs, one line per
+#     thing, each line opening with a class from the fixed set. Absent is UNDECLARED, so absence fails.
+agent_config_clearance_ok() {                   # stdin: clearance lines → rc 0 iff every line is well formed
+  local l bad=0
+  while IFS= read -r l; do
+    case "$l" in data\ ?*|background\ ?*|trust\ ?*|permission\ ?*|software\ ?*|agent\ ?*) : ;; *) bad=1 ;; esac
+  done
+  return "$bad"
+}
+# CONTROL: the shape test can say no
+if printf 'agent a real line\nnetwork not a class\n' | agent_config_clearance_ok; then fail "clearance-shape-test-can-say-no"
+else pass "clearance-shape-test-can-say-no"; fi
+for m in statusline:agent instructions: hooks:agent handoff:agent,permission reporting_off:; do
+  want="${m#*:}"; m="${m%%:*}"
+  # shellcheck source=/dev/null
+  out="$( ( . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" >/dev/null 2>&1; . "$CHECK_ROOT/modules/$m.sh" >/dev/null 2>&1
+            command -v "clearance_$m" >/dev/null || { echo UNDECLARED; exit 0; }; "clearance_$m" ) 2>/dev/null)"
+  if [ "$out" = UNDECLARED ]; then fail "clearance-$m-declared" "no clearance_$m"; continue; fi
+  if ! printf '%s\n' "$out" | sed '/^$/d' | agent_config_clearance_ok; then fail "clearance-$m-well-formed" "$out"; continue; fi
+  got="$(printf '%s\n' "$out" | sed '/^$/d' | cut -d' ' -f1 | sort -u | tr '\n' ',' | sed 's/,$//')"
+  same "clearance-$m-classes" "$got" "$want"
+done

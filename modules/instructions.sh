@@ -196,6 +196,10 @@ cost_instructions()    { printf '%s' 'two files and one symlink. No installs, no
 profile_instructions() { printf '%s' 'lite'; }
 # No network of its own: two files and a symlink, and a per-repo helper that writes local files only.
 egress_instructions()  { :; }
+# Declared empty, deliberately: the agents READ these files and run nothing from them. Nothing starts
+# at login, no macOS grant, no trust, no app. agent-repo-init is a program the person runs, never an
+# agent on its own.
+clearance_instructions() { :; }
 
 verify_instructions() {
   local g t r cop

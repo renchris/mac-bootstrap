@@ -227,6 +227,13 @@ profile_hooks() { printf '%s' 'lite'; }
 # No network of their own: the four hooks read their stdin, local files and local git (rev-parse,
 # rev-list, log, status — never fetch or push), and none of them starts an agent CLI.
 egress_hooks()  { :; }
+# The wire table (assets/copilot-hooks.json _spec.wire) is what the agents run: session-start.sh,
+# stop.sh and guard-write.sh. Copilot's guard row has no matcher, so there it runs before every tool
+# call. stop.sh's bounded auto-continue is named on its own line: it is the agent working unprompted.
+clearance_hooks() {
+  printf '%s\n' "agent hook scripts Claude Code and Copilot CLI run on their own at every session start, at every stop and before file writes (in Copilot, before every tool call), registered in both agents' settings"
+  printf '%s\n' "agent the stop hook can refuse the agent's stop and send it back to work with no human prompt, at most 3 times a session (BOOTSTRAP_STOP_MAX)"
+}
 
 verify_hooks() {
   local d t n i s cmd ev rows T out before after rc=0

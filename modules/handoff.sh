@@ -183,6 +183,12 @@ egress_handoff()  {
   printf '%s\n' 'api.anthropic.com run a Claude Code successor sends its brief to its provider (Anthropic, or the Bedrock/Vertex/gateway your settings route it to)'
   printf '%s\n' 'api.githubcopilot.com run a Copilot CLI successor sends its brief to its provider (GitHub, or the one COPILOT_PROVIDER_BASE_URL names)'
 }
+# tmux is the person's own install and is not claimed here. The iTerm2 driver is the one that sends
+# AppleEvents; the tmux and kitty drivers need no macOS grant.
+clearance_handoff() {
+  printf '%s\n' "agent a session can retire itself and start a new Claude Code or Copilot CLI session with no human at the keyboard (/handoff), pre-accepting that agent's folder-trust prompt for the working directory"
+  printf '%s\n' "permission Automation (AppleEvents) for iTerm2, when the iTerm2 driver is used: one macOS consent so the handoff can open the successor's window"
+}
 
 verify_handoff() {
   local bin succ out rc p
