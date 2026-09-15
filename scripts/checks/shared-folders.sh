@@ -221,3 +221,12 @@ printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$SF_T/curl.log" > 
   . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" >/dev/null 2>&1; . "$CHECK_ROOT/modules/shared_folders.sh"
   install_shared_folders >/dev/null 2>&1; echo "$?" > "$SF_T/nofetch.rc" )
 same "install-never-fetches-its-own-code" "$(cat "$SF_T/nofetch.rc")|$(cat "$SF_T/curl.log")" "1|"
+
+# ── clearance_ — "<class> <clause>" lines, the views disclosed as copies outside DLP ──────────────
+out="$(env HOME="$SF_T/home" BOOTSTRAP_STATE_DIR="$SF_T/state" BOOTSTRAP_LIB="$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" /bin/bash -c \
+  '. "$BOOTSTRAP_LIB"; . "$1"; clearance_shared_folders; printf "|"; cost_shared_folders' x "$CHECK_ROOT/modules/shared_folders.sh" 2>/dev/null)"
+bad="$(printf '%s\n' "${out%%|*}" | awk 'NF && !($1 ~ /^(data|background|trust|permission|software|agent)$/ && NF >= 4) { print "[" $0 "]" }')"
+case "$out" in
+  "data "*".views/"*"DLP, retention and eDiscovery"*"|"*COPIES*"DLP, retention and eDiscovery"*) [ -z "$bad" ] && pass "shared-folders-clearance" || fail "shared-folders-clearance" "$bad" ;;
+  *) fail "shared-folders-clearance" "$out" ;;
+esac

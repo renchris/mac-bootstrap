@@ -10,8 +10,15 @@
 #   $BOOTSTRAP_STATE_DIR/bin/microsoft365-archive a wrapper that runs the pinned node on archive.js
 #                                                with MICROSOFT365_ARCHIVE_CONFIG pointing at config
 #   $HOME/Library/LaunchAgents/com.mac-bootstrap.microsoft365-archive.plist
-#                                                [wrapper, run] at minute 7 of every hour, and at load
+#                                                [wrapper, run] at minute 7 of every hour, and at load;
+#                                                with BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off, no
+#                                                trigger at all (run it with launchctl kickstart)
 #   the archive folder itself                    BOOTSTRAP_ARCHIVE_DIR, default $HOME/Microsoft365Archive
+#
+# THE ARCHIVE IS A COPY. Transcripts, chats, notes, AI notes and Copilot files land here as markdown,
+# where the tenant's DLP, retention and eDiscovery no longer reach them. cost_ and clearance_ say so
+# first, and uninstall_ keeps the folder (it is the person's data) but names it and the command that
+# removes it.
 #
 # HOW IT TALKS TO MICROSOFT: it does not, directly. The engine starts a Softeria server over stdio,
 # exactly as an agent does, and asks it only for Graph GETs — the engine refuses any other tool, any
@@ -70,6 +77,19 @@ microsoft365_archive_agent_config()  { printf '%s/.claude.json' "$HOME"; }
 microsoft365_archive_chosen_root_file()    { printf '%s/chosen-archive-dir' "$(microsoft365_archive_dir)"; }
 microsoft365_archive_chosen_account_file() { printf '%s/chosen-account' "$(microsoft365_archive_dir)"; }
 microsoft365_archive_chosen_server_file()  { printf '%s/chosen-server' "$(microsoft365_archive_dir)"; }
+microsoft365_archive_chosen_schedule_file() { printf '%s/chosen-schedule' "$(microsoft365_archive_dir)"; }
+
+# The schedule: `hourly` (the default — minute 7 of every hour, and at login) or `off`, where the
+# LaunchAgent is loaded with no trigger at all and runs only when the person starts it
+# (BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off). Any other value is hourly.
+microsoft365_archive_schedule() {
+  local v f
+  v="${BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE:-}"
+  if [ -z "$v" ]; then f="$(microsoft365_archive_chosen_schedule_file)"; [ -s "$f" ] && v="$(head -n 1 "$f")"; fi
+  case "$v" in [Oo][Ff][Ff]) printf 'off' ;; *) printf 'hourly' ;; esac
+}
+# The one command that runs the job once, through launchd, so it gets the plist's own environment.
+microsoft365_archive_run_once() { printf 'launchctl kickstart "gui/$(id -u)/%s"' "$MICROSOFT365_ARCHIVE_LABEL"; }
 
 microsoft365_archive_root() {
   local f
@@ -188,6 +208,20 @@ microsoft365_archive_node_beside() {
 # Paths are shown as $HOME/… literally: executable as typed, and no username in the output.
 microsoft365_archive_short_path() {
   case "$1" in "$HOME"/*) printf '$HOME/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac
+}
+
+# microsoft365_archive_kept_line <root> — one sentence naming an archive folder that still holds
+# anything, and the one command that removes it; nothing when there is nothing there. Neither
+# uninstall_ nor anything else here deletes it: it is the person's data, and it may hold meetings
+# Microsoft no longer keeps. The command is left out for a path that would break out of its quotes.
+microsoft365_archive_kept_line() {
+  local r="$1" s
+  [ -d "$r" ] && [ -n "$(ls -A "$r" 2>/dev/null)" ] || return 0
+  s="$(microsoft365_archive_short_path "$r")"
+  printf 'the meeting archive at %s was kept — local markdown copies of your meetings and Copilot files, outside your tenant'\''s DLP, retention and eDiscovery' "$s"
+  case "$r" in *'"'*|*'`'*|*'\'*) printf '; delete that folder yourself to remove them.' ;;
+    *) case "${r#"$HOME"}" in *'$'*) printf '; delete that folder yourself to remove them.' ;;
+         *) printf '; to remove them too, run: rm -rf "%s"' "$s" ;; esac ;; esac
 }
 
 # microsoft365_archive_rerun <module> [<VAR=value …>] — the command a person re-runs to finish a module,
@@ -608,11 +642,14 @@ microsoft365_archive_plist_build() {
     && plutil -insert Label -string "$MICROSOFT365_ARCHIVE_LABEL" "$p" >/dev/null 2>&1 \
     && plutil -insert ProgramArguments -array "$p" >/dev/null 2>&1 \
     && plutil -insert ProgramArguments -string "$(microsoft365_archive_wrapper)" -append "$p" >/dev/null 2>&1 \
-    && plutil -insert ProgramArguments -string run -append "$p" >/dev/null 2>&1 \
-    && plutil -insert StartCalendarInterval -dictionary "$p" >/dev/null 2>&1 \
-    && plutil -insert StartCalendarInterval.Minute -integer "$MICROSOFT365_ARCHIVE_MINUTE" "$p" >/dev/null 2>&1 \
-    && plutil -insert RunAtLoad -bool true "$p" >/dev/null 2>&1 \
-    && plutil -insert StandardOutPath -string "$log" "$p" >/dev/null 2>&1 \
+    && plutil -insert ProgramArguments -string run -append "$p" >/dev/null 2>&1 || return 1
+  # On demand: no trigger key at all, so launchd holds the job and never starts it by itself.
+  if [ "$(microsoft365_archive_schedule)" = hourly ]; then
+    plutil -insert StartCalendarInterval -dictionary "$p" >/dev/null 2>&1 \
+      && plutil -insert StartCalendarInterval.Minute -integer "$MICROSOFT365_ARCHIVE_MINUTE" "$p" >/dev/null 2>&1 \
+      && plutil -insert RunAtLoad -bool true "$p" >/dev/null 2>&1 || return 1
+  fi
+  plutil -insert StandardOutPath -string "$log" "$p" >/dev/null 2>&1 \
     && plutil -insert StandardErrorPath -string "$log" "$p" >/dev/null 2>&1 || return 1
   [ -n "$ca" ] || return 0
   plutil -insert EnvironmentVariables -dictionary "$p" >/dev/null 2>&1 \
@@ -630,7 +667,7 @@ microsoft365_archive_plist_get() {
 # microsoft365_archive_plist_ok — parses, and every field reads back as the job needs it. The array
 # length is read too: an extra argument would change what launchd runs.
 microsoft365_archive_plist_ok() {
-  local p ca
+  local p ca k
   p="$(microsoft365_archive_plist)"
   [ -f "$p" ] || return 1
   plutil -lint "$p" >/dev/null 2>&1 || return 1
@@ -638,8 +675,15 @@ microsoft365_archive_plist_ok() {
   [ "$(microsoft365_archive_plist_get ProgramArguments)" = 2 ] || return 1
   [ "$(microsoft365_archive_plist_get ProgramArguments.0)" = "$(microsoft365_archive_wrapper)" ] || return 1
   [ "$(microsoft365_archive_plist_get ProgramArguments.1)" = run ] || return 1
-  [ "$(microsoft365_archive_plist_get StartCalendarInterval.Minute)" = "$MICROSOFT365_ARCHIVE_MINUTE" ] || return 1
-  [ "$(microsoft365_archive_plist_get RunAtLoad)" = true ] || return 1
+  # The triggers are exactly the schedule in force: hourly and at load, or none at all.
+  if [ "$(microsoft365_archive_schedule)" = hourly ]; then
+    [ "$(microsoft365_archive_plist_get StartCalendarInterval.Minute)" = "$MICROSOFT365_ARCHIVE_MINUTE" ] || return 1
+    [ "$(microsoft365_archive_plist_get RunAtLoad)" = true ] || return 1
+  else
+    for k in StartCalendarInterval StartInterval RunAtLoad KeepAlive WatchPaths QueueDirectories StartOnMount; do
+      plutil -type "$k" "$p" >/dev/null 2>&1 && return 1
+    done
+  fi
   [ "$(microsoft365_archive_plist_get StandardOutPath)" = "$(microsoft365_archive_log)" ] || return 1
   [ "$(microsoft365_archive_plist_get StandardErrorPath)" = "$(microsoft365_archive_log)" ] || return 1
   # The environment is exactly the CA file in force, or absent: nothing else may ride into the job.
@@ -807,8 +851,35 @@ microsoft365_archive_gate_reason() {
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_microsoft365_archive()    { printf '%s' 'every Teams meeting you attend, and your Copilot upload folder, kept as markdown in one local folder and refreshed hourly; read-only against Microsoft'; }
-cost_microsoft365_archive()    { printf '%s' 'under 1 MB plus your archive. Needs the microsoft365 sign-in; transcripts, AI notes and Copilot history each need a Microsoft grant your tenant may not have given, and the archive records which.'; }
+what_microsoft365_archive() {
+  if [ "$(microsoft365_archive_schedule)" = hourly ]; then
+    printf '%s' 'every Teams meeting you attend, and your Copilot upload folder, kept as markdown in one local folder and refreshed hourly; read-only against Microsoft'
+  else
+    printf 'every Teams meeting you attend, and your Copilot upload folder, kept as markdown in one local folder, refreshed only when you run: %s; read-only against Microsoft' "$(microsoft365_archive_run_once)"
+  fi
+}
+# What IT would ask first is said first: these are COPIES, on this Mac, that the tenant's controls no
+# longer see, and something runs them in the background.
+cost_microsoft365_archive() {
+  printf 'keeps local markdown COPIES of your meeting transcripts, chats, notes, AI notes and Copilot files in %s, outside your tenant'\''s DLP, retention and eDiscovery; uninstall leaves them. ' \
+    "$(microsoft365_archive_short_path "$(microsoft365_archive_root)")"
+  if [ "$(microsoft365_archive_schedule)" = hourly ]; then
+    printf 'A LaunchAgent (%s) runs it hourly and at every login (BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off: only when you run it). ' "$MICROSOFT365_ARCHIVE_LABEL"
+  else
+    printf 'A LaunchAgent (%s) is loaded with no schedule and runs only when you start it. ' "$MICROSOFT365_ARCHIVE_LABEL"
+  fi
+  printf '%s' 'Under 1 MB plus the archive. Needs the microsoft365 sign-in; transcripts, AI notes and Copilot history each need a Microsoft grant your tenant may not have given, and the archive records which.'
+}
+clearance_microsoft365_archive() {
+  printf 'data markdown copies of your Teams meeting transcripts, meeting chats, notes, AI notes and Copilot files in %s, outside the tenant'\''s DLP, retention and eDiscovery, which uninstall does not delete\n' \
+    "$(microsoft365_archive_short_path "$(microsoft365_archive_root)")"
+  if [ "$(microsoft365_archive_schedule)" = hourly ]; then
+    printf 'background an hourly LaunchAgent (%s) that also starts at every login\n' "$MICROSOFT365_ARCHIVE_LABEL"
+  else
+    printf 'background a LaunchAgent (%s) loaded into launchd with no schedule, which runs only when you start it\n' "$MICROSOFT365_ARCHIVE_LABEL"
+  fi
+  printf '%s\n' 'software this bootstrap'\''s own archive engine (node scripts), which the job runs together with Softeria'\''s ms365 server outside any agent, so no agent hook sees its Graph reads'
+}
 profile_microsoft365_archive() { printf '%s' 'full'; }
 needs_microsoft365_archive()   { printf '%s' 'microsoft365'; }
 # One host per line: <host> <install|run> <purpose>. The engine's own downloads go to whatever
@@ -871,15 +942,22 @@ gate_microsoft365_archive() {
 }
 
 note_microsoft365_archive() {
-  local r
+  local r kept=""
   microsoft365_archive_pick >/dev/null 2>&1
   microsoft365_archive_tls_load
   r="$(microsoft365_archive_gate_reason)"
+  # With no LaunchAgent in place (never installed, or uninstalled) an archive folder that still holds
+  # copies is named, whatever else the line says: nothing here ever deletes it.
+  [ -f "$(microsoft365_archive_plist)" ] || kept="$(microsoft365_archive_kept_line "$(microsoft365_archive_root)")"
   # The account gate is reported before the sandboxed-HOME one, but when both hold the line says so,
   # or the reader signs in, re-runs, and only then learns the job still will not load from here.
   case "$r" in account-*) microsoft365_archive_home_ok || {
-    printf '%s Even then, this run has a sandboxed HOME, so the hourly job would not be loaded into your real launchd domain from it.' "$(microsoft365_archive_note_text "$r")"; return 0; } ;; esac
+    printf '%s Even then, this run has a sandboxed HOME, so the hourly job would not be loaded into your real launchd domain from it.' "$(microsoft365_archive_note_text "$r")"
+    [ -n "$kept" ] && printf ' Also, %s.' "$kept"
+    return 0; } ;; esac
   microsoft365_archive_note_text "$r"
+  [ -n "$kept" ] && printf ' Also, %s.' "$kept"
+  return 0
 }
 
 microsoft365_archive_note_text() {
@@ -904,7 +982,7 @@ microsoft365_archive_note_text() {
     label-taken)   printf 'launchd already runs a job named %s from another plist (%s), and replacing it is your call, not mine.' \
                      "$MICROSOFT365_ARCHIVE_LABEL" "$(microsoft365_archive_short_path "$(microsoft365_archive_loaded_path)")" ;;
     background-off) printf 'macOS has the hourly archive job (%s) switched off in System Settings › General › Login Items, so launchd will not run it; turn on "Allow in the Background" for it, then run this again. If the switch is greyed out, your organization manages it: ask IT.' "$MICROSOFT365_ARCHIVE_LABEL" ;;
-    *)             printf 'the meeting archive engine, its wrapper, its hourly LaunchAgent and the archive folder are not all in place yet.' ;;
+    *)             printf 'the meeting archive engine, its wrapper, its LaunchAgent and the archive folder are not all in place yet.' ;;
   esac
 }
 
@@ -932,7 +1010,8 @@ gesture_microsoft365_archive() {
     foreign-home)  microsoft365_archive_rerun microsoft365_archive ;;       # from your own account, with no HOME override
     label-taken)   printf 'launchctl bootout %s/%s' "$(microsoft365_archive_domain)" "$MICROSOFT365_ARCHIVE_LABEL" ;;
     background-off) printf 'open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"' ;;
-    *)             : ;;
+    *)             # On demand, the one thing left to do is run it.
+                   [ "$(microsoft365_archive_schedule)" = off ] && [ -f "$(microsoft365_archive_plist)" ] && microsoft365_archive_run_once ;;
   esac
 }
 
@@ -961,6 +1040,10 @@ install_microsoft365_archive() {
   # Reached only once the named server has RUN as one (the pick above), so a mistyped path is never kept.
   if [ -n "${BOOTSTRAP_MICROSOFT_SERVER:-}" ]; then
     printf '%s\n' "$BOOTSTRAP_MICROSOFT_SERVER" > "$tmp"; microsoft365_archive_land "$tmp" "$(microsoft365_archive_chosen_server_file)" 644
+  fi
+  if [ -n "${BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE:-}" ]; then
+    microsoft365_archive_schedule > "$tmp"; printf '\n' >> "$tmp"
+    microsoft365_archive_land "$tmp" "$(microsoft365_archive_chosen_schedule_file)" 644
   fi
   rm -f "$tmp" 2>/dev/null
 
@@ -1067,7 +1150,8 @@ EOF
 # It NEVER deletes the archive folder: that is the user's data — meeting transcripts and notes that
 # may no longer exist at Microsoft — and removing a tool must never remove what the tool collected.
 uninstall_microsoft365_archive() {
-  local rc=0 i dir f
+  local rc=0 i dir f root
+  root="$(microsoft365_archive_root)"                     # read before chosen-archive-dir goes
   if microsoft365_archive_loaded_ours; then
     /bin/launchctl bootout "$(microsoft365_archive_domain)/$MICROSOFT365_ARCHIVE_LABEL" >/dev/null 2>&1
     i=0
@@ -1081,7 +1165,7 @@ uninstall_microsoft365_archive() {
     # not). The folder cannot go without the archive going with it, so only this module's own files
     # are removed, by name, and the folder is left holding the archive.
     for f in $MICROSOFT365_ARCHIVE_ENGINE_FILES package.json MANIFEST markdown-convert.sh config chosen-account \
-             chosen-archive-dir chosen-server launchd.log loaded-plist.sha256; do
+             chosen-archive-dir chosen-server chosen-schedule launchd.log loaded-plist.sha256; do
       rm -f "$dir/$f" 2>/dev/null
     done
     rm -rf "$dir/fixtures" "$dir/.fetched" 2>/dev/null
@@ -1093,5 +1177,8 @@ uninstall_microsoft365_archive() {
   fi
   [ -e "$(microsoft365_archive_plist)" ] && rc=1
   [ -e "$(microsoft365_archive_wrapper)" ] && rc=1
+  # The copies stay, and the person is told where, and how to remove them too.
+  f="$(microsoft365_archive_kept_line "$root")"
+  [ -n "$f" ] && bootstrap_warn "microsoft365_archive: $f"
   return "$rc"
 }

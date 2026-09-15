@@ -402,3 +402,61 @@ case "$ms_out" in *"Allow in the Background"*'|open "x-apple.systempreferences:c
   *) fail "microsoft-archive-background-off-needs-human" "$ms_out" ;; esac
 same "microsoft-archive-rerun-entry" "$(ms_run "$CHECK_HOME" 'microsoft365_archive_rerun microsoft365' BOOTSTRAP_ENTRY="$CHECK_HOME/x/bootstrap.sh")" 'bash "$HOME/x/bootstrap.sh" --only microsoft365'
 same "microsoft-archive-rerun-curl-pipe" "$(ms_run "$CHECK_HOME" 'microsoft365_archive_rerun microsoft365' BOOTSTRAP_ENTRY= BOOTSTRAP_PIN=abc BOOTSTRAP_RAW=https://raw.githubusercontent.com/o/r/abc)" ""
+
+# ── 8. DISCLOSURE — the copies, the background job, and what IT governs ──────────────────────
+# clearance_ lines are "<class> <clause>", the class from CONTRACT's fixed set. The validator's own
+# negative control comes first, so a pass below cannot be a validator that never says no.
+ms_clearance_bad() {                             # prints each line that is not a class and a clause
+  printf '%s\n' "$1" | awk 'NF && !($1 ~ /^(data|background|trust|permission|software|agent)$/ && NF >= 4) { print "[" $0 "]" }'
+}
+same "microsoft-clearance-validator-says-no" "$(ms_clearance_bad "$(printf 'secret a thing it does\ndata x\nagent an MCP server here')")" "$(printf '[secret a thing it does]\n[data x]')"
+for ms_m in microsoft365 microsoft365_archive; do
+  ms_out="$(ms_run "$(fresh_home "clearance-$ms_m")" "clearance_$ms_m")"
+  ms_bad="$(ms_clearance_bad "$ms_out")"
+  ms_cls="$(printf '%s\n' "$ms_out" | awk 'NF { print $1 }' | sort -u | tr '\n' ' ')"
+  case "$ms_m:$ms_cls" in
+    microsoft365:*agent*software*|microsoft365_archive:*background*data*) [ -z "$ms_bad" ] && pass "microsoft-clearance-$ms_m" "$ms_cls" || fail "microsoft-clearance-$ms_m" "$ms_bad" ;;
+    *) fail "microsoft-clearance-$ms_m" "classes: $ms_cls $ms_bad" ;;
+  esac
+done
+# cost_ says COPIES, outside which controls, and that something runs them at login.
+ms_out="$(ms_run "$(fresh_home cost-archive)" cost_microsoft365_archive)"
+case "$ms_out" in *COPIES*"DLP, retention and eDiscovery"*"LaunchAgent"*"hourly"*"login"*) pass "microsoft-archive-cost-discloses" ;;
+  *) fail "microsoft-archive-cost-discloses" "$ms_out" ;; esac
+
+# On demand: the plist carries no trigger and reads back as correct only under the schedule it was
+# built for — each mode refuses the other's plist (the negative controls), and the choice survives
+# into a cold read with no environment.
+h="$(fresh_home archive-on-demand)"
+MS_PLIST_BUILD='p="$(microsoft365_archive_plist)"; mkdir -p "$(dirname "$p")"; microsoft365_archive_plist_build "$p"'
+MS_PLIST_READ='p="$(microsoft365_archive_plist)"; microsoft365_archive_plist_ok && printf ok || printf refused; for k in RunAtLoad StartCalendarInterval; do plutil -type "$k" "$p" >/dev/null 2>&1 && printf " %s" "$k"; done'
+ms_run "$h" "$MS_PLIST_BUILD" BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off
+same "microsoft-archive-on-demand-plist" "$(ms_run "$h" "$MS_PLIST_READ" BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off)" ok
+same "microsoft-archive-on-demand-refused-as-hourly" "$(ms_run "$h" "$MS_PLIST_READ")" refused
+ms_run "$h" "$MS_PLIST_BUILD"
+same "microsoft-archive-hourly-plist" "$(ms_run "$h" "$MS_PLIST_READ")" "ok RunAtLoad StartCalendarInterval"
+same "microsoft-archive-hourly-refused-on-demand" "$(ms_run "$h" "$MS_PLIST_READ" BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off)" "refused RunAtLoad StartCalendarInterval"
+mkdir -p "$h/.mac-bootstrap/microsoft365-archive"; printf 'off\n' > "$h/.mac-bootstrap/microsoft365-archive/chosen-schedule"
+same "microsoft-archive-on-demand-remembered" "$(ms_run "$h" microsoft365_archive_schedule)" off
+# …and the one thing left to do on demand is run it: the gesture, and the plan's line, name the command.
+ms_run "$h" "$MS_PLIST_BUILD"
+MS_KICK='launchctl kickstart "gui/$(id -u)/com.mac-bootstrap.microsoft365-archive"'
+same "microsoft-archive-on-demand-gesture" "$(ms_run "$h" 'microsoft365_archive_gate_reason() { :; }; gesture_microsoft365_archive')" "$MS_KICK"
+case "$(ms_run "$h" what_microsoft365_archive)" in *"$MS_KICK"*) pass "microsoft-archive-on-demand-what" ;; *) fail "microsoft-archive-on-demand-what" "$(ms_run "$h" what_microsoft365_archive)" ;; esac
+rm -f "$h/.mac-bootstrap/microsoft365-archive/chosen-schedule"
+same "microsoft-archive-hourly-no-gesture" "$(ms_run "$h" 'microsoft365_archive_gate_reason() { :; }; gesture_microsoft365_archive')" ""
+
+# Uninstall never deletes the copies — it names them and the command that removes them, and so does
+# note_ while they remain. The control: no archive folder, no such sentence.
+h="$(fresh_home archive-uninstall)"
+mkdir -p "$h/Microsoft365Archive/meetings"; printf 'kept\n' > "$h/Microsoft365Archive/meetings/planted.md"
+ms_out="$(env HOME="$h" BOOTSTRAP_STATE_DIR="$h/.mac-bootstrap" BOOTSTRAP_LIB="$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" /bin/bash -c \
+  '. "$BOOTSTRAP_LIB"; . "$1"; uninstall_microsoft365_archive' x "$CHECK_ROOT/modules/microsoft365_archive.sh" 2>&1 >/dev/null)"
+if [ "$(cat "$h/Microsoft365Archive/meetings/planted.md" 2>/dev/null)" = kept ]; then
+  case "$ms_out" in *'$HOME/Microsoft365Archive'*'rm -rf "$HOME/Microsoft365Archive"'*) pass "microsoft-archive-uninstall-keeps-and-names" ;;
+    *) fail "microsoft-archive-uninstall-keeps-and-names" "$ms_out" ;; esac
+else fail "microsoft-archive-uninstall-keeps-and-names" "the planted file is gone"; fi
+case "$(ms_run "$h" note_microsoft365_archive)" in *'rm -rf "$HOME/Microsoft365Archive"'*) pass "microsoft-archive-note-names-kept-copies" ;;
+  *) fail "microsoft-archive-note-names-kept-copies" "$(ms_run "$h" note_microsoft365_archive)" ;; esac
+rm -rf "$h/Microsoft365Archive"
+case "$(ms_run "$h" note_microsoft365_archive)" in *"was kept"*) fail "microsoft-archive-note-kept-control" ;; *) pass "microsoft-archive-note-kept-control" ;; esac

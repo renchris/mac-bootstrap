@@ -366,7 +366,13 @@ shared_folders_views_ours() {
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
 what_shared_folders()    { printf '%s' 'a shared OneDrive or SharePoint folder reachable from any repo as a plain path, through a link into the OneDrive app'\''s own synced copy, with read-only markdown views beside it; the link re-finds its folder when OneDrive renames its root'; }
-cost_shared_folders()    { printf '%s' 'two small scripts. Needs the OneDrive app signed in and each folder added once with Add shortcut to My files (or Sync on a client'\''s site); Office and PDF views need pandoc or markitdown.'; }
+cost_shared_folders()    { printf '%s' 'two small scripts. Each folder'\''s .views/ beside its link are markdown COPIES of the shared documents, on this Mac and outside the tenant'\''s DLP, retention and eDiscovery (a clone'\''s local exclude keeps them out of git). Needs the OneDrive app signed in and each folder added once with Add shortcut to My files (or Sync on a client'\''s site); Office and PDF views need pandoc or markitdown.'; }
+# What corporate IT usually governs here, one class per line (CONTRACT "Catalog metadata").
+clearance_shared_folders() { cat <<'E'
+data markdown copies of each shared OneDrive or SharePoint folder's documents, in <link>.views/ beside its link, outside the tenant's DLP, retention and eDiscovery; each clone's local git exclude keeps them out of git
+software two scripts of this bootstrap's own (the shared-folder CLI and its markdown converter), which run pandoc or markitdown when this Mac has them
+E
+}
 profile_shared_folders() { printf '%s' 'full'; }
 
 # egress_ — declared, and empty: nothing this module installs or runs reaches a network. The OneDrive

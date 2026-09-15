@@ -713,6 +713,14 @@ what_microsoft365() {
 }
 cost_microsoft365()    { printf '%s' "~85 MB, plus ~200 MB for node $MICROSOFT365_NODE_VERSION from nodejs.org when this Mac has no node $MICROSOFT365_NODE_FLOOR or later (no admin needed). One Microsoft sign-in in your browser; a work tenant usually needs IT to approve the app."; }
 profile_microsoft365() { printf '%s' 'standard'; }
+# What corporate IT usually governs here, one class per line (CONTRACT "Catalog metadata").
+clearance_microsoft365() { cat <<E
+agent an MCP server (ms365, Softeria's $MICROSOFT365_PACKAGE) that Claude Code and Copilot CLI start on their own; whatever it returns — your mail, calendar, contacts and files — enters the agent's context and goes to that agent's model provider
+agent a hook (guard-mail-send.sh) that both agents run before every ms365 tool call and on every prompt, to hold back sends
+software npm package $MICROSOFT365_PACKAGE@$MICROSOFT365_SERVER_VERSION and about 210 dependencies from the npm registry, plus node $MICROSOFT365_NODE_VERSION from nodejs.org when this Mac has no node $MICROSOFT365_NODE_FLOOR or later — none of it distributed by IT
+data the agent can save mail attachments, meeting recordings and OneDrive files to this Mac's disk (the server's download-bytes-to-file tool), outside the tenant's DLP, retention and eDiscovery
+E
+}
 # One host per line: <host> <install|run> <purpose>. The TLS check (bootstrap_node_ca_env) makes a
 # request to each Microsoft host at install and verify, and to npm's registry until the package is in.
 egress_microsoft365() { cat <<'E'
