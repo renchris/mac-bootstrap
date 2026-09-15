@@ -5,14 +5,22 @@
 #
 # END STATE, and every clause of it is read back through a path that did not write it:
 #
-#   1. ollama is installed and its server answers at http://localhost:11434
-#   2. a DERIVED model `voiceink-rewrite` exists, built FROM the tier's base with
-#      num_ctx 4096 / temperature 0.2 / top_p 0.9 / top_k 20 / repeat_penalty 1.0 baked in
-#   3. THAT EXACT MODEL (matched by digest, not by name) has passed assets/model-gate.sh
-#   4. VoiceInk's EnhancementTimeoutSeconds is 15
-#   5. VoiceInk's ollamaSelectedModel names the derived model — which ONLY THE GUI CAN SET,
-#      and is therefore this module's evidence that the human did the one step no script can
-#      do. rewrite_model never writes that key; writing it would destroy the only signal we have.
+#   1. ollama is installed and its server answers at http://localhost:11434 — a LOOPBACK address.
+#      Any other base URL is refused before a single request is made to it.
+#   2. that server's OWN /api/status says cloud.disabled == true. The lever is
+#      $HOME/.ollama/server.json {"disable_ollama_cloud": true} (plus OLLAMA_NO_CLOUD=1 on a server
+#      this module starts), but the FILE is never the evidence: one with a trailing comma leaves
+#      cloud ON while plutil still parses it (measured), and a running server reads it only at
+#      start (measured: 8 s after the write, a live server still said disabled:false).
+#   3. a DERIVED model `voiceink-rewrite` exists, built FROM the tier's base with
+#      num_ctx 4096 / temperature 0.2 / top_p 0.9 / top_k 20 / repeat_penalty 1.0 baked in, and
+#      NOT backed by a remote host. A cloud base (`*-cloud`, `:cloud`, or a model whose /api/tags
+#      entry carries remote_host) is refused by --model and --bench before any request.
+#   4. THAT EXACT MODEL (matched by digest, not by name) has passed assets/model-gate.sh
+#   5. VoiceInk's EnhancementTimeoutSeconds is 15
+#   6. EVERY enabled VoiceInk mode with AI enhancement on names provider Ollama AND model
+#      voiceink-rewrite, and VoiceInk's Ollama URL is loopback. Only the GUI sets a mode, so this
+#      is also the evidence that the human did the one step no script does.
 #
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # WHY A DERIVED MODEL, AND WHY THE GUI STEP IS STRUCTURAL — read before changing anything here
@@ -24,16 +32,30 @@
 # ollama drops it. The Modelfile is the only lever. The full measurement, both arms of the A/B and
 # the refutation of the "24 GB" story are in assets/voiceink-rewrite.Modelfile.
 #
-# THE GUI STEP (this is this module's whole point). VoiceInk resolves its AI provider PER MODE:
-# ModeRuntimeConfiguration reads mode?.selectedAIProvider and falls back to `resolvedProvider`,
-# which returns `aiService.connectedProviders.first` — and connectedProviders filters
-# AIProvider.allCases IN DECLARATION ORDER, where gemini is 3rd and ollama is far down it. So ANY
-# surviving cloud key silently wins the fallback and the local model is never called. Worse still,
-# setting the mode is not sufficient either: ModeRuntimeConfiguration honours an explicit per-mode
-# selectedAIProvider ONLY IF connectedProviders already contains it.
+# THE GUI STEP (this is this module's whole point). VoiceInk resolves its AI provider PER MODE, and
+# the source this repo builds (upstream Beingpax/VoiceInk v2.13, commit 68b871e7) does it in
+# ModeRuntimeConfiguration.swift:204-216:
+#   - a mode that NAMES a provider gets that provider if it is connected, and NOTHING otherwise —
+#     no enhancement, no egress. A mode that names Gemini therefore calls Gemini, whatever else runs.
+#   - a mode whose provider is nil gets connectedProviders.first, and connectedProviders filters
+#     AIProvider.allCases IN DECLARATION ORDER (AIService.swift:245-264): seven cloud providers
+#     come before Ollama, so any surviving cloud key wins. The migration also re-seeds a nil
+#     provider from the global selectedAIProvider at every launch (ModeDataMigration.swift:36-46).
+#   - the model is the mode's selectedAIModel if /api/tags lists it, else the FIRST listed model.
+# So the only evidence that the local model runs is per mode: provider Ollama, model
+# voiceink-rewrite, on every enabled mode with enhancement on — any enabled mode can become the
+# effective one through its hotkey or an app trigger (ModeConfig.swift:391-429). The global
+# ollamaSelectedModel this module used to read proves nothing: the runtime reaches it only when
+# Ollama's model list is empty (AIService.swift:87). Measured on the development Mac: five of six
+# modes had enhancement on with provider Gemini while that key named the local model.
 #
-#   *** THE CLOUD-KEY FALLBACK IS WHY THE HUMAN GESTURE IS REQUIRED — and a module that reported
-#   *** SATISFIED without evidence of it would be lying about which provider actually runs.
+# 🚨 The fallback rule this block used to state — "an explicit provider is honoured only if it is
+# connected, otherwise connectedProviders.first" — is the FORK's (renchris/voiceink-opensource-build
+# main-2.0, ModeRuntimeConfiguration.swift:256-268), not v2.13's. On the fork a mode pinned to Ollama
+# silently reroutes to a cloud provider whenever the Ollama server is down; on v2.13 it does not.
+#
+#   *** WHICH PROVIDER A MODE NAMES IS WHY THE HUMAN GESTURE IS REQUIRED — and a module that reported
+#   *** SATISFIED without reading it would be lying about where the dictated text goes.
 #
 # 🚨 CORRECTED 2026-09-13. This block used to say "NO `defaults write` CAN EVER SELECT OLLAMA; the
 # Connect click is STRUCTURALLY REQUIRED", on the reasoning that ollama joins connectedProviders
@@ -46,20 +68,24 @@
 # load-bearing in a way that would have made a future reader trust the wrong mechanism.
 #
 # So rewrite_model does every reversible thing itself, and then REFUSES to call itself done until the one
-# irreducibly-human gesture has left its mark in ollamaSelectedModel.
+# irreducibly-human gesture has left its mark in the modes.
 #
-# MEASURED HERE, NOT IN THE INHERITED RESEARCH (it says the keys live in the Keychain): the
-# open-source build compiles with LOCAL_BUILD (LocalBuild.xcconfig:15), and under that flag
-# KeychainService stores every API key in UserDefaults as `LocalKeychain_<provider>APIKey`
-# (KeychainService.swift:14-17,36-38). So on the Mac this repo bootstraps, a surviving cloud key
-# is a DEFAULTS key, and rewrite_model can detect the trap without a Keychain dialog. It probes with
-# `defaults read-type`, which prints a type and never a value — a live key was found that way on
-# the development machine, and its bytes never entered a log.
+# WHERE THE KEYS LIVE, corrected. This block used to say a LOCAL_BUILD keeps every API key in
+# UserDefaults as `LocalKeychain_<provider>APIKey`, citing KeychainService.swift:14-17,36-38 — the
+# FORK's lines. At v2.13 a LOCAL_BUILD keeps them in the login keychain under the service
+# com.prakashjoshipax.VoiceInk.Local (KeychainService.swift:27-33,215-231); `LocalKeychain_*` is a
+# legacy fallback that the first read migrates into the keychain and deletes (:160-166,241-246). The
+# probe that followed from the wrong premise checked the defaults keys and a keychain service no build
+# uses, so after one v2.13 launch it answered "no cloud key" while every Gemini mode kept calling
+# Gemini. It is gone.
 #
 # WHAT THIS MODULE WILL NOT DO
 #   - It will not plutil-copy or export the com.prakashjoshipax.VoiceInk domain. That domain
 #     holds live provider API keys. It writes exactly two keys, individually, by name.
-#   - It will not write ollamaSelectedModel (see above), and it will not touch a mode.
+#   - It will not write a mode, or ollamaSelectedModel. A mode is a JSON blob holding the person's
+#     hotkeys, prompts and triggers; the app owns it, and the app is where the provider is picked.
+#   - It will not start an ollama server that can reach ollama.com, or send a request to an ollama
+#     that is not on this Mac.
 #   - It will not install a model it has not just measured. If the gate fails, the derived model
 #     is REMOVED and the module reports FAILED — a certified-bad rewrite engine pastes invented
 #     text into the user's documents, and is strictly worse than no enhancement at all.
@@ -119,30 +145,129 @@ REWRITE_MODEL_TIMEOUT_S="${BOOTSTRAP_REWRITE_MODEL_TIMEOUT_S:-15}"              
 # green: VoiceInk would rewrite the domain on quit, the next verify_ would read the old value
 # back, and the module would return to NEEDS_HUMAN.
 REWRITE_MODEL_APP="${BOOTSTRAP_REWRITE_MODEL_APP_PROCESS:-VoiceInk}"
-REWRITE_MODEL_CURL=/usr/bin/curl
+# The ollama and brew executables, when set: each is then the ONLY candidate, so a test can make
+# a tool absent on a Mac that has it (a path that does not exist) or stand a stub in for it.
+REWRITE_MODEL_OLLAMA_SEAM="${BOOTSTRAP_REWRITE_MODEL_OLLAMA:-}"
+REWRITE_MODEL_BREW_SEAM="${BOOTSTRAP_REWRITE_MODEL_BREW:-}"
+REWRITE_MODEL_CURL="${BOOTSTRAP_REWRITE_MODEL_CURL:-/usr/bin/curl}"     # a seam only so tests can stand in a fake server
 REWRITE_MODEL_DEFAULTS=/usr/bin/defaults
 REWRITE_MODEL_PGREP=/usr/bin/pgrep
 REWRITE_MODEL_SYSCTL=/usr/sbin/sysctl
+REWRITE_MODEL_LAUNCHCTL=/bin/launchctl
+
+# ── the no-admin route: ollama's own signed, notarized CLI tarball, pinned ─────────────────────
+# Homebrew's installer needs an administrator, and its ollama bottle needs a source build of
+# python on Sonoma and on Intel (no bottle for either), so a standard user on a corporate Mac has
+# no Homebrew route at all. The tarball is universal (x86_64 + arm64, measured with lipo), signed
+# with Developer ID team 3MU9H2V9Y9 and the hardened runtime (measured with codesign), and a file
+# curl writes carries no quarantine flag. Its layout is FLAT — `ollama`, `llama-server`, the ggml
+# and mlx libraries side by side at the archive root — and the binary runs through a symlink
+# (measured: it served and found Metal from $(bootstrap_tools_dir)/bin/ollama). Its floor is macOS 14.
+# The sha is the one ollama publishes in the release's sha256sum.txt; the download was re-hashed here.
+# Official install.sh is NOT used: on macOS it moves into /Applications and sudo-links /usr/local/bin.
+REWRITE_MODEL_OLLAMA_VERSION=0.34.0
+REWRITE_MODEL_OLLAMA_TARBALL="https://github.com/ollama/ollama/releases/download/v$REWRITE_MODEL_OLLAMA_VERSION/ollama-darwin.tgz"
+REWRITE_MODEL_OLLAMA_SHA256=dd12b00bcce2d6551178e67ada90d5af9f75bdb54a118b96655250fa3e8ef734
+REWRITE_MODEL_OLLAMA_MACOS_FLOOR=14
+# The user LaunchAgent this module runs the server under whenever it is the one starting it. Its
+# environment carries OLLAMA_NO_CLOUD=1, so this server can never reach ollama.com. The two brew
+# labels are the ones `brew services` uses (sh.brew.* since 2026, homebrew.mxcl.* before).
+REWRITE_MODEL_AGENT_LABEL=com.mac-bootstrap.ollama
+REWRITE_MODEL_SERVER_LABELS="$REWRITE_MODEL_AGENT_LABEL sh.brew.ollama homebrew.mxcl.ollama"
 
 # ── tiny helpers. All absolute-path-first: a PATH lookup inside a bootstrap inherits whatever
 #    the operator's shell happens to be, and `brew` is not on the PATH of a fresh login shell
-#    until the shellenv line lands. ─────────────────────────────────────────────────────────
+#    until the shellenv line lands. bootstrap_find_tool searches the pinned copy first. ────────
 rewrite_model_ollama() {
-  local c
-  for c in /opt/homebrew/bin/ollama /usr/local/bin/ollama; do
-    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  c="$(command -v ollama 2>/dev/null)" || c=""
-  [ -n "$c" ] && { printf '%s' "$c"; return 0; }
-  return 1
+  if [ -n "$REWRITE_MODEL_OLLAMA_SEAM" ]; then
+    [ -x "$REWRITE_MODEL_OLLAMA_SEAM" ] && { printf '%s' "$REWRITE_MODEL_OLLAMA_SEAM"; return 0; }
+    return 1
+  fi
+  bootstrap_find_tool ollama
 }
 rewrite_model_brew() {
-  local c
-  for c in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  c="$(command -v brew 2>/dev/null)" || c=""
-  [ -n "$c" ] && { printf '%s' "$c"; return 0; }
+  if [ -n "$REWRITE_MODEL_BREW_SEAM" ]; then
+    [ -x "$REWRITE_MODEL_BREW_SEAM" ] && { printf '%s' "$REWRITE_MODEL_BREW_SEAM"; return 0; }
+    return 1
+  fi
+  bootstrap_find_tool brew
+}
+
+# rewrite_model_brew_usable — a brew THIS user can install with: its Cellar is writable. On a corporate
+# Mac an administrator usually installed Homebrew, so the prefix is theirs and `brew install` fails
+# for everyone else; BOOTSTRAP_ASSUME_STANDARD_USER=1 stands for exactly that shape.
+rewrite_model_brew_usable() {
+  local b
+  b="$(rewrite_model_brew)" || return 1
+  [ "${BOOTSTRAP_ASSUME_STANDARD_USER:-0}" = 1 ] && return 1
+  [ -w "$(/usr/bin/dirname "$(/usr/bin/dirname "$b")")/Cellar" ]
+}
+
+rewrite_model_macos_major() {
+  local v
+  v="$(/usr/bin/sw_vers -productVersion 2>/dev/null)" || v=""
+  v="${v%%.*}"
+  case "${v:-}" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$v" ;; esac
+}
+
+# rewrite_model_route — how ollama gets onto this Mac, one token, so every verb agrees:
+#   present  an ollama is already on disk (the pinned copy, Homebrew's, or anything on PATH)
+#   brew     Homebrew, which this user can install with
+#   pinned   ollama's own tarball into $(bootstrap_tools_dir) — no Homebrew, no admin
+#   oldmac   the pinned route is the only one, and this macOS is below its floor
+rewrite_model_route() {
+  if rewrite_model_ollama >/dev/null 2>&1; then printf 'present'
+  elif rewrite_model_brew_usable; then printf 'brew'
+  elif [ "$(rewrite_model_macos_major)" -lt "$REWRITE_MODEL_OLLAMA_MACOS_FLOOR" ]; then printf 'oldmac'
+  else printf 'pinned'; fi
+}
+
+# rewrite_model_url_host <url> — the host of a base URL, brackets kept for IPv6.
+rewrite_model_url_host() {
+  local h="${1#*://}"
+  h="${h%%/*}"
+  case "$h" in
+    '['*) h="${h%%]*}]" ;;
+    *:*)  h="${h%:*}" ;;
+  esac
+  printf '%s' "$h"
+}
+rewrite_model_url_port() {
+  local h="${1#*://}"
+  h="${h%%/*}"
+  case "$h" in
+    *\]:*|[!\[]*:*) h="${h##*:}" ;;
+    *) h=11434 ;;
+  esac
+  case "$h" in ''|*[!0-9]*) h=11434 ;; esac
+  printf '%s' "$h"
+}
+# rewrite_model_is_loopback <host> — the only hosts a prompt may go to. 0.0.0.0 is not one: it is a bind
+# address meaning "every interface".
+rewrite_model_is_loopback() {
+  case "$(printf '%s' "${1:-}" | /usr/bin/tr 'A-Z' 'a-z')" in
+    127.*|localhost|::1|'[::1]') return 0 ;;
+  esac
+  return 1
+}
+# rewrite_model_url_ok — the base URL every request here goes to is on this Mac. Every request path
+# below checks it, so a MODEL_GATE_BASE_URL naming another host is refused before a byte is sent —
+# fixture prompts included, which are text the person never agreed to send anywhere.
+rewrite_model_url_ok() {
+  case "$REWRITE_MODEL_URL" in http://*|https://*) : ;; *) return 1 ;; esac
+  rewrite_model_is_loopback "$(rewrite_model_url_host "$REWRITE_MODEL_URL")"
+}
+
+# rewrite_model_cloud_ref <tag> — rc 0 if ollama would send this model reference to ollama.com. ollama's
+# own rule (internal/modelref parseSourceSuffix): the last `:` segment is `cloud` or ends in
+# `-cloud`, any case. Since v0.18.0 such a reference needs no local model at all — the server
+# proxies it straight out — so a name alone is enough to refuse it. A name with no tag that ends in
+# -cloud is refused too: over-refusing a spelling costs a rename, under-refusing costs a transcript.
+# The `:local` suffix forces local and is not refused.
+rewrite_model_cloud_ref() {
+  local s
+  s="$(printf '%s' "${1##*:}" | /usr/bin/tr 'A-Z' 'a-z')"
+  case "$s" in cloud|*-cloud) return 0 ;; esac
   return 1
 }
 
@@ -218,6 +343,7 @@ rewrite_model_thinking_base() {
 # rewrite_model_api_post <path> <body> <outfile> — rc 0 iff curl succeeded AND the reply parses as JSON.
 rewrite_model_api_post() {
   local p="$1" body="$2" out="$3" rc
+  rewrite_model_url_ok || return 1
   "$REWRITE_MODEL_CURL" -sS -m "${BOOTSTRAP_REWRITE_MODEL_HTTP_TIMEOUT:-30}" -H 'Content-Type: application/json' \
     -d "$body" "$REWRITE_MODEL_URL$p" >"$out" 2>/dev/null
   rc=$?
@@ -227,6 +353,7 @@ rewrite_model_api_post() {
 }
 rewrite_model_api_get() {
   local p="$1" out="$2" rc
+  rewrite_model_url_ok || return 1
   "$REWRITE_MODEL_CURL" -sS -m "${BOOTSTRAP_REWRITE_MODEL_HTTP_TIMEOUT:-30}" "$REWRITE_MODEL_URL$p" >"$out" 2>/dev/null
   rc=$?
   [ $rc -eq 0 ] || return 1
@@ -242,7 +369,52 @@ rewrite_model_api_get() {
 # field this module reads out of one is a scalar.
 rewrite_model_json_field() { bootstrap_settings_get "${1:-}" "${2:-}" raw; }
 
-rewrite_model_server_up() { "$REWRITE_MODEL_CURL" -fsS -m 5 "$REWRITE_MODEL_URL/api/version" >/dev/null 2>&1; }
+rewrite_model_server_up() { rewrite_model_url_ok && "$REWRITE_MODEL_CURL" -fsS -m 5 "$REWRITE_MODEL_URL/api/version" >/dev/null 2>&1; }
+
+# rewrite_model_wait_up <seconds> — a first start of a freshly unpacked ollama took ~20 s before it
+# answered (GPU discovery; measured), so the budget is generous.
+rewrite_model_wait_up() {
+  local waited=0
+  while [ "$waited" -lt "${1:-90}" ]; do
+    rewrite_model_server_up && return 0
+    sleep 1
+    waited=$((waited + 1))
+  done
+  rewrite_model_server_up
+}
+
+# rewrite_model_cloud_disabled — the SERVER's own statement of its cloud policy, GET /api/status
+# (ollama >= 0.16.2). This is the evidence, never server.json: see the header, clause 2. An older
+# server has no such route and no cloud switch, so it answers no here — correctly.
+rewrite_model_cloud_disabled() {
+  local f
+  f="$(rewrite_model_state rewrite-model-cache-status.json)"
+  rewrite_model_api_get /api/status "$f" || return 1
+  [ "$(rewrite_model_json_field "$f" cloud.disabled 2>/dev/null)" = true ]
+}
+
+# rewrite_model_remote_model <name> — rc 0 if /api/tags lists this model with a remote_host, i.e. its
+# generations are proxied to another machine. Read from /api/tags, NOT /api/show: with cloud
+# disabled, show on a remote-backed model is a 403, which reads as "not installed" (measured in
+# the research), while tags lists it with remote_host either way. A model that is not listed is
+# not remote — the callers that need it present check that separately.
+rewrite_model_remote_model() {
+  local t n i r
+  t="$(rewrite_model_state rewrite-model-cache-tags.json)"
+  rewrite_model_api_get /api/tags "$t" || return 1
+  i=0
+  while [ "$i" -lt 512 ]; do
+    n="$(rewrite_model_json_field "$t" "models.$i.name")" || break
+    case "$n" in
+      "$1"|"$1:latest")
+        r="$(rewrite_model_json_field "$t" "models.$i.remote_host" 2>/dev/null)" || r=""
+        [ -n "$r" ] && return 0
+        return 1 ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
 
 # rewrite_model_show <model> <outfile> — POST /api/show. rc 1 when the model is not there.
 rewrite_model_show() {
@@ -312,24 +484,219 @@ rewrite_model_preference_exists() { "$REWRITE_MODEL_DEFAULTS" read-type "$REWRIT
 # describing this module.
 rewrite_model_voiceink_running() { "$REWRITE_MODEL_PGREP" -x "$REWRITE_MODEL_APP" >/dev/null 2>&1; }
 
-# rewrite_model_cloud_key_present — is a cloud provider key still saved? If so, it BEATS ollama in
-# VoiceInk's connectedProviders fallback and the local model is never called, so the human must
-# also pin Ollama on the active mode. Probed with `read-type`, which prints a TYPE and never a
-# value; no key material is ever read, logged or printed. Both storage shapes are checked: the
-# LOCAL_BUILD build keeps keys in this defaults domain, a signed build in the Keychain.
-rewrite_model_cloud_key_present() {
-  local k
-  for k in geminiAPIKey openAIAPIKey anthropicAPIKey groqAPIKey cerebrasAPIKey mistralAPIKey \
-           openRouterAPIKey xaiAPIKey; do
-    rewrite_model_preference_exists "LocalKeychain_$k" && return 0
+# rewrite_model_domain_plist — the FILE behind the domain. BOOTSTRAP_REWRITE_MODEL_DOMAIN may be an absolute
+# .plist path, which `defaults` reads and writes directly (measured), so a test never touches the
+# real domain. The app is unsandboxed, so the real file is in ~/Library/Preferences.
+rewrite_model_domain_plist() {
+  case "$REWRITE_MODEL_DOMAIN" in
+    /*.plist) printf '%s' "$REWRITE_MODEL_DOMAIN" ;;
+    /*)       printf '%s.plist' "$REWRITE_MODEL_DOMAIN" ;;
+    *)        printf '%s/Library/Preferences/%s.plist' "$HOME" "$REWRITE_MODEL_DOMAIN" ;;
+  esac
+}
+
+# rewrite_model_modes_pinned — rc 0 iff at least one enabled mode has AI enhancement on, EVERY such mode
+# names provider Ollama and model voiceink-rewrite, and VoiceInk's Ollama URL is loopback. rc 1
+# otherwise, with one line on stdout saying which mode names what (mode names and provider names
+# only — the modes hold no key material). rc 2 when the modes cannot be read at all.
+#
+# The modes are one JSON array stored as DATA under modeConfigurationsV2. `defaults read` truncates
+# data ({length = N, bytes = …}) and `defaults export` would pipe every saved API key, so the one key
+# is extracted from the plist file with plutil and base64-decoded into a temp file that is deleted
+# before return. The file can lag cfprefsd by a save, which errs towards NOT satisfied — the safe side.
+# A missing isEnabled or isAIEnhancementEnabled is read as ON: fail closed.
+rewrite_model_modes_pinned() {
+  local plist b64 tmp i on=0 bad="" name en enh prov model url
+  plist="$(rewrite_model_domain_plist)"
+  [ -f "$plist" ] || { printf 'VoiceInk has no preferences yet, so it has no mode'; return 2; }
+  [ "$(/usr/bin/plutil -type modeConfigurationsV2 "$plist" 2>/dev/null)" = data ] \
+    || { printf 'VoiceInk has no modes saved (modeConfigurationsV2 is absent)'; return 2; }
+  b64="$(/usr/bin/plutil -extract modeConfigurationsV2 raw -o - "$plist" 2>/dev/null)" \
+    || { printf 'VoiceInk modes could not be read'; return 2; }
+  tmp="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/rewrite-model-modes.XXXXXX")" || return 2
+  printf '%s' "$b64" | /usr/bin/base64 -D >"$tmp" 2>/dev/null
+  if ! bootstrap_json_ok "$tmp"; then /bin/rm -f "$tmp"; printf 'VoiceInk modes are not JSON'; return 2; fi
+  i=0
+  while [ "$i" -lt 64 ]; do
+    /usr/bin/plutil -extract "$i" json -o /dev/null "$tmp" >/dev/null 2>&1 || break
+    name="$(bootstrap_settings_get "$tmp" "$i.name" raw 2>/dev/null)" || name="mode $((i + 1))"
+    name="$(printf '%s' "$name" | /usr/bin/tr -d '\n\r')"
+    en="$(bootstrap_settings_get "$tmp" "$i.isEnabled" raw 2>/dev/null)" || en=true
+    enh="$(bootstrap_settings_get "$tmp" "$i.isAIEnhancementEnabled" raw 2>/dev/null)" || enh=true
+    i=$((i + 1))
+    [ "$en" = false ] && continue
+    [ "$enh" = false ] && continue
+    on=$((on + 1))
+    prov="$(bootstrap_settings_get "$tmp" "$((i - 1)).selectedAIProvider" raw 2>/dev/null)" || prov=""
+    model="$(bootstrap_settings_get "$tmp" "$((i - 1)).selectedAIModel" raw 2>/dev/null)" || model=""
+    if [ "$prov" = Ollama ]; then
+      case "$model" in "$REWRITE_MODEL_NAME"|"$REWRITE_MODEL_NAME:latest") continue ;; esac
+    fi
+    bad="$bad${bad:+; }\"$name\" uses ${prov:-no provider (so the first connected one, cloud first)}${model:+ / $model}"
   done
-  if [ -x /usr/bin/security ] && [ -z "${BOOTSTRAP_REWRITE_MODEL_NO_KEYCHAIN_PROBE:-}" ]; then
-    for k in geminiAPIKey openAIAPIKey anthropicAPIKey; do
-      # metadata only — no -w, so no secret is read and no unlock dialog is raised
-      /usr/bin/security find-generic-password -s "$REWRITE_MODEL_DOMAIN" -a "$k" >/dev/null 2>&1 && return 0
-    done
+  /bin/rm -f "$tmp"
+  if [ "$on" -eq 0 ]; then printf 'no enabled VoiceInk mode has AI enhancement on, so the local model is never called'; return 1; fi
+  if [ -n "$bad" ]; then printf '%s' "$bad"; return 1; fi
+  url="$(rewrite_model_preference ollamaBaseURL)" || url=""
+  if [ -n "$url" ] && ! rewrite_model_is_loopback "$(rewrite_model_url_host "$url")"; then
+    printf 'VoiceInk'"'"'s Ollama URL is %s, which is not this Mac' "$url"; return 1
   fi
+  return 0
+}
+
+# ── ollama's cloud switch ─────────────────────────────────────────────────────────────────────
+rewrite_model_server_json() { printf '%s/.ollama/server.json' "$HOME"; }
+
+# rewrite_model_cloud_off_write — {"disable_ollama_cloud": true} into the server's own config, through the
+# one JSON writer. What was there before is recorded ONCE, so uninstall_ can put it back rather than
+# switching off a setting the person made themselves.
+rewrite_model_cloud_off_write() {
+  local f prev v
+  f="$(rewrite_model_server_json)"
+  prev="$(rewrite_model_state rewrite-model-server-json.prev)"
+  if [ ! -f "$prev" ]; then
+    if [ ! -f "$f" ]; then v=no-file
+    else v="$(bootstrap_settings_get "$f" disable_ollama_cloud raw 2>/dev/null)" || v=no-key
+    fi
+    printf '%s\n' "$v" >"$prev" 2>/dev/null || true
+  fi
+  bootstrap_settings_merge "$f" disable_ollama_cloud true
+}
+
+# ── the server this module starts: a user LaunchAgent, never `nohup … &` ──────────────────────
+rewrite_model_agent_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$REWRITE_MODEL_AGENT_LABEL"; }
+rewrite_model_uid() { /usr/bin/id -u 2>/dev/null; }
+rewrite_model_label_loaded() { "$REWRITE_MODEL_LAUNCHCTL" print "gui/$(rewrite_model_uid)/$1" >/dev/null 2>&1; }
+
+# rewrite_model_server_label — the loaded launchd job that runs ollama for this user, or rc 1. A server
+# with a label is one this module can restart (kickstart -k needs no brew and no admin: the job
+# is in this user's own domain); one without — Ollama.app, a hand-run `ollama serve`, a root
+# service — is not, and that is a human step.
+rewrite_model_server_label() {
+  local l
+  for l in $REWRITE_MODEL_SERVER_LABELS; do
+    rewrite_model_label_loaded "$l" && { printf '%s' "$l"; return 0; }
+  done
   return 1
+}
+
+rewrite_model_xml_escape() { printf '%s' "$1" | /usr/bin/sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# rewrite_model_agent_render <ollama> — the LaunchAgent, as text. Bound to 127.0.0.1 on the base URL's port,
+# cloud off in its environment, and the two variables the Homebrew service sets, so a server
+# started here has the resident footprint the tier rule was MEASURED under (flash attention and a
+# q8_0 KV cache; the engine's own defaults differ).
+rewrite_model_agent_render() {
+  local bin log
+  bin="$(rewrite_model_xml_escape "$1")"
+  log="$(rewrite_model_xml_escape "$(rewrite_model_state ollama-serve.log)")"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$REWRITE_MODEL_AGENT_LABEL</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$bin</string>
+		<string>serve</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>OLLAMA_HOST</key>
+		<string>127.0.0.1:$(rewrite_model_url_port "$REWRITE_MODEL_URL")</string>
+		<key>OLLAMA_NO_CLOUD</key>
+		<string>1</string>
+		<key>OLLAMA_FLASH_ATTENTION</key>
+		<string>1</string>
+		<key>OLLAMA_KV_CACHE_TYPE</key>
+		<string>q8_0</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>$log</string>
+	<key>StandardErrorPath</key>
+	<string>$log</string>
+</dict>
+</plist>
+EOF
+}
+
+# rewrite_model_agent_start <ollama> — write the agent (only when its text would change) and have launchd
+# run it. rc 0 when launchd holds the job afterwards; the SERVER answering is checked by the caller.
+rewrite_model_agent_start() {
+  local plist uid changed=0
+  plist="$(rewrite_model_agent_plist)"
+  uid="$(rewrite_model_uid)"
+  /bin/mkdir -p "$(/usr/bin/dirname "$plist")" 2>/dev/null || return 1
+  rewrite_model_agent_render "$1" >"$plist.tmp.$$" 2>/dev/null || { /bin/rm -f "$plist.tmp.$$"; return 1; }
+  /usr/bin/plutil -lint "$plist.tmp.$$" >/dev/null 2>&1 || { /bin/rm -f "$plist.tmp.$$"; bootstrap_warn "rewrite_model: the LaunchAgent did not render as a valid plist"; return 1; }
+  if /usr/bin/cmp -s "$plist.tmp.$$" "$plist" 2>/dev/null; then /bin/rm -f "$plist.tmp.$$"
+  else /bin/mv -f "$plist.tmp.$$" "$plist" || return 1; changed=1
+  fi
+  if rewrite_model_label_loaded "$REWRITE_MODEL_AGENT_LABEL"; then
+    [ "$changed" = 1 ] || return 0
+    "$REWRITE_MODEL_LAUNCHCTL" bootout "gui/$uid/$REWRITE_MODEL_AGENT_LABEL" >/dev/null 2>&1 || true
+  fi
+  "$REWRITE_MODEL_LAUNCHCTL" bootstrap "gui/$uid" "$plist" >/dev/null 2>&1 || true
+  rewrite_model_label_loaded "$REWRITE_MODEL_AGENT_LABEL"
+}
+
+# ── the pinned fetch ──────────────────────────────────────────────────────────────────────────
+rewrite_model_pinned_dir() { printf '%s/ollama-%s' "$(bootstrap_tools_dir)" "$REWRITE_MODEL_OLLAMA_VERSION"; }
+
+# rewrite_model_fetch_marker — a pinned fetch that failed IN THIS RUN. It holds the driver's pid ($$ in a
+# verb's subshell is the driver's), so gate_ reports the failure for the rest of this run and a
+# later run retries the download instead of inheriting a stale refusal.
+rewrite_model_fetch_marker() { rewrite_model_state rewrite-model-fetch-failed; }
+rewrite_model_fetch_failed_now() {
+  local f
+  f="$(rewrite_model_fetch_marker)"
+  [ -f "$f" ] || return 1
+  [ "$(/usr/bin/sed -n 's/^pid=//p' "$f" 2>/dev/null | /usr/bin/head -1)" = "$$" ]
+}
+
+# rewrite_model_fetch_ollama — the tarball, hash-checked BEFORE extraction by bootstrap_fetch_pinned,
+# unpacked beside a temp name and moved into place whole, then linked into $(bootstrap_tools_dir)/bin.
+# rc 0 the pinned ollama runs · 1 not fetched · 2 hash refused · 3 fetched but will not unpack or run.
+rewrite_model_fetch_ollama() {
+  local dir tgz rc out
+  dir="$(rewrite_model_pinned_dir)"
+  tgz="$(bootstrap_tools_dir)/ollama-$REWRITE_MODEL_OLLAMA_VERSION-darwin.tgz"
+  /bin/rm -f "$(rewrite_model_fetch_marker)" 2>/dev/null
+  if [ ! -x "$dir/ollama" ]; then
+    printf 'rewrite_model: fetching ollama %s from its GitHub release (pinned by sha256; no Homebrew, no admin)\n' "$REWRITE_MODEL_OLLAMA_VERSION"
+    bootstrap_fetch_pinned "$REWRITE_MODEL_OLLAMA_TARBALL" "$REWRITE_MODEL_OLLAMA_SHA256" "$tgz"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf 'pid=%s\nrc=%s\n' "$$" "$rc" >"$(rewrite_model_fetch_marker)" 2>/dev/null
+      return "$rc"
+    fi
+    /bin/rm -rf "$dir.part" 2>/dev/null
+    /bin/mkdir -p "$dir.part" || return 3
+    if ! /usr/bin/tar -xzf "$tgz" -C "$dir.part" 2>/dev/null || [ ! -x "$dir.part/ollama" ]; then
+      /bin/rm -rf "$dir.part" "$tgz"
+      printf 'pid=%s\nrc=3\n' "$$" >"$(rewrite_model_fetch_marker)" 2>/dev/null
+      return 3
+    fi
+    /bin/rm -rf "$dir" 2>/dev/null
+    /bin/mv "$dir.part" "$dir" || return 3
+    /bin/rm -f "$tgz"
+  fi
+  /bin/mkdir -p "$(bootstrap_tools_dir)/bin" || return 3
+  /bin/ln -sfn "../ollama-$REWRITE_MODEL_OLLAMA_VERSION/ollama" "$(bootstrap_tools_dir)/bin/ollama" || return 3
+  # Executed, not assumed. OLLAMA_HOST at a dead loopback port: the version line must come from THIS
+  # binary, not from whatever server happens to be answering on 11434.
+  out="$(OLLAMA_HOST=127.0.0.1:9 "$(bootstrap_tools_dir)/bin/ollama" --version 2>&1)" || out=""
+  case "$out" in
+    *"$REWRITE_MODEL_OLLAMA_VERSION"*) return 0 ;;
+  esac
+  printf 'pid=%s\nrc=3\n' "$$" >"$(rewrite_model_fetch_marker)" 2>/dev/null
+  return 3
 }
 
 # ── the gate receipt: a PASS bound to the bytes that passed ──────────────────────────────────
@@ -350,21 +717,11 @@ rewrite_model_receipt_base() {
   printf '%s' "$b"
 }
 
-# rewrite_model_asset <name> — the shipped asset's absolute path: beside bootstrap.sh when running from a
-# clone, otherwise fetched once into the state dir at the release pin. Never writes in the repo.
+# rewrite_model_asset <name> — the shipped asset's absolute path, from the tree the driver verified
+# against the release's sha256 manifest and exported as BOOTSTRAP_ASSETS. There is no fallback
+# fetch: the raw-URL download this used to make was the one byte stream here nobody checked.
 rewrite_model_asset() {
-  local n="$1" dest code
-  if [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -r "$BOOTSTRAP_ASSETS/$n" ]; then printf '%s' "$BOOTSTRAP_ASSETS/$n"; return 0; fi
-  dest="$(rewrite_model_state "$n")"
-  [ -r "$dest" ] && { printf '%s' "$dest"; return 0; }
-  case "${BOOTSTRAP_PIN:-}" in
-    ''|__PIN_SHA__|main|master|HEAD) return 1 ;;    # a moving ref is not a pin; refuse to fetch
-  esac
-  code="$("$REWRITE_MODEL_CURL" -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$n" 2>/dev/null)" || code=""
-  if [ "$code" = "200" ] && [ -s "$dest.part" ]; then
-    mv "$dest.part" "$dest" 2>/dev/null && { printf '%s' "$dest"; return 0; }
-  fi
-  rm -f "$dest.part" 2>/dev/null
+  if [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -r "$BOOTSTRAP_ASSETS/$1" ]; then printf '%s' "$BOOTSTRAP_ASSETS/$1"; return 0; fi
   return 1
 }
 
@@ -382,6 +739,9 @@ rewrite_model_machine_ready() {
   dg="$(rewrite_model_digest "$REWRITE_MODEL_NAME")" || return 1
   rg="$(rewrite_model_receipt_digest)" || return 1
   [ "$dg" = "$rg" ] || return 1
+  # A derived model built FROM a cloud base renders its parameters locally and passes params_ok
+  # (measured in the research), so only its remote_host tells it apart.
+  rewrite_model_remote_model "$REWRITE_MODEL_NAME" && return 1
   return 0
 }
 
@@ -390,16 +750,48 @@ rewrite_model_machine_ready() {
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_rewrite_model()    { printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key'; }
-cost_rewrite_model()    { printf '%s' 'Homebrew + ollama + a ~5 GB model download. Several minutes. One in-app picker at the end.'; }
+# what_ and cost_ name the ROUTE, because it is what a standard user most needs to know before
+# choosing this: whether it will ask for Homebrew, which they cannot install.
+what_rewrite_model() {
+  case "$(rewrite_model_route 2>/dev/null)" in
+    brew)          printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — ollama via Homebrew' ;;
+    pinned|oldmac) printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — ollama from its pinned GitHub release, into your home folder, with no admin rights needed' ;;
+    *)             printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — on the ollama already installed' ;;
+  esac
+}
+cost_rewrite_model() {
+  case "$(rewrite_model_route 2>/dev/null)" in
+    brew)          printf '%s' "Homebrew's ollama + a ~5 GB model download. Several minutes. One pass through VoiceInk's modes at the end." ;;
+    pinned|oldmac) printf '%s' "a pinned 160 MB ollama download + a ~5 GB model download. Several minutes. One pass through VoiceInk's modes at the end." ;;
+    *)             printf '%s' "a ~5 GB model download. Several minutes. One pass through VoiceInk's modes at the end." ;;
+  esac
+}
 profile_rewrite_model() { printf '%s' 'standard'; }
+
+# Every host this module reaches. The route decides which install hosts apply, so both are listed
+# with the route named. ollama.com is absent on purpose: every server this module starts runs with
+# OLLAMA_NO_CLOUD=1, and verify_ fails unless the server's own /api/status says cloud is disabled —
+# so the one way ollama.com is reached is a server this module did not start and could not switch
+# off, and that is reported as NEEDS_HUMAN, never as satisfied.
+egress_rewrite_model() {
+  printf '%s\n' \
+    'github.com install the pinned ollama CLI release tarball, when there is no Homebrew this user can install with' \
+    'release-assets.githubusercontent.com install the same tarball, redirected from github.com; kept only if its sha256 matches the pin' \
+    'formulae.brew.sh install brew install ollama, when this user has a usable Homebrew (formula API and auto-update)' \
+    'ghcr.io install the ollama bottle manifest, Homebrew route only' \
+    'pkg-containers.githubusercontent.com install the ollama bottle download, Homebrew route only' \
+    'registry.ollama.ai install ollama pull of the base model (model name and your IP, never a prompt)' \
+    'dd20bb891979d25aebc8bec07b2b3bbc.r2.cloudflarestorage.com install the model blobs registry.ollama.ai redirects to'
+}
 
 verify_rewrite_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
-  local show want got sel t
+  local show want got t
+  rewrite_model_url_ok || return 1
   rewrite_model_machine_ready || return 1
+  rewrite_model_cloud_disabled || return 1
 
   # The base is checked against the RECEIPT, not against a re-derivation of the tier rule: a
   # machine the operator deliberately pointed at another base with --model must keep verifying.
@@ -415,11 +807,9 @@ verify_rewrite_model() {
   t="$(rewrite_model_preference EnhancementTimeoutSeconds)" || return 1
   [ "$t" = "$REWRITE_MODEL_TIMEOUT_S" ] || return 1
 
-  # The GUI evidence. rewrite_model never writes this key, so its value can only have come from a human in
-  # VoiceInk's own picker — which is the only thing that also sets the in-app connection state
-  # that decides whether the local model is called at all.
-  sel="$(rewrite_model_preference ollamaSelectedModel)" || return 1
-  case "$sel" in "$REWRITE_MODEL_NAME"|"$REWRITE_MODEL_NAME:latest") ;; *) return 1 ;; esac
+  # The GUI evidence, per mode. rewrite_model never writes a mode, so this can only have come from
+  # a human in VoiceInk — and it is the setting that decides which provider each dictation reaches.
+  rewrite_model_modes_pinned >/dev/null 2>&1 || return 1
 
   # An optional live re-measurement. Off by default because it costs a model load, and the
   # receipt is already bound to the digest; on when you want the end-to-end answer rather than
@@ -438,27 +828,48 @@ verify_rewrite_model() {
 # two lines of one hand-off telling the operator opposite things. One function, three readers.
 #
 # Prints exactly one token:
-#   HOMEBREW  ollama cannot be installed without it, and its installer wants their password
+#   FETCH     the pinned ollama download failed IN THIS RUN, and there is no Homebrew route
+#   OLDMAC    no Homebrew route, and this macOS is below the pinned build's floor
 #   DECIDE    below the measured floor: bench a candidate, or leave AI enhancement off
+#   CLOUD     a server this module cannot restart still has cloud on; server.json already says off
 #   QUIT      a running VoiceInk discards `defaults write` on exit, so the timeout cannot land
-#   GUI       the machine side is done; only the Connect-and-pick click remains
+#   GUI       the machine side is done; only choosing Ollama + the model on each mode remains
 #   NONE      nothing is waiting on a human
 #
-# QUIT and GUI are deliberately gated on rewrite_model_machine_ready. Reporting a human gesture BEFORE the
-# machine side is reachable would stop install_ from ever running (the driver takes the
-# NEEDS_HUMAN branch and never calls it), and the model would never be pulled at all.
+# QUIT and GUI are deliberately gated on rewrite_model_machine_ready. Reporting a human gesture BEFORE
+# the machine side is reachable would stop install_ from ever running (the driver takes the
+# NEEDS_HUMAN branch and never calls it), and the model would never be pulled at all. For the same
+# reason CLOUD waits until server.json already asks for cloud off, and only for a server with no
+# launchd label this module can kickstart: before that, install_ must run to write the file or do
+# the restart itself.
 rewrite_model_pending() {
-  local t sel
-  if ! rewrite_model_ollama >/dev/null 2>&1 && ! rewrite_model_brew >/dev/null 2>&1; then printf 'HOMEBREW'; return 0; fi
+  local t
+  if ! rewrite_model_ollama >/dev/null 2>&1; then
+    rewrite_model_fetch_failed_now && { printf 'FETCH'; return 0; }
+    [ "$(rewrite_model_route)" = oldmac ] && { printf 'OLDMAC'; return 0; }
+  fi
   if [ -z "$(rewrite_model_base)" ]; then printf 'DECIDE'; return 0; fi
+  if [ "$(bootstrap_settings_get "$(rewrite_model_server_json)" disable_ollama_cloud raw 2>/dev/null)" = true ] \
+     && rewrite_model_server_up && ! rewrite_model_cloud_disabled && ! rewrite_model_server_label >/dev/null 2>&1; then
+    printf 'CLOUD'; return 0
+  fi
   if rewrite_model_machine_ready; then
     t="$(rewrite_model_preference EnhancementTimeoutSeconds)" || t=""
     if [ "$t" != "$REWRITE_MODEL_TIMEOUT_S" ] && rewrite_model_voiceink_running; then printf 'QUIT'; return 0; fi
-    sel="$(rewrite_model_preference ollamaSelectedModel)" || sel=""
-    case "$sel" in "$REWRITE_MODEL_NAME"|"$REWRITE_MODEL_NAME:latest") ;; *) printf 'GUI'; return 0 ;; esac
+    rewrite_model_modes_pinned >/dev/null 2>&1 || { printf 'GUI'; return 0; }
   fi
   printf 'NONE'
   return 0
+}
+
+# rewrite_model_fetch_why — the marker's rc, in words. A TLS-inspecting proxy that re-signs downloads
+# shows up as the hash refusal, which is why that one names the proxy.
+rewrite_model_fetch_why() {
+  case "$(/usr/bin/sed -n 's/^rc=//p' "$(rewrite_model_fetch_marker)" 2>/dev/null | /usr/bin/head -1)" in
+    2) printf 'it did not match the sha256 this release pins, so it was deleted unrun — a proxy that rewrites downloads does this' ;;
+    3) printf 'it downloaded but would not unpack or run' ;;
+    *) printf 'it could not be downloaded — no network, or a proxy that blocks github.com' ;;
+  esac
 }
 
 gate_rewrite_model() {
@@ -475,22 +886,36 @@ note_rewrite_model() {
     printf 'this run has a sandboxed HOME ($HOME is not your real home), and `defaults` ignores $HOME — writing would hit your REAL preferences. Nothing was written.'
     return 0
   fi
-  local extra=""
-  rewrite_model_cloud_key_present && extra=' You must ALSO pin Ollama on your active mode under Settings > Modes: a saved cloud key still outranks Ollama in the provider fallback, so without the pin your local model is never called.'
+  local why
   case "$(rewrite_model_pending)" in
-    HOMEBREW)
-      printf 'Homebrew is missing, so ollama cannot be installed; its installer needs your password.\n' ;;
+    FETCH)
+      if bootstrap_is_admin && ! rewrite_model_brew >/dev/null 2>&1; then
+        printf 'The pinned ollama download from github.com failed (%s). Homebrew is the other route, and its installer needs your password.\n' "$(rewrite_model_fetch_why)"
+      else
+        printf 'The pinned ollama download from github.com failed (%s). This account cannot install Homebrew, so ask IT to allow downloads from github.com and release-assets.githubusercontent.com (or to install ollama), then run this again.\n' "$(rewrite_model_fetch_why)"
+      fi ;;
+    OLDMAC)
+      printf 'This Mac runs macOS %s, and the ollama build this installs needs macOS %s or later; Homebrew, the other route, is not available to this account. Update macOS (or ask IT to), then run this again.\n' "$(/usr/bin/sw_vers -productVersion 2>/dev/null)" "$REWRITE_MODEL_OLLAMA_MACOS_FLOOR" ;;
     DECIDE)
       printf 'This Mac reports %s GB of unified memory, and no local rewrite model is measured good at that size — bench a candidate (qwen3.5:4b, 3.4 GB, is the untested one worth trying) or leave VoiceInk AI enhancement off rather than installing a model that invents text.\n' "$(rewrite_model_mem_gb)" ;;
+    CLOUD)
+      if rewrite_model_ollama_app_running; then
+        printf 'The Ollama app runs the server at %s and still has cloud models enabled, so a model name ending in :cloud sends its prompt to ollama.com. ~/.ollama/server.json now switches cloud off, but the server reads it only when it starts — quit and reopen Ollama.\n' "$REWRITE_MODEL_URL"
+      else
+        printf 'The ollama server at %s was not started by this bootstrap and still has cloud models enabled, so a model name ending in :cloud sends its prompt to ollama.com. ~/.ollama/server.json now switches cloud off, but the server reads it only when it starts — stop that server and start it again (a server run by root reads /var/root/.ollama/server.json instead, which only an administrator can change).\n' "$REWRITE_MODEL_URL"
+      fi ;;
     QUIT)
-      printf 'VoiceInk is running and it rewrites its own preferences when it quits, so the %s-second enhancement timeout cannot be written underneath it — quit VoiceInk, re-run this, then do the Connect step in Settings > AI Models > Ollama.\n' "$REWRITE_MODEL_TIMEOUT_S" ;;
+      printf 'VoiceInk is running and it rewrites its own preferences when it quits, so the %s-second enhancement timeout cannot be written underneath it — quit VoiceInk and run this again.\n' "$REWRITE_MODEL_TIMEOUT_S" ;;
     GUI)
-      printf 'In VoiceInk: Settings > AI Models > Ollama > Connect, then pick %s in the model list — no preference can do this, because the app only counts Ollama as connected after a live probe.%s While you are in Settings > Transcription, download parakeet-unified-0.6b from its model card and select it — it is faster, more accurate and lighter than the whisper turbo default, and it punctuates its own output, which is work the rewrite model then does not have to do.\n' "$REWRITE_MODEL_NAME" "$extra" ;;
+      why="$(rewrite_model_modes_pinned 2>/dev/null)"
+      printf 'In VoiceInk, Settings > Modes: for every mode with AI enhancement on, choose provider Ollama and model %s — a mode that names a cloud provider sends your dictation there (%s). While you are in Settings > Transcription, download parakeet-unified-0.6b from its model card and select it — it is faster, more accurate and lighter than the whisper turbo default, and it punctuates its own output, which is work the rewrite model then does not have to do.\n' "$REWRITE_MODEL_NAME" "${why:-the modes could not be read}" ;;
     *)
       printf 'nothing is waiting on you for the local rewrite model.\n' ;;
   esac
   return 0
 }
+
+rewrite_model_ollama_app_running() { "$REWRITE_MODEL_PGREP" -x Ollama >/dev/null 2>&1; }
 
 gesture_rewrite_model() {
   if ! bootstrap_defaults_home_ok >/dev/null 2>&1; then
@@ -499,8 +924,15 @@ gesture_rewrite_model() {
   fi
   local root
   case "$(rewrite_model_pending)" in
-    HOMEBREW)
-      printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n' ;;
+    FETCH)
+      # Homebrew only for an administrator, who can run its installer; everyone else gets the note.
+      if bootstrap_is_admin && ! rewrite_model_brew >/dev/null 2>&1; then
+        printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n'
+      fi ;;
+    OLDMAC)
+      printf 'open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"\n' ;;
+    CLOUD)
+      rewrite_model_ollama_app_running && printf 'osascript -e '"'"'quit app "Ollama"'"'"' && sleep 3 && open -a Ollama\n' ;;
     DECIDE)
       if [ -n "${BOOTSTRAP_ASSETS:-}" ]; then
         root="$(dirname "$BOOTSTRAP_ASSETS")"
@@ -521,7 +953,13 @@ install_rewrite_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
-  local base ollama brew mf rendered show dg g rc waited sel t prev
+  local base ollama brew mf rendered show dg g rc t prev label why
+
+  # Nothing below may send a request anywhere but this Mac.
+  if ! rewrite_model_url_ok; then
+    bootstrap_warn "rewrite_model: refusing MODEL_GATE_BASE_URL=$REWRITE_MODEL_URL — it is not a loopback address, and every request here (fixture prompts included) would go to that host"
+    return 2
+  fi
 
   base="$(rewrite_model_base)"
   if [ -z "$base" ]; then
@@ -536,51 +974,92 @@ install_rewrite_model() {
       bootstrap_warn "rewrite_model: refusing base '$base' — that is not a well-formed ollama model tag"
       return 2 ;;
   esac
+  if rewrite_model_cloud_ref "$base"; then
+    bootstrap_warn "rewrite_model: refusing base '$base' — it is an ollama CLOUD model, whose every generation is sent to ollama.com. Nothing was requested."
+    return 2
+  fi
   if rewrite_model_forbidden "$base"; then
     bootstrap_warn "rewrite_model: refusing base '$base'. Measured 82-156 s per call and untagged prose reasoning that VoiceInk's <think> filter cannot strip, so the reasoning is pasted into the document. Use --bench to re-measure it if you want to challenge that."
     return 2
   fi
 
   # 1. ollama ─────────────────────────────────────────────────────────────────────────────────
-  if ! ollama="$(rewrite_model_ollama)"; then
-    brew="$(rewrite_model_brew)" || { bootstrap_warn "rewrite_model: no ollama and no brew"; return 2; }
-    printf 'rewrite_model: installing ollama via Homebrew\n'
-    "$brew" install ollama || bootstrap_warn "rewrite_model: brew install ollama exited non-zero; checking anyway"
-    ollama="$(rewrite_model_ollama)" || { bootstrap_warn "rewrite_model: ollama is still not on disk after brew install"; return 2; }
-  fi
+  case "$(rewrite_model_route)" in
+    present) : ;;
+    brew)
+      brew="$(rewrite_model_brew)"
+      printf 'rewrite_model: installing ollama via Homebrew\n'
+      bootstrap_brew "$brew" install ollama || bootstrap_warn "rewrite_model: brew install ollama exited non-zero; checking anyway" ;;
+    pinned)
+      rewrite_model_fetch_ollama
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        # Non-zero is the contract's own path back to gate_, which now reports FETCH for this run.
+        bootstrap_warn "rewrite_model: the pinned ollama $REWRITE_MODEL_OLLAMA_VERSION could not be installed (rc $rc): $(rewrite_model_fetch_why)"
+        return 2
+      fi ;;
+    oldmac)
+      bootstrap_warn "rewrite_model: macOS $(/usr/bin/sw_vers -productVersion 2>/dev/null) is below the pinned ollama's floor ($REWRITE_MODEL_OLLAMA_MACOS_FLOOR), and there is no Homebrew this user can install with"
+      return 2 ;;
+  esac
+  ollama="$(rewrite_model_ollama)" || { bootstrap_warn "rewrite_model: ollama is still not on disk after installing it"; return 2; }
   # Executed, not assumed: an installer's exit code is never the verdict.
   "$ollama" --version >/dev/null 2>&1 || { bootstrap_warn "rewrite_model: $ollama will not run"; return 2; }
 
-  # 2. the server ─────────────────────────────────────────────────────────────────────────────
+  # 2. cloud off, BEFORE any server starts — a server reads server.json only when it starts, so a
+  #    first start after this line never needs a restart.
+  rewrite_model_cloud_off_write || { bootstrap_warn "rewrite_model: could not write disable_ollama_cloud into $(rewrite_model_server_json)"; return 2; }
+
+  # 3. the server ─────────────────────────────────────────────────────────────────────────────
+  # Homebrew's service when Homebrew is this user's and runs its ollama; otherwise this module's
+  # own LaunchAgent, which carries OLLAMA_NO_CLOUD=1 and survives logout (the `nohup … &` it
+  # replaces did neither).
   if ! rewrite_model_server_up; then
-    if brew="$(rewrite_model_brew)"; then
-      printf 'rewrite_model: starting the ollama service\n'
-      "$brew" services start ollama >/dev/null 2>&1 || true
+    if rewrite_model_brew_usable && [ "$(/usr/bin/dirname "$ollama")" = "$(/usr/bin/dirname "$(rewrite_model_brew)")" ]; then
+      printf 'rewrite_model: starting the Homebrew ollama service\n'
+      bootstrap_brew "$(rewrite_model_brew)" services start ollama >/dev/null 2>&1 || true
+      rewrite_model_wait_up 30 || true
     fi
     if ! rewrite_model_server_up; then
-      printf 'rewrite_model: starting `ollama serve` in the background\n'
-      # `&` on its own line, deliberately NOT `brew services start … || nohup … &`: in that form
-      # the `&` binds the whole AND-OR list, so `brew services start` itself is backgrounded and
-      # the fallback runs unconditionally. That shape is in the research script this replaces.
-      nohup "$ollama" serve >"$(rewrite_model_state ollama-serve.log)" 2>&1 &
+      printf 'rewrite_model: starting ollama as the user LaunchAgent %s (127.0.0.1 only, cloud off)\n' "$REWRITE_MODEL_AGENT_LABEL"
+      # The stable path — $(bootstrap_tools_dir)/bin/ollama, or Homebrew's link — not a versioned
+      # file, so a later pin or a brew upgrade is picked up at the next start. The pinned binary
+      # was measured serving (and finding Metal) through that link.
+      rewrite_model_agent_start "$ollama" \
+        || bootstrap_warn "rewrite_model: launchd does not hold $REWRITE_MODEL_AGENT_LABEL after bootstrap"
     fi
-    waited=0
-    while [ "$waited" -lt 30 ]; do
-      rewrite_model_server_up && break
-      sleep 1
-      waited=$((waited + 1))
-    done
+    rewrite_model_wait_up 90 || true
   fi
-  rewrite_model_server_up || { bootstrap_warn "rewrite_model: no ollama server answering at $REWRITE_MODEL_URL after 30 s"; return 2; }
+  rewrite_model_server_up || { bootstrap_warn "rewrite_model: no ollama server answering at $REWRITE_MODEL_URL"; return 2; }
 
-  # 3. the base model ─────────────────────────────────────────────────────────────────────────
+  # 4. cloud off, READ BACK from the server itself ────────────────────────────────────────────
+  if ! rewrite_model_cloud_disabled; then
+    if label="$(rewrite_model_server_label)"; then
+      printf 'rewrite_model: restarting %s so it reads server.json (it reads it only at start)\n' "$label"
+      "$REWRITE_MODEL_LAUNCHCTL" kickstart -k "gui/$(rewrite_model_uid)/$label" >/dev/null 2>&1 || true
+      sleep 2
+      rewrite_model_wait_up 90 || true
+    fi
+    if ! rewrite_model_cloud_disabled; then
+      bootstrap_warn "rewrite_model: the ollama server at $REWRITE_MODEL_URL still reports cloud enabled (GET /api/status) — refusing to continue with a server that can send prompts to ollama.com"
+      return 7
+    fi
+  fi
+
+  # 5. the base model ─────────────────────────────────────────────────────────────────────────
   if ! rewrite_model_model_present "$base"; then
-    printf 'rewrite_model: pulling %s — this is the only network step, and it is several GB\n' "$base"
+    printf 'rewrite_model: pulling %s — several GB from registry.ollama.ai\n' "$base"
     "$ollama" pull "$base" || { bootstrap_warn "rewrite_model: ollama pull $base failed"; return 2; }
     rewrite_model_model_present "$base" || { bootstrap_warn "rewrite_model: $base is still absent after the pull"; return 2; }
   fi
+  # A name without a cloud suffix can still be a remote-backed model (one `ollama create`d FROM a
+  # cloud tag): it is refused before anything is derived from it or any text is sent to it.
+  if rewrite_model_remote_model "$base"; then
+    bootstrap_warn "rewrite_model: refusing base '$base' — ollama lists it with a remote_host, so its generations run on another machine"
+    return 2
+  fi
 
-  # 4. the derived model ──────────────────────────────────────────────────────────────────────
+  # 6. the derived model ──────────────────────────────────────────────────────────────────────
   show="$(rewrite_model_state rewrite-model-cache-show.json)"
   if rewrite_model_show "$REWRITE_MODEL_NAME" "$show" && rewrite_model_params_ok "$show" \
      && [ "$(rewrite_model_json_field "$show" details.parent_model 2>/dev/null)" = "$base" ]; then
@@ -600,8 +1079,13 @@ install_rewrite_model() {
     rewrite_model_show "$REWRITE_MODEL_NAME" "$show" || { bootstrap_warn "rewrite_model: $REWRITE_MODEL_NAME is absent after create"; return 2; }
     rewrite_model_params_ok "$show" || { bootstrap_warn "rewrite_model: $REWRITE_MODEL_NAME exists but the server does not report num_ctx 4096 / temperature 0.2"; return 2; }
   fi
+  if rewrite_model_remote_model "$REWRITE_MODEL_NAME"; then
+    bootstrap_warn "rewrite_model: $REWRITE_MODEL_NAME is backed by a remote host; removing it rather than sending fixture text to another machine"
+    "$ollama" rm "$REWRITE_MODEL_NAME" >/dev/null 2>&1 || true
+    return 2
+  fi
 
-  # 5. the acceptance gate — BEFORE anything is called done ───────────────────────────────────
+  # 7. the acceptance gate — BEFORE anything is called done ───────────────────────────────────
   # A model that answers the dictated question instead of rewriting it pastes its answer into
   # whatever the user was typing into. If it fails, it is removed: leaving a certified-bad model
   # under the name VoiceInk will pick is worse than leaving the machine with no local model.
@@ -642,9 +1126,9 @@ install_rewrite_model() {
     } >"$(rewrite_model_state rewrite-model-gate.receipt)"
   fi
 
-  # 6. the two VoiceInk preferences ───────────────────────────────────────────────────────────
+  # 8. the two VoiceInk preferences ───────────────────────────────────────────────────────────
   # Exactly two keys, each written by name. The domain is never exported or copied: it holds live
-  # provider API keys. ollamaSelectedModel is deliberately NOT written — see the header.
+  # provider API keys. No mode is written — see the header.
   t="$(rewrite_model_preference EnhancementTimeoutSeconds)" || t=""
   if [ "$t" != "$REWRITE_MODEL_TIMEOUT_S" ] && rewrite_model_voiceink_running; then
     bootstrap_warn "rewrite_model: VoiceInk is running; it rewrites its preferences on quit, so the ${REWRITE_MODEL_TIMEOUT_S}s timeout was not written (it currently reads '${t:-absent}')"
@@ -663,7 +1147,7 @@ install_rewrite_model() {
     [ "$t" = "$REWRITE_MODEL_TIMEOUT_S" ] || { bootstrap_warn "rewrite_model: EnhancementTimeoutSeconds reads back as '${t:-absent}'"; return 2; }
   fi
 
-  # 7. the one step no script can take ────────────────────────────────────────────────────────
+  # 9. the one step no script can take ────────────────────────────────────────────────────────
   # Returning non-zero here is deliberate and is the contract's own path: the driver re-evaluates
   # gate_, which now reports the GUI gesture, and the module is recorded NEEDS_HUMAN with the
   # note and the command. Returning 0 would have the driver call verify_, watch it disagree, and
@@ -675,11 +1159,8 @@ install_rewrite_model() {
     printf 'rewrite_model: the %ss enhancement timeout is still unwritten because VoiceInk is open.\n' "$REWRITE_MODEL_TIMEOUT_S"
     return 6
   fi
-  sel="$(rewrite_model_preference ollamaSelectedModel)" || sel=""
-  case "$sel" in
-    "$REWRITE_MODEL_NAME"|"$REWRITE_MODEL_NAME:latest") return 0 ;;
-  esac
-  printf 'rewrite_model: the machine side is done. VoiceInk itself must now be pointed at %s — no preference can do it.\n' "$REWRITE_MODEL_NAME"
+  if why="$(rewrite_model_modes_pinned)"; then return 0; fi
+  printf 'rewrite_model: the machine side is done. Each VoiceInk mode with AI enhancement on must now name Ollama and %s: %s\n' "$REWRITE_MODEL_NAME" "$why"
   return 5
 }
 
@@ -709,13 +1190,58 @@ uninstall_rewrite_model() {
     rm -f "$prev" 2>/dev/null || true
   fi
 
+  rewrite_model_cloud_off_undo
+
+  # The server this module started, and the ollama it unpacked — and nothing else: Homebrew's
+  # ollama and its service, the Ollama app, and every model under ~/.ollama are left alone.
+  # launchd's gui domain is per USER, not per HOME, so the job is booted out only when THIS home
+  # holds its plist — a sandboxed uninstall must never stop the real account's server.
+  if [ -f "$(rewrite_model_agent_plist)" ] && rewrite_model_label_loaded "$REWRITE_MODEL_AGENT_LABEL"; then
+    "$REWRITE_MODEL_LAUNCHCTL" bootout "gui/$(rewrite_model_uid)/$REWRITE_MODEL_AGENT_LABEL" >/dev/null 2>&1 \
+      || bootstrap_warn "rewrite_model: launchctl bootout $REWRITE_MODEL_AGENT_LABEL failed"
+  fi
+  rm -f "$(rewrite_model_agent_plist)" 2>/dev/null || true
+  case "$(/usr/bin/readlink "$(bootstrap_tools_dir)/bin/ollama" 2>/dev/null)" in
+    ../ollama-*/ollama) rm -f "$(bootstrap_tools_dir)/bin/ollama" 2>/dev/null || true ;;
+  esac
+  rm -rf "$(rewrite_model_pinned_dir)" "$(rewrite_model_pinned_dir).part" \
+         "$(bootstrap_tools_dir)/ollama-$REWRITE_MODEL_OLLAMA_VERSION-darwin.tgz" "$(bootstrap_tools_dir)/ollama-$REWRITE_MODEL_OLLAMA_VERSION-darwin.tgz.part" 2>/dev/null || true
+  rmdir "$(bootstrap_tools_dir)/bin" "$(bootstrap_tools_dir)" 2>/dev/null || true     # only if now empty
+
   # LAST, not first: every read above (is the model there? what base was it?) re-creates the
   # API caches, so deleting them at the top of the function leaves them behind at the bottom.
   rm -f "$(rewrite_model_state rewrite-model-gate.receipt)" "$(rewrite_model_state voiceink-rewrite.Modelfile)" \
         "$(rewrite_model_state rewrite-model-cache-show.json)" "$(rewrite_model_state rewrite-model-cache-tags.json)" \
+        "$(rewrite_model_state rewrite-model-cache-status.json)" "$(rewrite_model_state rewrite-model-fetch-failed)" \
         "$(rewrite_model_state rewrite-model-cache-bench-show.json)" "$(rewrite_model_state rewrite-model-cache-bench-ps.json)" \
         "$(rewrite_model_state ollama-serve.log)" 2>/dev/null || true
   return 0
+}
+
+# rewrite_model_cloud_off_undo — put server.json back the way install_ found it. The library has no
+# key-removal verb, and bootstrap_settings_merge is the only JSON writer, so: a file this module
+# created that still holds only its one key is deleted; anywhere else the key goes back to the
+# value recorded (false, ollama's default, when it was absent). A true the person set themselves
+# is never touched. The server reads the change at its next start.
+rewrite_model_cloud_off_undo() {
+  local f prev v
+  f="$(rewrite_model_server_json)"
+  prev="$(rewrite_model_state rewrite-model-server-json.prev)"
+  [ -f "$prev" ] || return 0
+  v="$(/usr/bin/head -1 "$prev" 2>/dev/null)"
+  if [ -f "$f" ]; then
+    case "$v" in
+      true) : ;;
+      no-file)
+        if [ "$(/usr/bin/plutil -convert xml1 -o - "$f" 2>/dev/null)" = "$(bootstrap_json_norm '{"disable_ollama_cloud":true}' canonical)" ]; then
+          rm -f "$f" 2>/dev/null || true
+        else
+          bootstrap_settings_merge "$f" disable_ollama_cloud false >/dev/null 2>&1 || true
+        fi ;;
+      *) bootstrap_settings_merge "$f" disable_ollama_cloud false >/dev/null 2>&1 || true ;;
+    esac
+  fi
+  rm -f "$prev" 2>/dev/null || true
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -738,12 +1264,24 @@ bench_rewrite_model() {
   cand="${BOOTSTRAP_BENCH:-${BOOTSTRAP_BENCH:-}}"
   [ -n "$cand" ] || { printf 'bench: no candidate. Pass --bench <model tag>, e.g. --bench qwen3.5:4b\n'; return 2; }
 
-  ollama="$(rewrite_model_ollama)" || { printf 'bench: ollama is not installed — nothing was measured.\n'; return 2; }
-  rewrite_model_server_up || { printf 'bench: no ollama server at %s — nothing was measured.\n' "$REWRITE_MODEL_URL"; return 2; }
-
   case "$cand" in
     *[!A-Za-z0-9._:/-]*) printf 'bench: %s is not a well-formed ollama model tag.\n' "$cand"; return 2 ;;
   esac
+  # Both refusals come before ANY request, and exit 2 on the gate's scale: nothing was measured.
+  # Printed on stdout, which is the bench's verdict channel, and on stderr for a caller reading it.
+  if rewrite_model_cloud_ref "$cand"; then
+    printf 'bench: REFUSED %s — it is an ollama CLOUD model, so every fixture would be sent to ollama.com. Nothing was requested.\n' "$cand"
+    bootstrap_warn "rewrite_model bench: refused cloud model $cand; nothing was measured"
+    return 2
+  fi
+  if ! rewrite_model_url_ok; then
+    printf 'bench: REFUSED MODEL_GATE_BASE_URL=%s — it is not a loopback address, so the fixtures would leave this Mac. Nothing was requested.\n' "$REWRITE_MODEL_URL"
+    bootstrap_warn "rewrite_model bench: refused non-loopback base URL $REWRITE_MODEL_URL; nothing was measured"
+    return 2
+  fi
+
+  ollama="$(rewrite_model_ollama)" || { printf 'bench: ollama is not installed — nothing was measured.\n'; return 2; }
+  rewrite_model_server_up || { printf 'bench: no ollama server at %s — nothing was measured.\n' "$REWRITE_MODEL_URL"; return 2; }
 
   if rewrite_model_forbidden "$cand"; then
     printf 'bench: %s is on this module'"'"'s forbidden list — 82-156 s per call and untagged prose\n' "$cand"
@@ -754,6 +1292,11 @@ bench_rewrite_model() {
   if ! rewrite_model_model_present "$cand"; then
     printf 'bench: pulling %s (this leaves it on the disk; `%s rm %s` removes it)\n' "$cand" "$ollama" "$cand"
     "$ollama" pull "$cand" || { printf 'bench: could not pull %s — nothing was measured.\n' "$cand"; return 2; }
+  fi
+  if rewrite_model_remote_model "$cand"; then
+    printf 'bench: REFUSED %s — ollama lists it with a remote_host, so its generations run on another machine. Nothing was measured.\n' "$cand"
+    bootstrap_warn "rewrite_model bench: refused remote-backed model $cand; nothing was measured"
+    return 2
   fi
 
   # A fixed scratch name, so it is obvious and easy to remove — but never at the cost of
