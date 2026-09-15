@@ -22,7 +22,7 @@ nothing checked the script first.
 and then checks this Mac for anything that could send local data to a cloud AI service —
 [details](#where-your-data-goes).
 
-Readying a Mac is part files a script can write, part gestures only a person can make — twenty of
+Readying a Mac is part files a script can write, part gestures only a person can make — twenty-one of
 them plus one decision, and no script may take a single one for you. So the command drives every
 drivable step, records each of the rest with its exact gesture, and a full install still leaves you
 about four runs and roughly an hour, most of it waiting on Apple.
@@ -59,6 +59,17 @@ names IT, instead of handing you a command you cannot run. A policy IT set that 
 (hooks reserved to IT, an MCP server not on its allowlist) is reported as yours to raise, never as
 installed.
 
+**Whether you *may* install a module there is a different question, and it is IT's.** `--list`, `--plan`
+and the menu open with one line on what IT has on this Mac — MDM enrolment, endpoint-security
+extensions (CrowdStrike, Defender, SentinelOne, Jamf Protect, Zscaler, …), Santa's mode — read with no
+network and no password. Under it, every module that does something IT usually governs is marked `IT`
+with a line per thing, by kind: **data** (work data copied onto this disk, outside your tenant's DLP,
+retention and eDiscovery — the meeting archive and the shared-folder views do this), **background**
+(a job at login or a local server), **trust** (a signing identity or keychain trust), **permission** (a
+macOS privacy grant), **software** (an app or binary IT did not distribute), **agent** (something your
+coding agent runs on its own). On a managed Mac, clear those with IT first. The run never refuses a
+module on the strength of it — it tells you exactly what IT would be approving, and you decide.
+
 Ordered by dependency: Homebrew installs the two below it, and nothing else here depends on
 anything else here.
 
@@ -85,7 +96,7 @@ curl'd run keeps only its verified copy of the release, under `~/.mac-bootstrap/
 | | Command | |
 |---|---|---|
 | What is on offer, and what each costs | `bash bootstrap.sh --list` | writes nothing |
-| What *this* invocation would do to *this* Mac | `bash bootstrap.sh --plan` | writes nothing |
+| What *this* invocation would do to *this* Mac, in install order, and what IT would be approving | `bash bootstrap.sh --plan` | writes nothing; exits 10 when a row needs you |
 | Every file it would write, with hashes | `bash bootstrap.sh --manifest` | writes nothing |
 | Every host each module can reach, and a check that nothing here can reach a cloud AI service | `bash bootstrap.sh --egress` | writes nothing |
 | This Mac's real budget for a local model, and which candidates fit | `bash bootstrap.sh --advise-model` | writes nothing |
@@ -134,6 +145,9 @@ runs it on every push to `main`.
 
 ```text
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
+SELECTION: ask
+(Before pasting, you may replace "ask" with lite, standard, full, or modules such as
+statusline,hooks,microsoft365 — then step 3 is skipped.)
 
 1. FETCH — never pipe a script into a shell. Save it and check it; the check must print OK:
      curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh
@@ -146,13 +160,16 @@ You are setting up a Mac for an agent workflow. Work only in this terminal. Do n
      bash /tmp/mac-bootstrap.sh --list
      bash /tmp/mac-bootstrap.sh --plan --profile full
      bash /tmp/mac-bootstrap.sh --egress
-   Then tell me in at most six lines: what each module does and costs (read it off --list; do not
+   Then tell me in at most eight lines: what each module does and costs (read it off --list; do not
    invent it), which ones this Mac already has (--plan says "already satisfied"), and what --egress
-   found. --egress exits 20 when this Mac has a cloud path: that is a finding to tell me — name the
-   app and the setting, never read or print a key — not something for you to fix.
+   found. --plan exits 10 and --egress 20 when they find something: those are findings to tell me,
+   not errors — for --egress name the app and the setting, never read or print a key, and fix nothing.
+   Read the THIS MAC line: if an organisation manages this Mac, list every module marked IT with its
+   IT lines, and tell me to clear those with my IT team before I choose them.
 
 3. ASK me which modules I want, and wait. Offer them as a numbered list with one line each, and
-   recommend a set in one sentence. If I have already told you, skip this step and use what I said.
+   recommend a set in one sentence. If the SELECTION line above is not "ask", or I have already told
+   you, skip this step and use that: a profile name becomes --profile <name>, a list becomes --only.
    Do not use --pick: it is a menu for a person at a terminal, and you have none.
 
 4. RUN it with my answer, e.g.  bash /tmp/mac-bootstrap.sh --only statusline,hooks,microsoft365
@@ -160,6 +177,9 @@ You are setting up a Mac for an agent workflow. Work only in this terminal. Do n
    nothing: this Mac's real budget for a model, which is not its RAM, and the candidates that fit,
    each marked measured-good, contested, unmeasured or measured-unfit), and add
    --model <the first candidate that is not measured-unfit>  to the run. Never pick on size.
+   It can outlast your shell tool's time limit (the local model alone is a ~5 GB download), so start
+   it in the background, keeping the Mac awake, and read the file until its last line is "exit N":
+     (caffeinate -i bash /tmp/mac-bootstrap.sh <the flags> ; echo "exit $?") > /tmp/mac-bootstrap.out 2>&1 &
    It is idempotent; running it twice is the recovery procedure. It does nothing irreversible:
    anything needing a GUI permission, a keychain entry, sudo, an Apple ID or money is recorded
    for me, never attempted.
@@ -167,7 +187,8 @@ You are setting up a Mac for an agent workflow. Work only in this terminal. Do n
    30 = the run could not assemble itself; its last lines say why (a blocked host, a file that failed
    its check). Tell me that reason. Do not work around it.
 
-5. READ $HOME/.mac-bootstrap/receipt.json. For each module whose state is FAILED: read
+5. READ $HOME/.mac-bootstrap/receipt.json. For each module this run judged ("this_run": true)
+   whose state is FAILED: read
    $HOME/.mac-bootstrap/bootstrap.log, say the cause in one line, fix it only if the cause is
    yours, then re-run `--only <module>`. Never retry a module unchanged.
 
@@ -214,9 +235,13 @@ curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'htt
 
 The script then tries GitHub's tarball host, git over github.com (when the Command Line Tools are
 installed), and the raw host, in that order, and names why each one failed. If your proxy blocks all
-three, mirror this repo at the release commit and run with `BOOTSTRAP_RAW=<your mirror's URL for that
-commit>`. Nothing any of them serves is trusted by where it came from: every file is checked against
-the manifest inside the script, and one wrong byte stops the run with the file named. A network that
+three, that is usually IT's policy rather than an accident: ask IT whether this tool is allowed before
+you route around it. Where it is, IT can mirror this repo at the release commit (`BOOTSTRAP_RAW=<the
+mirror's URL for that commit>`) and the vendor downloads the modules pin — node, ollama, Hammerspoon,
+iTerm2, kitty, the agents — at `<mirror>/<host>/<path>` (`BOOTSTRAP_ARTIFACT_MIRROR=<mirror>`, over
+https or a carried folder as `file:///Volumes/…`). Nothing any of them serves is trusted by where it
+came from: every file is checked against the manifest inside the script, every vendor download against
+the sha256 its module pins, and one wrong byte stops that file with it named. A network that
 inspects TLS with a certificate IT installed needs nothing from you; one whose certificate this Mac
 does not trust is named, and the step is IT's.
 
@@ -285,7 +310,7 @@ your data to a cloud AI service. A module that does not declare its hosts fails 
 
 | What leaves the Mac | To | Why it cannot be otherwise, or how it is switched off |
 |---|---|---|
-| What your agent reads | Claude Code → Anthropic, or the Bedrock or Vertex account your company routes it to. Copilot CLI → GitHub, which routes to OpenAI, Anthropic, Google or xAI by the model you pick | That is how a coding agent works, and no module adds to it. To keep Copilot's context on this Mac, point it at the local model with `COPILOT_PROVIDER_BASE_URL`; `/handoff` carries that variable into the next session instead of dropping it |
+| What your agent reads | Claude Code → Anthropic, or whichever route your company set: Amazon Bedrock (`CLAUDE_CODE_USE_BEDROCK`), Google Vertex AI (`CLAUDE_CODE_USE_VERTEX`), Microsoft Foundry (`CLAUDE_CODE_USE_FOUNDRY`), or an LLM gateway (`ANTHROPIC_BASE_URL`). Copilot CLI → GitHub, or your GitHub Enterprise host where your company keeps data in a region (`GH_HOST` / `COPILOT_GH_HOST`), which routes to OpenAI, Anthropic, Google or xAI by the model you pick | That is how a coding agent works, and no module adds to it. `--egress` names the route each agent is on. To keep Copilot's context on this Mac, run it offline against the local model: `COPILOT_OFFLINE=true` with `COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:11434/v1` and `COPILOT_MODEL`. `/handoff` carries every one of these routing variables into the next session and never a credential, so a successor cannot drift to a different provider |
 | Your mail, calendar, files, meetings — `microsoft365`, `microsoft365_archive` | `graph.microsoft.com`, `login.microsoftonline.com`, and the SharePoint and OneDrive hosts Graph sends file downloads to: your own tenant | Reads only, GET-only in the archive. The agent drafts mail but never sends it, shares a file or forwards on its own |
 | Nothing of yours: code coming in | GitHub (this release, every byte checked), the npm registry (the Microsoft server), Homebrew or the vendors' own pinned downloads (node, ollama, Hammerspoon), the Ollama registry (the rewrite model) | Install time only |
 
@@ -301,6 +326,21 @@ It reads key NAMES and exit codes only — never a key.
 **What no check here can see:** an endpoint on this Mac that itself relays to the cloud (a local proxy
 in front of a cloud model), and Copilot CLI's own usage telemetry, which has no off switch short of
 running it offline against a local model (`COPILOT_OFFLINE=true` with `COPILOT_PROVIDER_BASE_URL`).
+
+## Not carried, by design
+
+This repo is the **portable** part of one working setup, cut to what a stranger's Mac can use as it
+is. What it leaves out, it leaves out on purpose:
+
+| Left out | Why |
+|---|---|
+| Your agent's permissions, allowlists, trusted folders and credentials | They authorize the agent; a tool that could widen its own permissions has no permission model. Always yours, in chat |
+| A personal fleet of hooks, skills, rules and plugins, and a long global instructions file | They encode one person's habits and account layout. It ships three hooks, one skill (`/handoff`) and a 6 KB repo-agnostic instructions file, and your own replace them freely |
+| The agent launcher's own settings — model and effort defaults, auto-update pinning, subagent depth | Choices, not setup. The one place it pins an agent's auto-update is the successor `/handoff` starts, which must not change under a running chain |
+| MCP servers other than Microsoft 365 (browser automation and the like), `gh`, git's global config, tmux's config, keyboard remappers | Each is a preference or a second vendor to trust; none is needed for the workflow here |
+| A second model provider's CLI (Gemini, Codex) | Out of scope: the repo targets Claude Code and Copilot CLI, and a third agent is a third place your context goes |
+| The Copilot half's baseline | There is none to copy: the Copilot configuration is designed to match the Claude one, row by row, as the table above shows — not taken from a Mac that ran it |
+| The VoiceInk fork the original setup uses | This builds upstream VoiceInk v2.13, so what you install is what anyone can audit |
 
 ## What it will not do
 
