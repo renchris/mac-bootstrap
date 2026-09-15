@@ -110,7 +110,7 @@ curl'd run keeps only its verified copy of the release, under `~/.mac-bootstrap/
 <!-- Diagram source: assets/diagrams/module-selection.mmd — edit it, run `npm run diagrams`, commit the SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/module-selection-dark.svg">
-  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs statusline, instructions, hooks and pane_equalize; standard adds handoff, microsoft365, rewrite_model and reporting_off; full adds voiceink, screenshot, microsoft365_archive and shared_folders. handoff needs statusline and hooks, and microsoft365_archive needs microsoft365; each is added out loud when missing.">
+  <img src="assets/diagrams/module-selection-light.svg" alt="--profile full includes --profile standard, which includes --profile lite (the default). lite installs agent_cli (Claude Code and Copilot CLI), statusline, instructions, hooks and pane_equalize; standard adds handoff, microsoft365, rewrite_model and reporting_off; full adds voiceink, screenshot, microsoft365_archive and shared_folders. handoff needs statusline and hooks, and microsoft365_archive needs microsoft365; each is added out loud when missing.">
 </picture>
 
 Profiles are cut by blast radius; `lite` is the default because it is the largest set that asks

@@ -1,6 +1,7 @@
 flowchart LR
   FULL(["--profile full"]) -->|"includes"| STD(["--profile standard"])
   STD -->|"includes"| LITE(["--profile lite · the default"])
+  LITE --> agents["agent_cli<br/><i>Claude Code + Copilot CLI</i>"]
   LITE --> statusline["statusline<br/><i>context-% in the status line</i>"]
   LITE --> instructions["instructions<br/><i>one instructions file</i>"]
   LITE --> hooks["hooks<br/><i>lifecycle hooks</i>"]
@@ -20,7 +21,7 @@ flowchart LR
   classDef std fill:@gold-bg,stroke:@gold-fg,color:@text
   classDef full fill:@red-bg,stroke:@red-fg,color:@text
   classDef prof fill:@gray-bg,stroke:@blue-fg,color:@text-bright
-  class statusline,instructions,hooks,panes lite
+  class agents,statusline,instructions,hooks,panes lite
   class handoff,rewrite,microsoft365,reporting std
   class voiceink,screenshot,archive,shared full
   class LITE,STD,FULL prof
