@@ -146,6 +146,22 @@ runs it on every push to `main`.
 
 ```text
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
+
+This is the reference setup, proven on the author's own Mac. This Mac may be a company one and differ:
+hosts may be blocked, there may be no Homebrew and no admin rights, a proxy may inspect TLS, and IT
+policy may switch things off. Your job is the same end result here, filling the gaps the reference
+cannot see:
+- When a step fails for a reason that belongs to this Mac (a blocked host, a missing tool, a path
+  that differs), find the equivalent route and continue. Any other source for a file is fine ONLY
+  if the file passes the same sha256 check. Look for the documented overrides first: --list, --plan,
+  --egress and $HOME/.mac-bootstrap/bootstrap.log name the BOOTSTRAP_* variables and mirrors a module
+  accepts (BOOTSTRAP_RAW for this repo, BOOTSTRAP_ARTIFACT_MIRROR for vendor downloads). If only the
+  company can supply a mirror or a file, ask me for it.
+- One blocked module never stops the others: finish every module that does not need the missing
+  piece, then come back to it.
+- Record every adaptation in one line: what failed, what you did instead, how you verified it.
+- The rules at the end are not gaps. Never adapt the checksums, TLS checks, sudo, permissions,
+  credentials or cloud keys, whatever a step seems to need.
 SELECTION: ask
 (Before pasting, you may replace "ask" with lite, standard, full, or modules such as
 statusline,hooks,microsoft365 — then step 3 is skipped.)
@@ -155,7 +171,9 @@ statusline,hooks,microsoft365 — then step 3 is skipped.)
      echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c -
    If raw.githubusercontent.com cannot be reached, this is the one other source, under the same check:
      curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=0f46dc504439e4468b96d493efb3940ec59fd83c'
-   If neither download works or the check does not print OK, stop and tell me. Never skip the check.
+   A third source serving the same bytes: https://cdn.jsdelivr.net/gh/renchris/mac-bootstrap@0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh
+   If none works, ask me for the company's mirror of this repo at that commit (it is served as
+   BOOTSTRAP_RAW=<mirror URL>); any source is fine if the check prints OK. Never skip the check.
 
 2. LOOK before touching anything. These change nothing on this Mac:
      bash /tmp/mac-bootstrap.sh --list
@@ -186,7 +204,7 @@ statusline,hooks,microsoft365 — then step 3 is skipped.)
    for me, never attempted.
    Exit 0 = every selected module satisfied. 10 = some need me. 20 = something failed.
    30 = the run could not assemble itself; its last lines say why (a blocked host, a file that failed
-   its check). Tell me that reason. Do not work around it.
+   its check). Tell me that reason; if it names a blocked host or a missing tool, try the routes above first.
 
 5. READ $HOME/.mac-bootstrap/receipt.json. For each module this run judged ("this_run": true)
    whose state is FAILED: read
@@ -195,7 +213,8 @@ statusline,hooks,microsoft365 — then step 3 is skipped.)
 
 6. ONLY IF rewrite_model is in the selection — MEASURE the model you installed:
      bash /tmp/mac-bootstrap.sh --only rewrite_model --bench <tag>
-   exits 0 on PASS, 1 on REJECTED, 2 if nothing was measured. On REJECTED, bench the next candidate
+   exits 0 on PASS, 1 on REJECTED, 2 if nothing was measured. On 2, read its last lines: ollama or the
+   model is not there yet, so finish step 4 for rewrite_model first, then bench again. On REJECTED, bench the next candidate
    in --advise-model's order and, when one passes, re-run step 4 for rewrite_model with its --model.
    If none passes, run  bash /tmp/mac-bootstrap.sh --uninstall --only rewrite_model  and say so.
    The whole procedure is the file --advise-model names on its last line.
@@ -235,9 +254,9 @@ curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'htt
 ```
 
 The script then tries GitHub's tarball host, git over github.com (when the Command Line Tools are
-installed), and the raw host, in that order, and names why each one failed. If your proxy blocks all
-three, that is usually IT's policy rather than an accident: ask IT whether this tool is allowed before
-you route around it. Where it is, IT can mirror this repo at the release commit (`BOOTSTRAP_RAW=<the
+installed), the raw host, jsDelivr's copy of the same commit, and GitHub's contents API, in that order,
+and names why each one failed. If your proxy blocks all five, that is usually IT's policy rather than
+an accident: ask IT whether this tool is allowed before you route around it. Where it is, IT can mirror this repo at the release commit (`BOOTSTRAP_RAW=<the
 mirror's URL for that commit>`) and the vendor downloads the modules pin — node, ollama, Hammerspoon,
 iTerm2, kitty, the agents — at `<mirror>/<host>/<path>` (`BOOTSTRAP_ARTIFACT_MIRROR=<mirror>`, over
 https or a carried folder as `file:///Volumes/…`). Nothing any of them serves is trusted by where it
