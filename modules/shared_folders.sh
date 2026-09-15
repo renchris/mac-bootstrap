@@ -28,6 +28,9 @@
 #     or the Sync button on a client's site) is the human's; this module reports it as the gate.
 #   * It never writes permissions, allowlists or credentials. The deny rule that stops an agent
 #     editing through the link (`Edit(~/Library/CloudStorage/**)`) is the operator's to add in chat.
+#   * It never reaches a network. The OneDrive app does the syncing; the converter runs pandoc only
+#     sandboxed and markitdown only when it cannot transcribe audio (see markdown-convert.sh), and our
+#     own scripts come from the verified release tree the driver unpacked, never from a fetch.
 #
 # TEST SEAM (module-scoped; CONTRACT.md §5 does not carry it):
 #   SHARED_FOLDERS_CLOUD_DIR  replaces $HOME/Library/CloudStorage — where the OneDrive* roots are
@@ -57,41 +60,23 @@ shared_folders_short_path() {
 }
 
 # ── asset sources ────────────────────────────────────────────────────────────────────────────
-# shared_folders_local_source <asset-relpath> — the clone beside bootstrap.sh, then the cache this
-# rail fills. Never the network: verify_ and gate_ use this, and neither may fetch.
-shared_folders_local_source() {
-  local rel="${1:-}" c
-  for c in "${BOOTSTRAP_ASSETS:-}/$rel" "$(shared_folders_state_dir)/assets/$rel"; do
-    case "$c" in /*) : ;; *) continue ;; esac
-    [ -r "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  return 1
-}
-
-# shared_folders_source <asset-relpath> — the local source, else the pinned raw URL. Never partial,
-# and never a moving ref: a branch name is not a pin.
+# shared_folders_source <asset-relpath> — the file in the release tree the driver unpacked and
+# verified against its manifest ($BOOTSTRAP_ASSETS), and nowhere else: never a fetch of its own, and
+# never an older cache. rc 1 when there is none.
 shared_folders_source() {
-  local rel="${1:-}" dest code
-  shared_folders_local_source "$rel" && return 0
-  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
-  command -v curl >/dev/null 2>&1 || return 1
-  dest="$(shared_folders_state_dir)/assets/$rel"
-  mkdir -p "$(dirname "$dest")" 2>/dev/null || return 1
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$rel" 2>/dev/null)" || code=""
-  if [ "$code" = "200" ] && [ -s "$dest.part" ]; then
-    mv -f "$dest.part" "$dest" 2>/dev/null && { printf '%s' "$dest"; return 0; }
-  fi
-  rm -f "$dest.part" 2>/dev/null
+  local c="${BOOTSTRAP_ASSETS:-}/${1:-}"
+  case "$c" in /*) : ;; *) return 1 ;; esac
+  [ -r "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   return 1
 }
 
 # shared_folders_current <installed> <asset-relpath> — rc 0 iff the installed copy is a regular,
-# executable file, byte-identical (cmp — not the cp that wrote it) to the shipped source whenever a
-# local source is reachable. With no clone and no cache the executions in verify_ are what we have.
+# executable file, byte-identical (cmp — not the cp that wrote it) to the shipped source whenever the
+# release tree is reachable. Without it the executions in verify_ are what we have.
 shared_folders_current() {
   local inst="${1:-}" rel="${2:-}" src
   [ -f "$inst" ] && [ ! -L "$inst" ] && [ -x "$inst" ] || return 1
-  src="$(shared_folders_local_source "$rel")" || return 0
+  src="$(shared_folders_source "$rel")" || return 0
   cmp -s "$src" "$inst"
 }
 
@@ -282,6 +267,15 @@ what_shared_folders()    { printf '%s' 'a shared OneDrive or SharePoint folder r
 cost_shared_folders()    { printf '%s' 'two small scripts. Needs the OneDrive app signed in and each folder added once with Add shortcut to My files (or Sync on a client'\''s site); Office and PDF views need pandoc or markitdown.'; }
 profile_shared_folders() { printf '%s' 'full'; }
 
+# egress_ — declared, and empty: nothing this module installs or runs reaches a network. The OneDrive
+# app, which the person set up, does all the syncing. The converter's tools are configured with zero
+# egress: pandoc runs --sandbox (measured: no request even for an html naming remote images), and
+# markitdown runs only under a Python that cannot import speech_recognition, with no -d, --use-cu or -p,
+# on a ./ or / path that is never read as a URL (markdown-convert.sh's header has the four network
+# converters and why each is unreachable). Our own two scripts come from the release tree the driver
+# already fetched and verified, so there is no install-time host either.
+egress_shared_folders() { return 0; }
+
 verify_shared_folders() {
   local bin conv out link rel url tab first=""
   bin="$(shared_folders_bin)"; conv="$(shared_folders_converter)"
@@ -389,7 +383,7 @@ EOF
 # already identical are never rewritten, so a second run changes nothing.
 shared_folders_land() {
   local rel="$1" dest="$2" src out
-  src="$(shared_folders_source "$rel")" || { bootstrap_warn "shared_folders: cannot find or fetch assets/$rel"; return 1; }
+  src="$(shared_folders_source "$rel")" || { bootstrap_warn "shared_folders: assets/$rel is not in the release tree (BOOTSTRAP_ASSETS=${BOOTSTRAP_ASSETS:-unset}); nothing is fetched to make up for it"; return 1; }
   if [ ! -L "$dest" ] && [ -f "$dest" ] && cmp -s "$src" "$dest"; then
     [ -x "$dest" ] || chmod 755 "$dest" 2>/dev/null
     return 0
