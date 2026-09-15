@@ -9,6 +9,8 @@
 #   bash bootstrap.sh                  in a terminal: a menu to pick modules. Without one: the default profile
 #   bash bootstrap.sh --pick           the menu, even when flags pre-select; --no-pick never shows it
 #   bash bootstrap.sh --verify         re-read the machine cold; change nothing
+#   bash bootstrap.sh --egress         every host each module can reach, and a check that no local
+#                                      data can reach a cloud AI service; changes nothing
 #   bash bootstrap.sh --only statusline      re-drive ONE module (merges into the receipt)
 #   bash bootstrap.sh --only rewrite_model --bench qwen3:8b     measure a candidate, write nothing
 #         --bench exits on the GATE's scale, not the install scale: 0 the model is fit ·
@@ -92,7 +94,7 @@ driver_fail() { printf '  x %s\n' "$*" >&2; printf '%s FAIL %s\n' "$(date -u +%F
 driver_log()  { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&3 2>/dev/null; return 0; }
 
 driver_help() {
-  sed -n '2,34p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
+  sed -n '2,36p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
 }
 
 # ── flags ────────────────────────────────────────────────────────────────────────────────────
@@ -109,6 +111,7 @@ while [ $# -gt 0 ]; do
     --list)      BOOTSTRAP_MODE=list ;;
     --plan)      BOOTSTRAP_MODE=plan ;;
     --manifest)  BOOTSTRAP_MODE=manifest ;;
+    --egress)    BOOTSTRAP_MODE=egress ;;
     --profile)   [ $# -ge 2 ] || { printf 'bootstrap: --profile needs a name (lite|standard|full|all)\n' >&2; exit 30; }
                  BOOTSTRAP_PROFILE="$2"; shift ;;
     --except)    [ $# -ge 2 ] || { printf 'bootstrap: --except needs a module name\n' >&2; exit 30; }
@@ -366,7 +369,60 @@ driver_cmd_list() {
   printf '    standard  lite + the succession engine, a local rewrite model and Outlook.\n'
   printf '    full      standard + the app build, the screenshot pipeline, the Microsoft 365 markdown archive and shared-folder links. Apple ID, ~9 GB.\n\n'
   printf '  SELECT      --pick (a menu)   --profile <name>   --only a,b,c   --except x\n'
-  printf '  INSPECT     --list   --plan   --manifest   --verify\n\n'
+  printf '  INSPECT     --list   --plan   --manifest   --egress   --verify\n\n'
+}
+
+# ── --egress — where your data can go. Writes nothing. ───────────────────────────────────────
+# Two halves, and the second is the one that counts. The first prints what each module DECLARES
+# through the optional `egress_<m>` verb: one line per host, `<host> <install|run> <purpose>`,
+# where a declared-but-empty list means "no network at all". A module that declares nothing is
+# printed as UNDECLARED and fails the report, because silence must never read as "local".
+# The second half does not trust any declaration: assets/local-only-check.sh reads the machine —
+# the configuration of every app and agent a module sets up — and fails when anything there can
+# send local data to a cloud AI service. Exit 0 clean · 20 a cloud path is live or a module is
+# undeclared · 30 the check could not run.
+driver_cmd_egress() {
+  local m f out rc=0 undeclared="" host when purpose first
+  printf '\n  EGRESS — every host a module can reach. "install" = only while it installs; "run" = afterwards.\n\n'
+  for m in $BOOTSTRAP_MANIFEST; do
+    f="$(driver_module_file "$m")" || { printf '    %-21s (module file unavailable)\n' "$m"; rc=30; continue; }
+    if ! driver_has_verb "$f" "$m" egress; then
+      printf '    %-21s UNDECLARED — this module does not say where it connects\n' "$m"
+      undeclared="$undeclared $m"; continue
+    fi
+    out="$(driver_call "$f" "$m" egress 2>/dev/null)" || out=""
+    if [ -z "$out" ]; then printf '    %-21s none — no network at all\n' "$m"; continue; fi
+    first=1
+    while read -r host when purpose; do
+      [ -n "$host" ] || continue
+      if [ "$first" = 1 ]; then printf '    %-21s ' "$m"; first=0; else printf '    %-21s ' ''; fi
+      printf '%-34s %-8s %s\n' "$host" "$when" "$purpose"
+    done <<EOF
+$out
+EOF
+  done
+  printf '\n  Every coding agent sends what it reads to its own model provider — Claude Code to Anthropic (or\n'
+  printf '  the Bedrock or Vertex account your company routes it to), Copilot CLI to GitHub (or the provider\n'
+  printf '  COPILOT_PROVIDER_BASE_URL names). That is how an agent works; no module can change it, and none adds to it.\n'
+  printf '\n  LOCAL-ONLY CHECK — read from this machine, not from the declarations above\n\n'
+  # Executed, never sourced: it is a second, independent reader of what the modules configured.
+  f="$BOOTSTRAP_ASSETS/local-only-check.sh"
+  if [ -r "$f" ]; then
+    /bin/bash "$f"
+    case $? in
+      0) : ;;
+      1) [ "$rc" = 30 ] || rc=20 ;;
+      *) rc=30 ;;
+    esac
+  else
+    printf '    could not run: this release has no assets/local-only-check.sh\n'; rc=30
+  fi
+  if [ -n "$undeclared" ]; then
+    printf '\n  UNDECLARED:%s — a module that does not declare its hosts is never assumed to be local.\n' "$undeclared"
+    [ "$rc" = 30 ] || rc=20
+  fi
+  printf '\n'
+  return "$rc"
 }
 
 # ── --pick — the menu ─────────────────────────────────────────────────────────────────────────
@@ -900,6 +956,7 @@ else
     list)     driver_cmd_list;     exit $? ;;
     plan)     driver_cmd_plan;     exit $? ;;
     manifest) driver_cmd_manifest; exit $? ;;
+    egress)   driver_cmd_egress;   exit $? ;;
   esac
 
   # THE MENU, before anything is judged or written. It is closed again before any module runs, so
