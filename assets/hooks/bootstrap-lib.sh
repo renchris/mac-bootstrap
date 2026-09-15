@@ -638,6 +638,127 @@ bootstrap_trunk() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
+# A FRESH CORPORATE MAC — the one place a module asks about it.
+# The person is usually a STANDARD user: no admin, so no Homebrew installer and no /Applications.
+# IT may manage the agents' own policy files. Every module used to carry its own search list, and
+# none of them looked anywhere a standard user can install, so a tool that user CAN have was
+# reported missing and the gesture offered was one they cannot perform.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+# bootstrap_is_admin — 0 iff this user is in the admin group. BOOTSTRAP_ASSUME_STANDARD_USER=1 answers
+# no, so the standard-user path is tested on an admin's Mac rather than asserted.
+bootstrap_is_admin() {
+  [ "${BOOTSTRAP_ASSUME_STANDARD_USER:-0}" = 1 ] && return 1
+  /usr/bin/id -Gn 2>/dev/null | /usr/bin/tr ' ' '\n' | /usr/bin/grep -qx admin
+}
+
+# bootstrap_tools_dir — where a pinned, user-owned tool is unpacked: no admin, no Homebrew, and it
+# goes when the state dir goes. Its bin/ is searched first.
+bootstrap_tools_dir() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/tools"; }
+
+# bootstrap_find_tool <name> — an absolute path to an executable, or rc 1. The pinned user-owned copy,
+# then Homebrew's two prefixes, then PATH (only an absolute answer counts: `command -v` also names
+# functions and builtins).
+bootstrap_find_tool() {
+  local c
+  for c in "$(bootstrap_tools_dir)/bin/$1" "/opt/homebrew/bin/$1" "/usr/local/bin/$1"; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  c="$(command -v "$1" 2>/dev/null)" || return 1
+  case "$c" in /*) [ -x "$c" ] && { printf '%s' "$c"; return 0; } ;; esac
+  return 1
+}
+
+# bootstrap_find_app <Name.app> — /Applications, then $HOME/Applications, where a standard user can
+# install (measured: /Applications is root:admin 775).
+bootstrap_find_app() {
+  local c
+  for c in "/Applications/$1" "$HOME/Applications/$1"; do [ -d "$c" ] && { printf '%s' "$c"; return 0; }; done
+  return 1
+}
+
+# bootstrap_fetch_pinned <url> <sha256> <dest> — download, and keep it ONLY if its sha256 is the one
+# pinned in the repo. rc 0 kept · 1 not fetched · 2 fetched but refused (deleted, never left half-way).
+# A file curl writes carries no com.apple.quarantine flag (measured), so a signed binary fetched this
+# way runs with no Gatekeeper prompt — which is exactly why the hash is not optional.
+bootstrap_fetch_pinned() {
+  local url="${1:-}" want="${2:-}" dest="${3:-}" got
+  [ -n "$url" ] && [ -n "$want" ] && [ -n "$dest" ] || return 1
+  /bin/mkdir -p "$(/usr/bin/dirname "$dest")" 2>/dev/null || return 1
+  /usr/bin/curl -fsSL --retry 2 -o "$dest.part" "$url" 2>/dev/null || { /bin/rm -f "$dest.part"; return 1; }
+  got="$(/usr/bin/shasum -a 256 "$dest.part" 2>/dev/null | /usr/bin/cut -d' ' -f1)"
+  if [ "$got" != "$want" ]; then
+    /bin/rm -f "$dest.part"
+    bootstrap_warn "pinned download refused: $url has sha256 ${got:-none}, the repo pins $want"
+    return 2
+  fi
+  /bin/mv -f "$dest.part" "$dest"
+}
+
+# bootstrap_brew <brew> <args…> — Homebrew with its analytics off. `brew install` otherwise reports each
+# install to Homebrew's analytics host, and nothing a module installs needs that to happen.
+bootstrap_brew() { local b="$1"; shift; HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1 "$b" "$@"; }
+
+# bootstrap_managed_sources <claude|copilot> — every policy file IT uses to manage that agent, in the
+# agent's own precedence order (server cache, per-user MDM, device MDM, files). These are the files
+# the agents themselves read, as this user, so what they can read a verify_ can read — and a verify_
+# that ignores them reports SATISFIED for a hook or a server the agent will never run.
+# BOOTSTRAP_MANAGED_ROOT prefixes the system paths, for tests.
+bootstrap_managed_sources() {
+  local r="${BOOTSTRAP_MANAGED_ROOT:-}" u f
+  u="$(/usr/bin/id -un 2>/dev/null)"
+  case "${1:-}" in
+    claude)
+      for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/remote-settings.json" \
+               "$r/Library/Managed Preferences/$u/com.anthropic.claudecode.plist" \
+               "$r/Library/Managed Preferences/com.anthropic.claudecode.plist" \
+               "$r/Library/Application Support/ClaudeCode/managed-settings.json" \
+               "$r/Library/Application Support/ClaudeCode/managed-settings.d"/*.json; do
+        [ -f "$f" ] && printf '%s\n' "$f"
+      done ;;
+    copilot)
+      for f in "$r/Library/Managed Preferences/$u/com.github.copilot.plist" \
+               "$r/Library/Managed Preferences/com.github.copilot.plist" \
+               "$r/Library/Application Support/GitHubCopilot/managed-settings.json"; do
+        [ -f "$f" ] && printf '%s\n' "$f"
+      done ;;
+  esac
+  return 0
+}
+
+# bootstrap_policy <claude|copilot> <key> [raw|json] — what IT set for <key>, from the first source
+# carrying it; rc 1 when none does. plutil reads JSON and plist alike.
+bootstrap_policy() {
+  local f v
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    v="$(/usr/bin/plutil -extract "$2" "${3:-raw}" -o - -- "$f" 2>/dev/null)" && { printf '%s' "$v"; return 0; }
+  done <<EOF
+$(bootstrap_managed_sources "${1:-}")
+EOF
+  return 1
+}
+
+# bootstrap_policy_restricts <claude|copilot> <hooks|mcp|skills> — 0 iff IT's policy reserves that
+# surface to itself, so what a module writes there is ignored by the agent. For hooks that is
+# allowManagedHooksOnly or disableAllHooks; for every surface, strictPluginOnlyCustomization set to true
+# or to a list naming it; for Claude Code's MCP, also a managed-mcp.json of any content.
+bootstrap_policy_restricts() {
+  local a="${1:-}" s="${2:-}" v
+  if [ "$s" = hooks ]; then
+    [ "$(bootstrap_policy "$a" allowManagedHooksOnly)" = true ] && return 0
+    [ "$(bootstrap_policy "$a" disableAllHooks)" = true ] && return 0
+  fi
+  if [ "$a" = claude ] && [ "$s" = mcp ]; then
+    [ -e "${BOOTSTRAP_MANAGED_ROOT:-}/Library/Application Support/ClaudeCode/managed-mcp.json" ] && return 0
+    [ "$(bootstrap_policy "$a" allowManagedMcpServersOnly)" = true ] && return 0
+  fi
+  v="$(bootstrap_policy "$a" strictPluginOnlyCustomization json)" || return 1
+  [ "$v" = true ] && return 0
+  printf '%s' "$v" | /usr/bin/grep -q "\"$s\""
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
 # SHIPPED FIXTURES —  bash bootstrap-lib.sh --selftest
 #
 # Not decoration. The empty-root-dict correction says: "Add the {} case as a shipped fixture … with the
@@ -809,6 +930,26 @@ bootstrap_selftest() {
   else
     printf '  --   [bootstrap_trunk case skipped: git unavailable — which is itself the fresh-Mac state]\n'
   fi
+
+  # ── 13. A pinned download is kept only when its hash is the pinned one. ────────────────────────
+  printf 'pinned bytes\n' > "$T/pin-src"
+  A="$(/usr/bin/shasum -a 256 "$T/pin-src" | /usr/bin/cut -d' ' -f1)"
+  bootstrap_fetch_pinned "file://$T/pin-src" "$A" "$T/pin-dst/got" 2>/dev/null; rc=$?
+  bootstrap_is "bootstrap_fetch_pinned keeps a file whose sha256 matches" "$rc/$([ -f "$T/pin-dst/got" ] && echo kept)" "0/kept"
+  bootstrap_fetch_pinned "file://$T/pin-src" "0000000000000000000000000000000000000000000000000000000000000000" "$T/pin-dst/bad" 2>/dev/null; rc=$?
+  bootstrap_is "control: a wrong sha256 is refused and nothing is left behind" "$rc/$(ls "$T/pin-dst" | /usr/bin/tr '\n' ' ')" "2/got "
+  bootstrap_is "BOOTSTRAP_ASSUME_STANDARD_USER=1 makes bootstrap_is_admin say no" "$(BOOTSTRAP_ASSUME_STANDARD_USER=1 bootstrap_is_admin && echo admin || echo standard)" "standard"
+
+  # ── 14. IT policy: read from the agents' own files; a list names the surfaces it reserves. ─────
+  A="$T/managed/Library/Application Support/ClaudeCode"; /bin/mkdir -p "$A"
+  arm="$(BOOTSTRAP_MANAGED_ROOT="$T/managed" CLAUDE_CONFIG_DIR="$T/none" bootstrap_policy_restricts claude hooks && echo locked || echo open)"
+  bootstrap_is "control: no policy file ⇒ hooks are open" "$arm" "open"
+  printf '{"allowManagedHooksOnly": true}\n' > "$A/managed-settings.json"
+  arm="$(BOOTSTRAP_MANAGED_ROOT="$T/managed" CLAUDE_CONFIG_DIR="$T/none" bootstrap_policy_restricts claude hooks && echo locked || echo open)"
+  bootstrap_is "allowManagedHooksOnly: true ⇒ hooks are IT's" "$arm" "locked"
+  printf '{"strictPluginOnlyCustomization": ["mcp"]}\n' > "$A/managed-settings.json"
+  arm="$(BOOTSTRAP_MANAGED_ROOT="$T/managed" CLAUDE_CONFIG_DIR="$T/none" bootstrap_policy_restricts claude hooks && echo locked || echo open)/$(BOOTSTRAP_MANAGED_ROOT="$T/managed" CLAUDE_CONFIG_DIR="$T/none" bootstrap_policy_restricts claude mcp && echo locked || echo open)"
+  bootstrap_is "strictPluginOnlyCustomization [mcp] reserves mcp and only mcp" "$arm" "open/locked"
 
   printf '\n%s/%s cases passed.\n' "$((bootstrap__t - bootstrap__f))" "$bootstrap__t"
   rm -rf "$T" 2>/dev/null
