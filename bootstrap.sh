@@ -543,7 +543,15 @@ driver_prune_rows() {
   done
 }
 
+# The CLOSED selection decides, never the raw --only list: driver_select adds each needs_ out loud,
+# and a module it added must then run. Measured before this: `--only handoff` announced "handoff
+# needs statusline — adding it", skipped statusline here, and exited 30 on its own "never
+# evaluated" check — so no module with a dependency could be installed on its own.
 driver_selected() {
+  if [ -n "$BOOTSTRAP_SELECTED" ]; then
+    case " $BOOTSTRAP_SELECTED " in *" $1 "*) return 0 ;; esac
+    return 1
+  fi
   [ -z "$BOOTSTRAP_ONLY" ] && return 0
   case " $BOOTSTRAP_ONLY " in *" $1 "*) return 0 ;; esac
   return 1
