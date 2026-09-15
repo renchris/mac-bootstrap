@@ -7,7 +7,7 @@ and **GitHub Copilot CLI 1.0.83**.
 you pick, and it installs what you picked:
 
 ```bash
-curl -fsSLo /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/a59042cf27c7c2e766e399f7245cc2fbe6a0f025/bootstrap.sh && echo "2a458518f990ba9fc1bd6a191932cfa775958d034b3f7f0390f30c7fcb3f2544  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
+curl -fsSLo /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh && echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
 ```
 
 It checks the script's sha256 before running a line of it, and the script checks every file it then
@@ -123,10 +123,10 @@ procedure** — and writes only to `$HOME/.mac-bootstrap/`.
 
 ### If an agent is already running, paste this
 
-Replace `a59042cf27c7c2e766e399f7245cc2fbe6a0f025` with the release commit — never `main`, whose
+Replace `0f46dc504439e4468b96d493efb3940ec59fd83c` with the release commit — never `main`, whose
 raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured). At
 that pinned commit `bootstrap.sh` is 1368 lines and `shasum -a 256` reads
-`2a458518f990ba9fc1bd6a191932cfa775958d034b3f7f0390f30c7fcb3f2544`; step 1 checks it,
+`097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414`; step 1 checks it,
 and anything else means stop. Fetched on its own it has no `modules/` beside it, so it makes a
 second fetch, from the commit pinned *inside* it — which is this one's parent, because a commit
 cannot contain its own sha. `scripts/release.sh --check` re-walks both hops anonymously, and CI
@@ -136,10 +136,10 @@ runs it on every push to `main`.
 You are setting up a Mac for an agent workflow. Work only in this terminal. Do not open a browser.
 
 1. FETCH — never pipe a script into a shell. Save it and check it; the check must print OK:
-     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/a59042cf27c7c2e766e399f7245cc2fbe6a0f025/bootstrap.sh
-     echo "2a458518f990ba9fc1bd6a191932cfa775958d034b3f7f0390f30c7fcb3f2544  /tmp/mac-bootstrap.sh" | shasum -a 256 -c -
+     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh
+     echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c -
    If raw.githubusercontent.com cannot be reached, this is the one other source, under the same check:
-     curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=a59042cf27c7c2e766e399f7245cc2fbe6a0f025'
+     curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=0f46dc504439e4468b96d493efb3940ec59fd83c'
    If neither download works or the check does not print OK, stop and tell me. Never skip the check.
 
 2. LOOK before touching anything. These change nothing on this Mac:
@@ -209,7 +209,7 @@ menu. To read it first, run the part before `&& bash` and then `less /tmp/mac-bo
 checksum, not the host, is what you trust:
 
 ```bash
-curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=a59042cf27c7c2e766e399f7245cc2fbe6a0f025' && echo "2a458518f990ba9fc1bd6a191932cfa775958d034b3f7f0390f30c7fcb3f2544  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
+curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=0f46dc504439e4468b96d493efb3940ec59fd83c' && echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
 ```
 
 The script then tries GitHub's tarball host, git over github.com (when the Command Line Tools are
