@@ -107,7 +107,28 @@ class ArchiveError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 const guardError = (m) => new ArchiveError('GUARD', 'GET-only guard: ' + m);
-const AUTH_PATTERN = /InteractionRequired|invalid_grant|not logged in|login first|re-login|--login|No valid token|Silent token acquisition failed|Failed to acquire token|No accounts found|Account '[^']*' not found/i;
+const AUTH_PATTERN = /InteractionRequired|invalid_grant|not logged in|login first|re-login|--login|No valid token|Silent token acquisition failed|Failed to acquire token|No accounts found|Account '[^']*' not found|AADSTS\d+/i;
+// What clears a sign-in Microsoft refused, by the AADSTS code it answered with — the meanings of
+// Microsoft's Entra error reference and Conditional Access pages, and the same ones the microsoft365
+// module's note prints. Two cannot be cleared by any sign-in on a Mac: token protection admits only
+// clients that sign in through Microsoft's identity broker, and this server is MSAL Node on its own.
+const SIGNIN_ADVICE = {
+  AADSTS65001: 'your tenant lets only an administrator approve this app\'s mail and calendar access; ask IT to grant admin consent, or to register their own app.',
+  AADSTS90094: 'your tenant lets only an administrator approve this app\'s mail and calendar access; ask IT to grant admin consent, or to register their own app.',
+  AADSTS90095: 'your tenant lets only an administrator approve this app\'s mail and calendar access; ask IT to grant admin consent, or to register their own app.',
+  AADSTS53000: 'your organization lets only compliant or managed devices sign in; ask IT to enrol this Mac (Company Portal), then sign in again.',
+  AADSTS53001: 'your organization lets only compliant or managed devices sign in; ask IT to enrol this Mac (Company Portal), then sign in again.',
+  AADSTS53003: 'a Conditional Access policy blocks it; if it is the code sign-in it blocks, sign in again with --auth-browser, otherwise ask IT which policy applies.',
+  AADSTS530036: 'Conditional Access blocks the device-code sign-in, and the token that sign-in left can never be used again; sign in again in the browser (--auth-browser).',
+  AADSTS530084: 'your organization requires token protection, which only apps signing in through Microsoft\'s identity broker (Company Portal) can meet; this server cannot meet it on any Mac, so ask IT to exempt it, or do without the archive.',
+  AADSTS7000112: 'the app the server signs in through is disabled, in your tenant or by its publisher; ask IT to enable it, or to register their own app.',
+  AADSTS50105: 'IT has not assigned you to this app; ask them to.',
+};
+function signInCode(msg) { const m = /AADSTS\d+/.exec(String(msg || '')); return m ? m[0] : null; }
+function signInAdvice(msg) {
+  const code = signInCode(msg);
+  return code ? 'Microsoft refused the sign-in (' + code + '): ' + (SIGNIN_ADVICE[code] || 'sign in again.') : null;
+}
 
 // ── small helpers ─────────────────────────────────────────────────────────────────────────────────
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -269,11 +290,13 @@ function cloudRootOf(root) {
   return null;
 }
 
-function loginCommand(cfg) {
+// A token IT's policy killed for being a device-code sign-in is replaced only by another flow.
+function loginCommand(cfg, why) {
   const env = [];
   if (cfg.tenant) env.push('MS365_MCP_TENANT_ID=' + shellQuote(cfg.tenant));
   if (cfg.client_id) env.push('MS365_MCP_CLIENT_ID=' + shellQuote(cfg.client_id));
-  return env.concat([shellQuote(cfg.node), shellQuote(cfg.server || '<server>'), '--login']).join(' ');
+  const flow = signInCode(why) === 'AADSTS530036' ? ['--login', '--auth-browser'] : ['--login'];
+  return env.concat([shellQuote(cfg.node), shellQuote(cfg.server || '<server>')], flow).join(' ');
 }
 
 // ── the MCP client ────────────────────────────────────────────────────────────────────────────────
@@ -1446,6 +1469,7 @@ async function commandRun(cfg, flags) {
   const client = new McpClient(cfg);
   let rc = EXIT.ok;
   let login = null;
+  let advice = null;
   const watchdog = setTimeout(() => { process.stdout.write('run: exceeded ' + RUN_BUDGET_MS / MINUTE + ' minutes; stopping\n'); process.exit(EXIT.partial); }, RUN_BUDGET_MS);
   watchdog.unref();
   try {
@@ -1466,8 +1490,9 @@ async function commandRun(cfg, flags) {
   } catch (e) {
     if (e.code === 'AUTH_DEAD') {
       rc = EXIT.authDead;
-      login = loginCommand(cfg);
-      log('sign-in needed (' + e.message + '). Run:\n' + login);
+      login = loginCommand(cfg, e.message);
+      advice = signInAdvice(e.message);
+      log('sign-in needed (' + e.message + ').' + (advice ? ' ' + advice : '') + ' Run:\n' + login);
     } else if (e.code === 'SERVER_FAILED') {
       rc = EXIT.serverFailed;
       log('the Microsoft 365 server failed: ' + e.message);
@@ -1487,7 +1512,7 @@ async function commandRun(cfg, flags) {
   const previous = readJson(path.join(stateDir(root), 'status.json')) || {};
   const classes = Object.assign({}, rc === EXIT.authDead || rc === EXIT.serverFailed ? previous.classes || {} : {}, tally.summary());
   const status = { run: { started: startedAt, finished: finishedAt, exit: rc, result: EXIT_NAMES[rc], window: win, meetings: ctx.meetingCount,
-    written: ctx.writer.written, unchanged: ctx.writer.unchanged, errors: ctx.errors.slice(0, 50), login, tenant: ctx.tenant }, classes };
+    written: ctx.writer.written, unchanged: ctx.writer.unchanged, errors: ctx.errors.slice(0, 50), login, advice, tenant: ctx.tenant }, classes };
   try {
     mkdirp(stateDir(root));
     fs.writeFileSync(path.join(stateDir(root), 'status.json'), JSON.stringify(status, null, 2) + '\n');
@@ -1620,6 +1645,14 @@ async function selftest() {
   let transportErr = null;
   try { parseToolResult({ content: [{ type: 'text', text: JSON.stringify({ error: 'fetch failed' }) }], isError: true }); } catch (e) { transportErr = e; }
   check('a tool error naming invalid_grant is AUTH_DEAD; "fetch failed" is not', authErr && authErr.code === 'AUTH_DEAD' && transportErr && transportErr.code === 'TRANSPORT');
+  let aadErr = null;
+  try { parseToolResult({ content: [{ type: 'text', text: JSON.stringify({ error: 'AADSTS530084: Access has been blocked by conditional access token protection policy' }) }], isError: true }); } catch (e) { aadErr = e; }
+  const lcfg = { node: '/n', server: '/s', tenant: 'organizations' };
+  check('an AADSTS code is AUTH_DEAD and names its fix: token protection, device-code block (browser login), disabled app; control: no code, no advice',
+    aadErr && aadErr.code === 'AUTH_DEAD' && /token protection/.test(signInAdvice(aadErr.message)) &&
+    /device-code/.test(signInAdvice('AADSTS530036: The refresh token is invalid')) && /--auth-browser$/.test(loginCommand(lcfg, 'AADSTS530036: x')) &&
+    /disabled/.test(signInAdvice('AADSTS7000112: UnauthorizedClientApplicationDisabled')) &&
+    signInAdvice('invalid_grant') === null && /--login$/.test(loginCommand(lcfg, 'invalid_grant')));
 
   // whose tenant: the caller's (MSAL homeAccountId) and the organizer's (the join URL's context)
   const mine = 'c0ffee00-1111-4222-8333-444455556666';
@@ -1973,7 +2006,11 @@ async function main(argv) {
     if (cmd === 'copilot-import' && positional.length === 2) return await commandImport(loadConfig(flags), positional[1]);
   } catch (e) {
     if (e.code === 'USAGE') { process.stderr.write(e.message + '\n'); return EXIT.usage; }
-    if (e.code === 'AUTH_DEAD') { process.stdout.write('sign-in needed (' + e.message + '). Run:\n' + loginCommand(loadConfig(flags)) + '\n'); return EXIT.authDead; }
+    if (e.code === 'AUTH_DEAD') {
+      const advice = signInAdvice(e.message);
+      process.stdout.write('sign-in needed (' + e.message + ').' + (advice ? ' ' + advice : '') + ' Run:\n' + loginCommand(loadConfig(flags), e.message) + '\n');
+      return EXIT.authDead;
+    }
     if (e.code === 'SERVER_FAILED') { process.stdout.write('the Microsoft 365 server failed: ' + e.message + '\n'); return EXIT.serverFailed; }
     if (e.code === 'LOCKED') { process.stdout.write(e.message + '\n'); return EXIT.partial; }
     process.stdout.write('failed: ' + (e.code ? e.message : (e && e.stack) || e) + '\n');

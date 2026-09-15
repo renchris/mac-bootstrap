@@ -642,36 +642,58 @@ microsoft365_policy_note() {
   printf '%s' "$out"
 }
 
+# microsoft365_signin_code <node> — the AADSTS code Microsoft answers the signed-in account with, or
+# nothing: no account in this tenant, or a sign-in that works, or a failure that carries no code.
+microsoft365_signin_code() {
+  local node="$1" out
+  microsoft365_account_in_tenant "$node" 2>/dev/null || return 0
+  out="$(microsoft365_run "$node" -e "$MICROSOFT365_LOGIN_JS" "$(microsoft365_entry)" 2>/dev/null)"
+  printf '%s' "$out" | LC_ALL=C grep -Eo 'AADSTS[0-9]+' | head -n 1
+}
+
 # microsoft365_signin_note — what signing in takes on THIS tenant. A work tenant's default consent
 # policy usually removes mail and calendar access from what a user may approve (managed-policy.md §6),
 # so "sign in and approve" is promised only where it can be true. When an account is already signed in
-# and failing, the AADSTS code Microsoft answered with names the fix.
+# and failing, the AADSTS code Microsoft answered with names the fix (Microsoft's own meanings, from
+# its Entra error reference and its Conditional Access pages).
+#
+# Two of them no sign-in on this Mac can clear. AADSTS530084 is Conditional Access "require token
+# protection for sign-in sessions": it admits only a client that signs in through Microsoft's identity
+# broker (Company Portal's SSO extension or Platform SSO) with a device-bound key — sign-in status 1008,
+# "client doesn't use an identity broker", is exactly this server, which is MSAL Node signing in on its
+# own, and --auth-browser is no different (it is the same MSAL, through a loopback redirect).
+# AADSTS530036 is the device-code sign-in itself being refused: the token it left is "protocol
+# tracked" by an authentication-flows policy and "will never be usable", so only a sign-in by another
+# flow — --auth-browser — replaces it.
 microsoft365_signin_note() {
-  local node="$1" tenant id code out
+  local node="$1" tenant id code
   tenant="$(microsoft365_tenant)"; id="$(microsoft365_client_id)"
-  if microsoft365_account_in_tenant "$node" 2>/dev/null; then
-    out="$(microsoft365_run "$node" -e "$MICROSOFT365_LOGIN_JS" "$(microsoft365_entry)" 2>/dev/null)"
-    code="$(printf '%s' "$out" | LC_ALL=C grep -Eo 'AADSTS[0-9]+' | head -n 1)"
-    case "$code" in
-      AADSTS65001|AADSTS90094|AADSTS90095)
-        printf 'Microsoft refused the sign-in (%s): your tenant lets only an administrator approve this app'\''s mail and calendar access; ask IT to grant admin consent to app %s, or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID.' "$code" "${id:-$MICROSOFT365_SOFTERIA_APP}"; return 0 ;;
-      AADSTS53000|AADSTS53001)
-        printf 'Microsoft refused the sign-in (%s): your organization lets only compliant or managed devices sign in; ask IT to enrol this Mac (Company Portal), then sign in again.' "$code"; return 0 ;;
-      AADSTS53003)
-        printf 'Microsoft refused the sign-in (%s): a Conditional Access policy blocks it; if it is the code sign-in it blocks, sign in again with --auth-browser, otherwise ask IT which policy applies.' "$code"; return 0 ;;
-      AADSTS50105)
-        printf 'Microsoft refused the sign-in (%s): IT has not assigned you to this app; ask them to.' "$code"; return 0 ;;
-      '') : ;;
-      *) printf 'the signed-in Microsoft account no longer works (%s); sign in again.' "$code"; return 0 ;;
-    esac
-  fi
+  code="$(microsoft365_signin_code "$node")"
+  case "$code" in
+    AADSTS65001|AADSTS90094|AADSTS90095)
+      printf 'Microsoft refused the sign-in (%s): your tenant lets only an administrator approve this app'\''s mail and calendar access; ask IT to grant admin consent to app %s, or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID.' "$code" "${id:-$MICROSOFT365_SOFTERIA_APP}"; return 0 ;;
+    AADSTS53000|AADSTS53001)
+      printf 'Microsoft refused the sign-in (%s): your organization lets only compliant or managed devices sign in; ask IT to enrol this Mac (Company Portal), then sign in again.' "$code"; return 0 ;;
+    AADSTS53003)
+      printf 'Microsoft refused the sign-in (%s): a Conditional Access policy blocks it; if it is the code sign-in it blocks, sign in again with --auth-browser, otherwise ask IT which policy applies.' "$code"; return 0 ;;
+    AADSTS530036)
+      printf 'Microsoft refused the sign-in (%s): your organization'\''s Conditional Access blocks the device-code sign-in, and the token that sign-in left can never be used again; sign in again in the browser (--auth-browser). If that is refused too, ask IT.' "$code"; return 0 ;;
+    AADSTS530084)
+      printf 'Microsoft refused the sign-in (%s): your organization requires token protection, which only apps signing in through Microsoft'\''s identity broker (Company Portal) can meet; this server cannot meet it on any Mac, so ask IT to exempt it from that policy, or do without it.' "$code"; return 0 ;;
+    AADSTS7000112)
+      printf 'Microsoft refused the sign-in (%s): the app this server signs in through (%s) is disabled — in your tenant or by its publisher; ask IT to enable it, or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID.' "$code" "${id:-$MICROSOFT365_SOFTERIA_APP}"; return 0 ;;
+    AADSTS50105)
+      printf 'Microsoft refused the sign-in (%s): IT has not assigned you to this app; ask them to.' "$code"; return 0 ;;
+    '') : ;;
+    *) printf 'the signed-in Microsoft account no longer works (%s); sign in again.' "$code"; return 0 ;;
+  esac
   case "$tenant" in
     consumers) printf 'the Microsoft 365 server is installed; sign in once with your personal Microsoft account and approve the app.' ;;
     *)
       if [ -n "$id" ]; then
         printf 'the Microsoft 365 server is installed; sign in once with your work account (%s), through the app your IT registered (%s).' "$tenant" "$id"
       else
-        printf 'the Microsoft 365 server is installed; sign in once with your work account (%s). Most work tenants let only an administrator approve this app'\''s mail and calendar access — if Microsoft answers AADSTS65001 or AADSTS90094, ask IT to grant admin consent to app %s (Softeria), or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID; AADSTS53000 means only compliant devices may sign in, and AADSTS53003 that Conditional Access blocks it (add --auth-browser if it is the code sign-in it blocks).' "$tenant" "$MICROSOFT365_SOFTERIA_APP"
+        printf 'the Microsoft 365 server is installed; sign in once with your work account (%s). Most work tenants let only an administrator approve this app'\''s mail and calendar access — if Microsoft answers AADSTS65001 or AADSTS90094, ask IT to grant admin consent to app %s (Softeria), or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID; AADSTS53000 means only compliant devices may sign in. The sign-in uses a device code, which IT'\''s Conditional Access may block (AADSTS53003, AADSTS530036) or flag to security as a phishing pattern: if so, add --auth-browser to sign in in the browser instead. Token protection (AADSTS530084), where IT requires it, cannot be met by this server on any Mac.' "$tenant" "$MICROSOFT365_SOFTERIA_APP"
       fi ;;
   esac
 }
@@ -871,7 +893,7 @@ note_microsoft365() {
 }
 
 gesture_microsoft365() {
-  local g node id pre brew
+  local g node id pre brew flow
   microsoft365_tls_load
   if g="$(microsoft365_gated_file)"; then
     printf 'open -e "%s"' "$(microsoft365_short_path "${g%%|*}")"
@@ -900,7 +922,9 @@ gesture_microsoft365() {
   id="$(microsoft365_client_id)"
   pre="MS365_MCP_TENANT_ID=$(microsoft365_tenant)"
   [ -n "$id" ] && pre="$pre MS365_MCP_CLIENT_ID=$id"
-  printf '%s "%s" "%s" --login' "$pre" "$(microsoft365_short_path "$node")" "$(microsoft365_short_path "$(microsoft365_entry)")"
+  # A token IT's policy killed for being a device-code sign-in is replaced only by another flow.
+  flow=""; [ "$(microsoft365_signin_code "$node")" = AADSTS530036 ] && flow=" --auth-browser"
+  printf '%s "%s" "%s" --login%s' "$pre" "$(microsoft365_short_path "$node")" "$(microsoft365_short_path "$(microsoft365_entry)")" "$flow"
 }
 
 install_microsoft365() {

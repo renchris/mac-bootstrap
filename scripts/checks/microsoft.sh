@@ -365,6 +365,30 @@ ms_out="$(ms_run "$CHECK_HOME" 'microsoft365_account_in_tenant() { return 0; }; 
 case "$ms_out" in *"(AADSTS53003)"*"Conditional Access"*"--auth-browser"*) pass "microsoft-tenant-conditional-access" ;; *) fail "microsoft-tenant-conditional-access" "$ms_out" ;; esac
 ms_out="$(ms_run "$CHECK_HOME" 'microsoft365_account_in_tenant() { return 0; }; microsoft365_run() { printf "{\"success\":false,\"message\":\"AADSTS65001: consent\"}\n"; }; microsoft365_signin_note /x')"
 case "$ms_out" in *"(AADSTS65001)"*"admin consent"*) pass "microsoft-tenant-admin-consent" ;; *) fail "microsoft-tenant-admin-consent" "$ms_out" ;; esac
+# The codes IT's policies answer with: each names its own fix, and a code with no entry stays generic.
+ms_code() {                                      # ms_code <message> <snippet> — a signed-in account Microsoft answers with <message>
+  ms_run "$CHECK_HOME" "microsoft365_account_in_tenant() { return 0; }; microsoft365_run() { printf '{\"success\":false,\"message\":\"%s\"}\n' '$1'; }; $2"
+}
+while read -r ms_c ms_want; do
+  [ -n "$ms_c" ] || continue
+  ms_out="$(ms_code "$ms_c: refused" 'microsoft365_signin_note /x')"
+  case "$ms_out" in *"($ms_c)"*) case "$ms_out" in *"$ms_want"*) pass "microsoft-tenant-$ms_c"; continue ;; esac ;; esac
+  fail "microsoft-tenant-$ms_c" "$ms_out"
+done <<'EOF'
+AADSTS530036 --auth-browser
+AADSTS530084 cannot meet it on any Mac
+AADSTS7000112 is disabled
+AADSTS99999 no longer works
+EOF
+MS_SIGNIN_READY='microsoft365_node() { printf /n; }; microsoft365_gated_file() { return 1; }; microsoft365_tls_untrusted() { return 1; }; microsoft365_node_blocked() { return 1; }; microsoft365_hooks_lock() { return 1; }; microsoft365_usable_agents() { printf claude; }; microsoft365_ready_for_sign_in() { return 0; }; microsoft365_signed_in() { return 1; }; gesture_microsoft365'
+case "$(ms_code 'AADSTS530036: refused' "$MS_SIGNIN_READY")" in *' --login --auth-browser') pass "microsoft-tenant-530036-gesture-browser" ;;
+  *) fail "microsoft-tenant-530036-gesture-browser" "$(ms_code 'AADSTS530036: refused' "$MS_SIGNIN_READY")" ;; esac
+case "$(ms_code 'AADSTS53000: refused' "$MS_SIGNIN_READY")" in *'" --login') pass "microsoft-tenant-gesture-device-code-control" ;;
+  *) fail "microsoft-tenant-gesture-device-code-control" "$(ms_code 'AADSTS53000: refused' "$MS_SIGNIN_READY")" ;; esac
+# Before any sign-in, the note already says a code sign-in may be blocked or flagged, and what is never met.
+ms_out="$(ms_run "$CHECK_HOME" "$MS_NO_ACCOUNT; microsoft365_signin_note /x")"
+case "$ms_out" in *"device code"*"Conditional Access may block"*"flag"*"--auth-browser"*"Token protection"*"any Mac"*) pass "microsoft-tenant-device-code-warned" ;;
+  *) fail "microsoft-tenant-device-code-warned" "$ms_out" ;; esac
 
 # ── 7. ARCHIVE — Background Items off is the person's switch, and re-run hints name BOOTSTRAP_ENTRY ──
 MS_BTM_ON="$(printf '\tdisabled services = {\n\t\t"com.mac-bootstrap.microsoft365-archive" => enabled\n\t\t"com.other" => disabled\n\t}')"
