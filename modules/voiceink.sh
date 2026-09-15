@@ -70,7 +70,10 @@
 #     the deploy, because an agent left over from an earlier setup is exactly the case that bites.
 # CMAKE-MISSING  cmake is the SIXTH human gesture and it was missing from the design: it is in NEITHER
 #     /usr/bin NOR Xcode NOR CommandLineTools, and Homebrew is not on a fresh Mac either. It is
-#     the first row of the human-steps file.
+#     reported AFTER the Xcode steps, not first: the licence and xcode-select need root, and on a
+#     standard account printing cmake first sent the person to `open https://brew.sh` — an
+#     installer they cannot run — while the real blocker, one only an administrator can clear,
+#     sat second.
 # WHISPER-FIRST  `make local`'s `setup: whisper` is guarded by `if [ ! -d "$(FRAMEWORK_PATH)" ]`, so the
 #     macOS-only framework built in step 2 is NOT clobbered by the 7-platform script. The step
 #     ordering — whisper BEFORE make local — is load-bearing; inverting it costs 15–25 minutes.
@@ -108,6 +111,10 @@ BOOTSTRAP_VOICEINK_LAUNCH="${BOOTSTRAP_VOICEINK_LAUNCH:-1}"        # 0 = never S
 # upstream. Set it to 1 only deliberately, and check the result in the app.
 BOOTSTRAP_VOICEINK_ALLOW_PATCH="${BOOTSTRAP_VOICEINK_ALLOW_PATCH:-0}"
 BOOTSTRAP_VOICEINK_BUNDLE_ID=com.prakashjoshipax.VoiceInk
+# The preference domain the defaults writes go to. A seam ONLY so a test can point them at an
+# absolute .plist path under its sandbox (`defaults` writes that file directly, measured); the
+# codesign identifier stays the bundle id whatever this says.
+BOOTSTRAP_VOICEINK_DOMAIN="${BOOTSTRAP_VOICEINK_DOMAIN:-$BOOTSTRAP_VOICEINK_BUNDLE_ID}"
 BOOTSTRAP_VOICEINK_MIN_FREE_GB="${BOOTSTRAP_VOICEINK_MIN_FREE_GB:-12}"
 
 voiceink_steps_file() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/voiceink-human-steps.txt"; }
@@ -158,6 +165,16 @@ voiceink_brew() {
     [ -x "$c" ] && { printf '%s' "$c"; return 0; }
   done
   return 1
+}
+
+# voiceink_brew_usable — a brew THIS user can install with: its Cellar is writable. On a corporate Mac
+# an administrator usually installed Homebrew, so the prefix is theirs and `brew install` fails for
+# everyone else. BOOTSTRAP_ASSUME_STANDARD_USER=1 stands for exactly that shape.
+voiceink_brew_usable() {
+  local b
+  b="$(voiceink_brew)" || return 1
+  [ "${BOOTSTRAP_ASSUME_STANDARD_USER:-0}" = 1 ] && return 1
+  [ -w "$(/usr/bin/dirname "$(/usr/bin/dirname "$b")")/Cellar" ]
 }
 
 # Prints the lowercase SHA-1 of a VALID code-signing identity whose line contains "<cn>".
@@ -286,6 +303,17 @@ what_voiceink()    { printf '%s' 'a local build of the open-source VoiceInk dict
 cost_voiceink()    { printf '%s' 'Xcode ~9 GB via the App Store (Apple ID), cmake, two sudo commands, ~10 min of building.'; }
 profile_voiceink() { printf '%s' 'full'; }
 
+# Every host this module reaches, or sets the app up to reach. The cloud AI and transcription hosts
+# the app CAN reach are not listed: they need an API key the person saves in the app, and
+# rewrite_model's verify is the reader that fails when one is.
+egress_voiceink() {
+  printf '%s\n' \
+    'github.com install git clone of Beingpax/VoiceInk and ggerganov/whisper.cpp, and the SwiftPM packages make local resolves' \
+    'release-assets.githubusercontent.com install SwiftPM binary targets (Sparkle, NemoTextProcessing), redirected from github.com' \
+    'huggingface.co run transcription and Refine model downloads, only when the person downloads one in the app' \
+    'beingpax.github.io run the Sparkle appcast, only when the person clicks Check for Updates (automatic checks and announcements are switched off before first launch)'
+}
+
 verify_voiceink() {
   local app dr leaf rc
   app="$BOOTSTRAP_VOICEINK_APP"
@@ -333,12 +361,11 @@ voiceink_leaf_matches_valid_identity() {
 # the human gates — DETECTED and RECORDED, never attempted
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
-# Prints one blocker id per line, in the order the human-steps file lists them (CMAKE-MISSING: cmake first).
-# Empty output ⇒ nothing here needs a human.
+# Prints one blocker id per line, in the order the human-steps file lists them: the Xcode steps first
+# (the licence and xcode-select need root, so they are the ones a standard user must take to an
+# administrator), then cmake (CMAKE-MISSING), then signing. Empty output ⇒ nothing here needs a human.
 voiceink_blockers() {
   local out xcapp
-  voiceink_cmake >/dev/null 2>&1 || printf 'cmake\n'
-
   if ! out="$(voiceink_xcodebuild_probe)"; then
     case "$out" in
       *icense*)                                    printf 'license\n' ;;
@@ -347,19 +374,31 @@ voiceink_blockers() {
     esac
   fi
 
+  voiceink_cmake >/dev/null 2>&1 || printf 'cmake\n'
+
   voiceink_identity_cn >/dev/null 2>&1 || printf 'signing\n'
 }
 
 voiceink_blocker_note() {
   case "$1" in
-    cmake)       if voiceink_brew >/dev/null 2>&1; then
+    cmake)       if voiceink_brew_usable; then
                    printf 'cmake is missing and whisper.cpp cannot build without it (it is in neither /usr/bin nor Xcode nor CommandLineTools)'
+                 elif ! bootstrap_is_admin; then
+                   printf 'cmake is missing and whisper.cpp cannot build without it; installing it needs Homebrew, which only an administrator can set up here — ask IT to install cmake'
                  else
                    printf 'cmake is missing, and so is Homebrew — whisper.cpp cannot build without cmake'
                  fi ;;
     xcode)       printf 'the full Xcode is not installed (~9 GB, App Store, needs an Apple ID); xcodebuild and the macOS SDK are Xcode-only' ;;
-    license)     printf 'the Xcode licence has not been accepted, so xcodebuild refuses to run' ;;
-    xcodeselect) printf 'Xcode is installed but xcode-select points somewhere else (CommandLineTools?)' ;;
+    license)     if bootstrap_is_admin; then
+                   printf 'the Xcode licence has not been accepted, so xcodebuild refuses to run'
+                 else
+                   printf 'the Xcode licence has not been accepted, so xcodebuild refuses to run — accepting it needs root, so an administrator must run `sudo xcodebuild -license accept` on this Mac (ask IT)'
+                 fi ;;
+    xcodeselect) if bootstrap_is_admin; then
+                   printf 'Xcode is installed but xcode-select points somewhere else (CommandLineTools?)'
+                 else
+                   printf 'Xcode is installed but xcode-select points somewhere else (CommandLineTools?) — changing it needs root, so ask an administrator (IT) to point it at Xcode'
+                 fi ;;
     signing)     if voiceink_cert_present_untrusted "$BOOTSTRAP_VOICEINK_CERT_CN" || voiceink_cert_present_untrusted "$BOOTSTRAP_VOICEINK_CERT_ALT"; then
                    printf 'the "%s" certificate exists but is not TRUSTED for code signing — the Keychain trust dialog was cancelled' "$BOOTSTRAP_VOICEINK_CERT_CN"
                  else
@@ -369,14 +408,18 @@ voiceink_blocker_note() {
   esac
 }
 
+# Never a gesture the person cannot perform: a standard user cannot sudo or run the Homebrew
+# installer, so for them the root steps print NOTHING and the note names who can.
 voiceink_blocker_gesture() {
   local xcapp
   case "$1" in
-    cmake)       if voiceink_brew >/dev/null 2>&1; then printf 'brew install cmake'
-                 else printf 'open "https://brew.sh"'; fi ;;
+    cmake)       if voiceink_brew_usable; then printf 'brew install cmake'
+                 elif bootstrap_is_admin; then printf 'open "https://brew.sh"'
+                 else printf ''; fi ;;
     xcode)       printf 'open "https://apps.apple.com/app/xcode/id497799835"' ;;
-    license)     printf 'sudo xcodebuild -license accept' ;;
-    xcodeselect) xcapp="$(voiceink_xcode_app)" || xcapp=/Applications/Xcode.app
+    license)     if bootstrap_is_admin; then printf 'sudo xcodebuild -license accept'; else printf ''; fi ;;
+    xcodeselect) bootstrap_is_admin || { printf ''; return 0; }
+                 xcapp="$(voiceink_xcode_app)" || xcapp=/Applications/Xcode.app
                  printf 'sudo xcode-select -s %s/Contents/Developer' "$xcapp" ;;
     signing)     printf 'bash ~/.mac-bootstrap/voiceink-signing-identity.sh' ;;
     *)           printf '' ;;
@@ -427,10 +470,10 @@ voiceink_write_steps() {
     printf 'VoiceInk (voiceink) — every step that needs a human.\n'
     printf 'Written %s. Re-read it after each bootstrap run; it is regenerated, not appended.\n' "$(date -u +%FT%TZ)"
     printf '\nBEFORE THE BUILD — each one blocks it. Status is read from this machine, now.\n\n'
-    voiceink_step_row cmake       "$blockers" 'Install cmake. whisper.cpp does not build without it, and cmake is on NO stock Mac: not in /usr/bin, not in Xcode, not in CommandLineTools. If Homebrew is absent too, install it first — its installer asks for your password and a RETURN.'
     voiceink_step_row xcode       "$blockers" 'Install the full Xcode (~9 GB). Needs an Apple ID and the App Store. Command Line Tools are NOT enough: xcodebuild and the macOS SDK ship only with Xcode.'
-    voiceink_step_row license     "$blockers" 'Accept the Xcode licence. Needs root.'
-    voiceink_step_row xcodeselect "$blockers" 'Point xcode-select at Xcode rather than CommandLineTools. Needs root.'
+    voiceink_step_row license     "$blockers" 'Accept the Xcode licence. Needs root: on a standard account an administrator (IT) must do it.'
+    voiceink_step_row xcodeselect "$blockers" 'Point xcode-select at Xcode rather than CommandLineTools. Needs root: on a standard account an administrator (IT) must do it.'
+    voiceink_step_row cmake       "$blockers" 'Install cmake. whisper.cpp does not build without it, and cmake is on NO stock Mac: not in /usr/bin, not in Xcode, not in CommandLineTools. If Homebrew is absent too, install it first — its installer asks for an administrator password and a RETURN.'
     voiceink_step_row signing     "$blockers" 'Create the code-signing identity. This bootstrap will not create it for you: it writes a private key into your login keychain and a Code Signing trust setting, and the trust step MAY raise a "security wants to modify your Trust Settings" password dialog. The script below is idempotent, verifies itself by a different call than the one that made each change, and asks once before it writes anything. WHY IT MATTERS: with no certificate the app can only be signed ad-hoc, the designated requirement becomes the cdhash, and macOS silently revokes Microphone and Accessibility on EVERY rebuild. With it, you grant them once, ever.'
     printf '\nAFTER THE BUILD — macOS requires a human gesture and there is no CLI for any of them.\n'
     printf 'This module cannot read the TCC database (it is SIP-protected), so it does not claim\n'
@@ -462,8 +505,12 @@ $2
 " in *"
 $1
 "*) mark=' ' ;; esac
+  local g
   printf '  [%s] %s\n' "$mark" "$3"
-  [ "$mark" = ' ' ] && printf '      run: %s\n' "$(voiceink_blocker_gesture "$1")"
+  if [ "$mark" = ' ' ]; then
+    g="$(voiceink_blocker_gesture "$1")"
+    if [ -n "$g" ]; then printf '      run: %s\n' "$g"; else printf '      ask: an administrator on this Mac (IT) — this account cannot do it\n'; fi
+  fi
   printf '\n'
   return 0
 }
@@ -1047,15 +1094,27 @@ voiceink_deploy() {
 # migration source UpdaterViewModel.initialAutomaticCheckPreference reads out of UserDefaults
 # into its own key VoiceInkChecksForUpdatesOnLaunch, which defaults to TRUE when both are
 # absent. It must therefore run BEFORE the first launch.
+#
+# ANNOUNCEMENTS, beside it. `enableAnnouncements` defaults to TRUE at v2.13 (AppDefaults.swift:21):
+# a GET of beingpax.github.io/VoiceInk/announcements.json 5 s after launch and every 4 h after
+# (AnnouncementsService.swift:13-33). It carries no user data, but it is a phone-home this module
+# would otherwise set up silently, so it is switched off in the same breath as Sparkle.
+#
+# Returns 1 when the writes cannot land in THIS home: `defaults` ignores $HOME, so a sandboxed run
+# would switch off the REAL app's checks. Refusing is correct; launching an app whose update and
+# announcement polls were never switched off is not.
 voiceink_sparkle_off() {
-  local v
-  /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks -bool false 2>/dev/null
-  /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUAutomaticallyUpdate -bool false 2>/dev/null
-  v="$(/usr/bin/defaults read "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks 2>/dev/null)" || v=""
-  if [ "$v" = 0 ]; then
-    printf 'voiceink: Sparkle automatic checks disabled before first launch\n'
+  local v a
+  bootstrap_defaults_home_ok || { printf 'voiceink: not switching off Sparkle and announcements — this HOME is not yours, and defaults would write the real domain\n'; return 1; }
+  /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_DOMAIN" SUEnableAutomaticChecks -bool false 2>/dev/null
+  /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_DOMAIN" SUAutomaticallyUpdate -bool false 2>/dev/null
+  /usr/bin/defaults write "$BOOTSTRAP_VOICEINK_DOMAIN" enableAnnouncements -bool false 2>/dev/null
+  v="$(/usr/bin/defaults read "$BOOTSTRAP_VOICEINK_DOMAIN" SUEnableAutomaticChecks 2>/dev/null)" || v=""
+  a="$(/usr/bin/defaults read "$BOOTSTRAP_VOICEINK_DOMAIN" enableAnnouncements 2>/dev/null)" || a=""
+  if [ "$v" = 0 ] && [ "$a" = 0 ]; then
+    printf 'voiceink: Sparkle automatic checks and announcements disabled before first launch\n'
   else
-    printf 'voiceink: WARNING could not confirm Sparkle auto-checks are off (read back "%s")\n' "$v"
+    printf 'voiceink: WARNING could not confirm Sparkle auto-checks and announcements are off (read back "%s" and "%s")\n' "$v" "$a"
   fi
   return 0
 }
@@ -1119,8 +1178,8 @@ install_voiceink() {
   voiceink_lock_free
   [ "$rc" -eq 0 ] || return 1
 
-  # 7. Sparkle, before the first launch
-  voiceink_sparkle_off
+  # 7. Sparkle and announcements, before the first launch
+  voiceink_sparkle_off || return 1
 
   # 8. liveness. No launchd job is installed: the private repo's keepalive and autoupdate agents
   #    are deliberately not reproduced.
@@ -1147,8 +1206,12 @@ uninstall_voiceink() {
   local app="$BOOTSTRAP_VOICEINK_APP"
   /usr/bin/pkill -x VoiceInk 2>/dev/null && sleep 1
   rm -rf "$app" "$app.mac-bootstrap-previous" 2>/dev/null
-  /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUEnableAutomaticChecks 2>/dev/null
-  /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_BUNDLE_ID" SUAutomaticallyUpdate 2>/dev/null
+  # Guarded like the writes: from a sandboxed HOME these deletes would reach the REAL domain.
+  if bootstrap_defaults_home_ok >/dev/null 2>&1; then
+    /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_DOMAIN" SUEnableAutomaticChecks 2>/dev/null
+    /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_DOMAIN" SUAutomaticallyUpdate 2>/dev/null
+    /usr/bin/defaults delete "$BOOTSTRAP_VOICEINK_DOMAIN" enableAnnouncements 2>/dev/null
+  fi
   rm -f "$(voiceink_steps_file)" "$(voiceink_sign_script)" 2>/dev/null
   voiceink_lock_free
   if voiceink_leaf_for_cn "$BOOTSTRAP_VOICEINK_CERT_CN" >/dev/null 2>&1; then
