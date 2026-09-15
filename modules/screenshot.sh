@@ -55,8 +55,34 @@
 #                   directory that is then deleted.
 #   BOOTSTRAP_SCREENSHOT_REPO_DIR  where the public config checkout lives. Default $HOME/Development/hammerspoon-config.
 #   BOOTSTRAP_SCREENSHOT_ACCESSIBILITY_WAIT_S  seconds install_ waits for the Accessibility grant before handing back. 5.
+#   BOOTSTRAP_SCREENSHOT_HAMMERSPOON_URL, BOOTSTRAP_SCREENSHOT_HAMMERSPOON_SHA256  replace the pinned
+#                   Hammerspoon release, so a test drives the no-Homebrew install against a file:// fixture.
+#
+# A STANDARD USER GETS HAMMERSPOON TOO. /Applications is root:admin 775 and the Homebrew installer
+# aborts without sudo, so the old route (brew, else "install Homebrew") was a gesture that person
+# cannot perform. An administrator who already has Homebrew still gets the cask (analytics off);
+# everyone else gets the pinned release, checked by sha256 before it is unpacked into
+# $HOME/Applications. MEASURED 2026-09-15, macOS 15.7.9: the zip's sha256 equals the Homebrew
+# cask's; after `ditto -x -k` no file in the bundle carries com.apple.quarantine (curl writes only
+# com.apple.provenance), and `spctl -a -vv` answers "accepted, source=Notarized Developer ID,
+# origin=Developer ID Application: Chris Jones (VQCYSNZB89)". No quarantine means no Gatekeeper
+# dialog — which is exactly why a bundle `spctl` rejects is deleted rather than kept: a Mac whose
+# IT allows only App Store apps would otherwise run it anyway, around the policy.
 
-SCREENSHOT_APP="/Applications/Hammerspoon.app"
+SCREENSHOT_HAMMERSPOON_URL='https://github.com/Hammerspoon/hammerspoon/releases/download/1.1.1/Hammerspoon-1.1.1.zip'
+SCREENSHOT_HAMMERSPOON_SHA256='11bb1c90faf5427f37c7bd4fe7eab9774ae43e1d5cb020c5b3088dac32849efa'
+SCREENSHOT_HAMMERSPOON_DOMAIN='org.hammerspoon.Hammerspoon'
+# Hammerspoon phones home twice unless told not to, and both switches are its own (source read at
+# the 1.1.1 tag):
+#   HSUploadCrashData        crash reports to Sentry, default YES (variables.h:6, MJAppDelegate.m:329).
+#                            Read ONCE, at launch, before Sentry starts (MJAppDelegate.m:249) — so a
+#                            copy already running when it flips keeps uploading until it restarts.
+#   SUEnableAutomaticChecks  Sparkle's key (Sparkle 2.6.4 SUConstants.m:50): what the documented
+#                            hs.automaticallyCheckForUpdates() and the Preferences checkbox set
+#                            (MJLua.m:491, MJPreferencesWindowController.m:114). The user default
+#                            beats Info.plist's `SUEnableAutomaticChecks = 1` (SPUUpdaterSettings.m:36).
+SCREENSHOT_HAMMERSPOON_PREFS='HSUploadCrashData SUEnableAutomaticChecks'
+SCREENSHOT_SPCTL="/usr/sbin/spctl"
 # The Hammerspoon config is VENDORED at assets/hammerspoon/init.lua. It used to be cloned from a
 # personal GitHub repo, which made this module fail for anyone who is not its owner and put an
 # account-shaped dependency in a bootstrap whose whole premise is an ANONYMOUS reader. The clone
@@ -69,29 +95,39 @@ SCREENSHOT_SCREENCAPTURE="/usr/sbin/screencapture"
 screenshot_shot_dir() { printf '%s' "$HOME/Screenshots"; }
 screenshot_hammerspoon_dir()   { printf '%s' "$HOME/.hammerspoon"; }
 screenshot_repo_dir() { printf '%s' "${BOOTSTRAP_SCREENSHOT_REPO_DIR:-${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/hammerspoon}"; }
-# ── screenshot_config_source — where init.lua comes from. Local assets dir, then the cached copy, then the
-# pinned raw URL. Identical in shape to statusline_source, deliberately: one idiom for every asset.
+# ── screenshot_config_source — where init.lua comes from: the release tree the driver already verified
+# against its sha256 manifest, and nowhere else. The raw-URL fetch this used to fall back to was
+# unverified, and a curl'd driver now materializes that tree before any module runs.
 screenshot_config_source() {
-  local c t code
-  for c in "${BOOTSTRAP_ASSETS:-}/hammerspoon/init.lua" \
-           "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"; do
-    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  t="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/hammerspoon/init.lua"
-  mkdir -p "$(dirname "$t")" 2>/dev/null || return 1
-  [ -n "${BOOTSTRAP_RAW:-}" ] || return 1
-  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${BOOTSTRAP_RAW}/assets/hammerspoon/init.lua" 2>/dev/null)" || {
-    rm -f "$t.part" 2>/dev/null; return 1; }
-  [ "$code" = 200 ] || { rm -f "$t.part" 2>/dev/null; return 1; }
-  mv -f "$t.part" "$t" 2>/dev/null || return 1
-  printf '%s' "$t"
+  local c="${BOOTSTRAP_ASSETS:-}/hammerspoon/init.lua"
+  [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -f "$c" ] || return 1
+  printf '%s' "$c"
 }
+
+# The app, wherever a person could have put it: /Applications, or $HOME/Applications, which is the
+# only one of the two a standard user can write.
+screenshot_app()             { bootstrap_find_app Hammerspoon.app; }
+screenshot_app_home_target() { printf '%s' "$HOME/Applications/Hammerspoon.app"; }
 
 screenshot_domain()   { printf '%s' "${BOOTSTRAP_SCREENSHOT_DOMAIN:-com.apple.screencapture}"; }
 screenshot_state()    { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 screenshot_blocked_marker()     { printf '%s/screenshot-blocked' "$(screenshot_state)"; }
 screenshot_defaults_snapshot()      { printf '%s/screenshot-defaults-before-install' "$(screenshot_state)"; }
+screenshot_hammerspoon_snapshot()   { printf '%s/screenshot-hammerspoon-before-install' "$(screenshot_state)"; }
 screenshot_human()    { printf '%s/screenshot-human-check.txt' "$(screenshot_state)"; }
+
+# A marker for a gate install_ DISCOVERED THIS RUN: "<reason> <driver pid>". $$ is the driver's pid
+# in every verb, because each verb runs in a subshell of it, so the gate fires for the rest of this
+# run and not the next — a download that failed behind a proxy is retried on the next run instead
+# of being reported forever by a marker nothing clears.
+screenshot_mark_this_run() { printf '%s %s' "${1:-}" "$$" > "$(screenshot_blocked_marker)" 2>/dev/null; }
+screenshot_marked_this_run() {                  # prints the reason, rc 1 unless marked by THIS run
+  local m
+  m="$(cat "$(screenshot_blocked_marker)" 2>/dev/null)" || return 1
+  case "$m" in *" "*) : ;; *) return 1 ;; esac
+  [ "${m#* }" = "$$" ] || return 1
+  printf '%s' "${m%% *}"
+}
 
 # ── screenshot_run_bounded <seconds> <cmd...> — a wall clock over one command. ────────────────────────
 # There is no `timeout` on a stock Mac (coreutils is not on the default PATH), and a verifier
@@ -130,15 +166,7 @@ screenshot_run_bounded() {
 }
 
 # ── tool resolution ──────────────────────────────────────────────────────────────────────────
-screenshot_brew() {
-  local c
-  for c in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  c="$(command -v brew 2>/dev/null)" || c=""
-  [ -n "$c" ] && { printf '%s' "$c"; return 0; }
-  return 1
-}
+screenshot_brew() { bootstrap_find_tool brew; }
 
 # MEASURED, and it is why this is not `command -v git`: /usr/bin/git, /usr/bin/python3,
 # /usr/bin/clang and /usr/bin/swift are ONE INODE — the Command Line Tools shim, 78 hard links.
@@ -163,8 +191,9 @@ screenshot_git() {
 # hs.ipc.cliInstall()'s own default target is /usr/local, which its documentation says may need
 # sudo to pre-create.
 screenshot_hammerspoon_bin() {
-  local c
-  for c in "$SCREENSHOT_APP/Contents/Frameworks/hs/hs" /opt/homebrew/bin/hs /usr/local/bin/hs; do
+  local c app
+  app="$(screenshot_app)" || app=""
+  for c in ${app:+"$app/Contents/Frameworks/hs/hs"} /opt/homebrew/bin/hs /usr/local/bin/hs; do
     [ -x "$c" ] && { printf '%s' "$c"; return 0; }
   done
   c="$(command -v hs 2>/dev/null)" || c=""
@@ -188,6 +217,13 @@ screenshot_hammerspoon_eval() {
 
 screenshot_accessibility() { [ "$(screenshot_hammerspoon_eval 'return tostring(hs.accessibilityState())')" = "true" ]; }
 
+# The running app's own answer about both phone-home switches, through its documented getters — a
+# different reader from the `defaults write` that set them. Each defaults to true, so "true" is an
+# answer this instrument gives on a fresh install: it can say no.
+screenshot_phone_home_off_live() {
+  [ "$(screenshot_hammerspoon_eval 'return tostring(hs.uploadCrashData())..","..tostring(hs.automaticallyCheckForUpdates())')" = "false,false" ]
+}
+
 # The independent read-back that matters most: ask the LIVE app whether the screenshot poller is
 # armed. It proves (a) Hammerspoon is up, (b) it loaded a config that contains the screenshot
 # feature, (c) the timer is actually running — through IPC into the app, which is a different
@@ -208,10 +244,10 @@ screenshot_live_symlink_ok() {
 }
 
 # ── cheap structural reads ───────────────────────────────────────────────────────────────────
-screenshot_app_ok()     { [ -d "$SCREENSHOT_APP" ] && [ -f "$SCREENSHOT_APP/Contents/Info.plist" ]; }
+screenshot_app_ok()     { local a; a="$(screenshot_app)" && [ -f "$a/Contents/Info.plist" ]; }
 screenshot_repo_ok()    { [ -f "$(screenshot_repo_dir)/init.lua" ]; }
 screenshot_shotdir_ok() { [ -d "$(screenshot_shot_dir)" ]; }
-screenshot_quarantined(){ xattr -p com.apple.quarantine "$SCREENSHOT_APP" >/dev/null 2>&1; }
+screenshot_quarantined(){ local a; a="$(screenshot_app)" && xattr -p com.apple.quarantine "$a" >/dev/null 2>&1; }
 
 screenshot_symlink_ok() {
   local l t
@@ -221,10 +257,21 @@ screenshot_symlink_ok() {
   [ "$t" = "$(screenshot_repo_dir)/init.lua" ] && [ -f "$t" ]
 }
 
-screenshot_defaults_read() {
+screenshot_prefs_read() {                       # <domain> <key>
   local out
-  out="$("$SCREENSHOT_DEFAULTS" read "$(screenshot_domain)" "${1:-}" 2>/dev/null)" || return 1
+  out="$("$SCREENSHOT_DEFAULTS" read "${1:-}" "${2:-}" 2>/dev/null)" || return 1
   printf '%s' "$out"
+}
+screenshot_defaults_read() { screenshot_prefs_read "$(screenshot_domain)" "${1:-}"; }
+
+# Both Hammerspoon switches read back as 0. `-bool false` is written and `0` is read: see
+# screenshot_prefs_write for why those are two alphabets.
+screenshot_hammerspoon_prefs_ok() {
+  local k
+  for k in $SCREENSHOT_HAMMERSPOON_PREFS; do
+    [ "$(screenshot_prefs_read "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k")" = 0 ] || return 1
+  done
+  return 0
 }
 
 # Each key is read back INDIVIDUALLY, and each failure names the consequence rather than the key,
@@ -312,14 +359,29 @@ screenshot_live_probe() {
 
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
 what_screenshot()    { printf '%s' 'Cmd+Shift+4 to a bottom-right thumbnail to the clipboard to a paste into your agent'; }
-cost_screenshot()    { printf '%s' 'Homebrew + Hammerspoon, and one Accessibility toggle that no script can grant for you.'; }
+cost_screenshot()    { printf '%s' 'Hammerspoon (a pinned download into ~/Applications, no admin needed), and one Accessibility toggle that no script can grant for you — on a standard account, an administrator has to approve it.'; }
 profile_screenshot() { printf '%s' 'full'; }
+
+# egress_ — the install route's hosts, and Hammerspoon's own. Crash reports to Sentry are not listed:
+# install_ switches them off before the first launch and verify_ reads that back from the live app.
+egress_screenshot() {
+  local h
+  printf '%s\n' 'github.com install Hammerspoon 1.1.1 zip, pinned by sha256, only when Hammerspoon is not installed'
+  printf '%s\n' 'release-assets.githubusercontent.com install the Hammerspoon zip itself (github.com redirects there)'
+  printf '%s\n' 'formulae.brew.sh install brew install --cask hammerspoon instead, only for an administrator who already has Homebrew (analytics off)'
+  printf '%s\n' 'raw.githubusercontent.com run Hammerspoon update check (Sparkle appcast): switched OFF here; only Preferences or its Check for Updates menu item reaches it'
+  if [ -n "$SCREENSHOT_REPO_URL" ]; then
+    h="${SCREENSHOT_REPO_URL#*://}"; h="${h#*@}"; h="${h%%[/:]*}"
+    printf '%s install git clone of BOOTSTRAP_SCREENSHOT_REPO_URL, which you set\n' "$h"
+  fi
+}
 
 verify_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
-  screenshot_app_ok         || { bootstrap_warn "screenshot: $SCREENSHOT_APP is not installed."; return 1; }
+  screenshot_app_ok         || { bootstrap_warn "screenshot: Hammerspoon.app is in neither /Applications nor $HOME/Applications."; return 1; }
+  screenshot_hammerspoon_prefs_ok || { bootstrap_warn "screenshot: $SCREENSHOT_HAMMERSPOON_DOMAIN does not read back HSUploadCrashData=0 and SUEnableAutomaticChecks=0 — Hammerspoon would upload crash reports or check for updates."; return 1; }
   screenshot_repo_ok        || { bootstrap_warn "screenshot: no config checkout at $(screenshot_repo_dir)."; return 1; }
   screenshot_symlink_ok     || { bootstrap_warn "screenshot: $(screenshot_hammerspoon_dir)/init.lua is not a symlink to $(screenshot_repo_dir)/init.lua."; return 1; }
   screenshot_shotdir_ok     || { bootstrap_warn "screenshot: $(screenshot_shot_dir) does not exist."; return 1; }
@@ -327,17 +389,29 @@ verify_screenshot() {
   screenshot_running        || { bootstrap_warn "screenshot: Hammerspoon is not running."; return 1; }
   screenshot_config_live    || { bootstrap_warn "screenshot: the running Hammerspoon has no armed screenshotPollTimer — the loaded config does not carry the screenshot feature, or it errored while loading."; return 1; }
   screenshot_live_symlink_ok || return 1
+  screenshot_phone_home_off_live || { bootstrap_warn "screenshot: the running Hammerspoon reports crash upload or automatic update checks ON."; return 1; }
   screenshot_accessibility  || { bootstrap_warn "screenshot: Hammerspoon does not hold Accessibility; the Cmd+V -> Ctrl+V rewrite cannot run."; return 1; }
   screenshot_live_probe     || return 1
   return 0
 }
 
+# The Homebrew installer is a gesture only for an ADMINISTRATOR on Apple Silicon: install.sh aborts
+# without sudo, and on any Intel Mac ("only supported on Apple Silicon processors").
+screenshot_homebrew_installable() {
+  bootstrap_is_admin && ! screenshot_brew >/dev/null 2>&1 && [ "$(/usr/bin/uname -m 2>/dev/null)" = arm64 ]
+}
+
 # gate_ answers ONE question: is a human gesture the next thing needed? It must NOT answer yes
 # while drivable work remains, because the driver reports NEEDS_HUMAN *instead of* installing.
+# A missing Hammerspoon is drivable for everyone now, so it gates only when THIS run's install
+# could not get it: the download failed, its sha256 was wrong, or Gatekeeper refuses it.
 screenshot_gate_reason() {
   local mark
-  if ! screenshot_app_ok && ! screenshot_brew >/dev/null 2>&1; then printf 'homebrew'; return 0; fi
-  if ! screenshot_repo_ok && ! screenshot_git >/dev/null 2>&1; then printf 'clt'; return 0; fi
+  if ! screenshot_app_ok; then
+    mark="$(screenshot_marked_this_run)" && { printf '%s' "$mark"; return 0; }
+  fi
+  # git is needed only for a checkout the operator explicitly asked for; the vendored config needs none.
+  if [ -n "$SCREENSHOT_REPO_URL" ] && ! screenshot_repo_ok && ! screenshot_git >/dev/null 2>&1; then printf 'clt'; return 0; fi
   mark="$(cat "$(screenshot_blocked_marker)" 2>/dev/null)" || mark=""
   case "$mark" in
     gatekeeper)      if screenshot_app_ok && ! screenshot_running; then printf 'gatekeeper'; return 0; fi ;;
@@ -363,11 +437,24 @@ note_screenshot() {
     return 0
   fi
   case "$(screenshot_gate_reason)" in
-    homebrew)        printf 'Homebrew is not installed, so Hammerspoon cannot be installed; the Homebrew installer needs your password (sudo).' ;;
-    clt)             printf 'The Xcode Command Line Tools are absent, so git cannot clone the config; the installer is a GUI dialog you must approve.' ;;
+    fetch)
+      if screenshot_homebrew_installable; then
+        printf 'Hammerspoon could not be downloaded from github.com, so nothing was installed. Homebrew would install it instead (the command below needs your password), or run the bootstrap again once github.com is reachable.'
+      else
+        printf 'Hammerspoon could not be downloaded from github.com, so nothing was installed. Run the bootstrap again once github.com is reachable; if a company proxy blocks it, ask IT for Hammerspoon (https://www.hammerspoon.org).'
+      fi ;;
+    refused)         printf 'the Hammerspoon download did not have the sha256 this release pins, so it was deleted and nothing was installed. Do not install it by hand from the same source; report it to the maintainers of this bootstrap.' ;;
+    gatekeeper-policy) printf 'this Mac'"'"'s Gatekeeper policy rejects Hammerspoon (a notarized Developer ID app, team VQCYSNZB89), so it was deleted rather than run around the policy. Ask IT to allow Hammerspoon.' ;;
+    clt)
+      if bootstrap_is_admin; then printf 'The Xcode Command Line Tools are absent, so git cannot clone BOOTSTRAP_SCREENSHOT_REPO_URL; the installer is a GUI dialog you must approve.'
+      else printf 'The Xcode Command Line Tools are absent, so git cannot clone BOOTSTRAP_SCREENSHOT_REPO_URL, and installing them needs an administrator — ask IT, or unset BOOTSTRAP_SCREENSHOT_REPO_URL to use the config this release ships.'; fi ;;
     gatekeeper)      printf 'Hammerspoon is installed but will not launch — macOS quarantines a first-run downloaded app until you approve it once.' ;;
-    screenrecording) printf 'screencapture could not produce a capture from this terminal; on macOS 15 the app that runs it needs Screen Recording.' ;;
-    accessibility)   printf 'Hammerspoon needs Accessibility, and on an unmanaged Mac that toggle cannot be set by any script: tccutil only resets, TCC writes are SIP-protected, and a PPPC profile needs an MDM-enrolled and supervised device.' ;;
+    screenrecording)
+      if bootstrap_is_admin; then printf 'screencapture could not produce a capture from this terminal; on macOS 15 the app that runs it needs Screen Recording.'
+      else printf 'screencapture could not produce a capture from this terminal; on macOS 15 the app that runs it needs Screen Recording, and on a standard account an administrator must approve it — unless IT'"'"'s Privacy Preferences profile lets standard users allow it.'; fi ;;
+    accessibility)
+      if bootstrap_is_admin; then printf 'Hammerspoon needs Accessibility, and on an unmanaged Mac that toggle cannot be set by any script: tccutil only resets, TCC writes are SIP-protected, and a PPPC profile needs an MDM-enrolled and supervised device.'
+      else printf 'Hammerspoon needs Accessibility, and on a standard account only an administrator can turn it on: they type their name and password in the pane below, or IT pushes a Privacy Preferences (PPPC) profile allowing org.hammerspoon.Hammerspoon. Apple lets IT hand Screen Recording to standard users, but never Accessibility.'; fi ;;
     *)               printf 'Hammerspoon, the config checkout, the symlink, the screenshot directory and the screencapture defaults are not all in place yet.' ;;
   esac
 }
@@ -378,13 +465,14 @@ gesture_screenshot() {
     return 0
   fi
   case "$(screenshot_gate_reason)" in
-    homebrew)        printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' ;;
-    clt)             printf 'xcode-select --install' ;;
+    fetch)           screenshot_homebrew_installable && printf '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' ;;
+    clt)             bootstrap_is_admin && printf 'xcode-select --install' ;;
     gatekeeper)      printf 'open "x-apple.systempreferences:com.apple.preference.security?Security"' ;;
     screenrecording) printf 'open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"' ;;
     accessibility)   printf 'open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"' ;;
     *)               : ;;
   esac
+  return 0
 }
 
 # ── install ──────────────────────────────────────────────────────────────────────────────────
@@ -414,45 +502,121 @@ screenshot_defaults_pre_record() {                      # once per machine, befo
 # compares "what I am about to write" with "what is there" in ONE spelling is wrong in one of
 # two ways: it passes an unacceptable argument, or it never sees its own write as idempotent and
 # rewrites the file forever. The two spellings are therefore separate parameters.
-screenshot_defaults_write() {
-  local k="${1:-}" tf="${2:-}" v="${3:-}" want="${4:-}" cur
+screenshot_prefs_write() {                      # <domain> <key> <type-flag> <write-value> [expected-read-value]
+  local d="${1:-}" k="${2:-}" tf="${3:-}" v="${4:-}" want="${5:-}" cur
   [ -n "$want" ] || want="$v"
-  cur="$(screenshot_defaults_read "$k")" || cur=""
+  cur="$(screenshot_prefs_read "$d" "$k")" || cur=""
   [ "$cur" = "$want" ] && return 0               # already exactly this — do not open the file
-  "$SCREENSHOT_DEFAULTS" write "$(screenshot_domain)" "$k" "$tf" "$v" >/dev/null 2>&1 || return 1
+  "$SCREENSHOT_DEFAULTS" write "$d" "$k" "$tf" "$v" >/dev/null 2>&1 || return 1
   # read back through the same reader the verifier uses, in the READ alphabet
-  cur="$(screenshot_defaults_read "$k")" || cur=""
+  cur="$(screenshot_prefs_read "$d" "$k")" || cur=""
   [ "$cur" = "$want" ]
+}
+screenshot_defaults_write() { screenshot_prefs_write "$(screenshot_domain)" "$@"; }
+
+# screenshot_hammerspoon_prefs_off — both switches to false, BEFORE Hammerspoon's first launch, so that
+# launch never starts Sentry. Guarded on its own, not only by install_: `defaults` ignores $HOME, so
+# a sandboxed caller would otherwise switch off the REAL user's Hammerspoon. Sets
+# SCREENSHOT_PREFS_CHANGED=1 when it changed anything (a running copy must then restart).
+SCREENSHOT_PREFS_CHANGED=0
+screenshot_hammerspoon_prefs_off() {
+  bootstrap_defaults_home_ok || return 1
+  local p k v
+  p="$(screenshot_hammerspoon_snapshot)"
+  if [ ! -f "$p" ] && : > "$p" 2>/dev/null; then      # once per machine: what uninstall_ restores
+    for k in $SCREENSHOT_HAMMERSPOON_PREFS; do
+      v="$(screenshot_prefs_read "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k")" || v=ABSENT
+      printf '%s\t%s\n' "$k" "$v" >> "$p" 2>/dev/null
+    done
+  fi
+  for k in $SCREENSHOT_HAMMERSPOON_PREFS; do
+    [ "$(screenshot_prefs_read "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k")" = 0 ] && continue
+    screenshot_prefs_write "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k" -bool false 0 || {
+      bootstrap_warn "screenshot: could not set $SCREENSHOT_HAMMERSPOON_DOMAIN $k to false"; return 1; }
+    SCREENSHOT_PREFS_CHANGED=1
+  done
+  return 0
+}
+
+# screenshot_install_pinned — the pinned release into $HOME/Applications, for anyone without an
+# administrator's Homebrew. rc 0 installed · 1 not downloaded · 2 refused: the sha256 was wrong ·
+# 3 refused: Gatekeeper rejects this app on this Mac · 4 could not unpack or land it. On every
+# non-zero rc nothing is left in $HOME/Applications: the bundle is unpacked into a staging dir
+# beside its target (one filesystem, so the final mv is a rename) and assessed THERE.
+screenshot_install_pinned() {
+  local url sha zip dest stage app q
+  url="${BOOTSTRAP_SCREENSHOT_HAMMERSPOON_URL:-$SCREENSHOT_HAMMERSPOON_URL}"
+  sha="${BOOTSTRAP_SCREENSHOT_HAMMERSPOON_SHA256:-$SCREENSHOT_HAMMERSPOON_SHA256}"
+  dest="$(dirname "$(screenshot_app_home_target)")"
+  zip="$(bootstrap_tools_dir)/downloads/Hammerspoon.zip"
+  if [ -e "$(screenshot_app_home_target)" ]; then
+    bootstrap_warn "screenshot: $(screenshot_app_home_target) exists but is not a complete app; move it aside and run again"
+    return 4
+  fi
+  bootstrap_fetch_pinned "$url" "$sha" "$zip" || return $?
+  mkdir -p "$dest" 2>/dev/null && stage="$(mktemp -d "$dest/.mac-bootstrap-hammerspoon.XXXXXX" 2>/dev/null)" \
+    || { rm -f "$zip"; return 4; }
+  /usr/bin/ditto -x -k "$zip" "$stage" 2>/dev/null; rm -f "$zip"
+  app="$stage/Hammerspoon.app"
+  [ -f "$app/Contents/Info.plist" ] || { rm -rf "$stage"; bootstrap_warn "screenshot: the download held no Hammerspoon.app"; return 4; }
+  q="$(/usr/bin/xattr -r "$app" 2>/dev/null | /usr/bin/grep -c 'com.apple.quarantine')"
+  printf '   ok   unpacked; %s file(s) carry a quarantine flag\n' "${q:-0}"
+  if ! "$SCREENSHOT_SPCTL" -a -vv "$app" >/dev/null 2>&1; then
+    bootstrap_warn "screenshot: Gatekeeper on this Mac rejects the Hammerspoon download ($("$SCREENSHOT_SPCTL" -a -vv "$app" 2>&1 | tr '\n' ' '))"
+    rm -rf "$stage"
+    return 3
+  fi
+  mv "$app" "$(screenshot_app_home_target)" 2>/dev/null || { rm -rf "$stage"; return 4; }
+  rm -rf "$stage"
+  screenshot_app_ok || return 4
 }
 
 install_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
-  local brew git dir hs out i rc want src unfinished=0
+  local brew git dir hs out i rc want src app unfinished=0
 
   rm -f "$(screenshot_blocked_marker)" 2>/dev/null
 
-  # 1. Hammerspoon
+  # 1. Hammerspoon. Homebrew only for an administrator who already has it — a cask lands in
+  #    /Applications, which a standard user cannot write. Everyone else, and an administrator whose
+  #    cask install did not produce the app, gets the pinned release in $HOME/Applications.
   if screenshot_app_ok; then
-    printf '   ok   Hammerspoon already at %s\n' "$SCREENSHOT_APP"
+    printf '   ok   Hammerspoon already at %s\n' "$(screenshot_app)"
   else
-    if brew="$(screenshot_brew)"; then
-      printf '   ..   brew install --cask hammerspoon\n'
+    if bootstrap_is_admin && brew="$(screenshot_brew)"; then
+      printf '   ..   brew install --cask hammerspoon (analytics off)\n'
       # </dev/null so a cask that asks for a password FAILS rather than hanging the bootstrap.
-      NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 "$brew" install --cask hammerspoon </dev/null 2>&1
-      if screenshot_app_ok; then printf '   ok   installed\n'
-      else printf '   x    brew finished but %s is not there\n' "$SCREENSHOT_APP"; return 1; fi
-    else
-      printf '   x    Homebrew is not installed — that step is yours.\n'
-      return 1
+      NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 bootstrap_brew "$brew" install --cask hammerspoon </dev/null 2>&1
+      screenshot_app_ok || printf '   --   brew finished but Hammerspoon.app is not there; trying the pinned release\n'
     fi
+    if ! screenshot_app_ok; then
+      printf '   ..   Hammerspoon 1.1.1 from github.com, pinned by sha256, into %s\n' "$(dirname "$(screenshot_app_home_target)")"
+      screenshot_install_pinned
+      rc=$?
+      case "$rc" in
+        0) printf '   ok   installed at %s; Gatekeeper accepted it before it was moved into place\n' "$(screenshot_app)" ;;
+        1) screenshot_mark_this_run fetch;             printf '   x    could not download Hammerspoon\n'; return 1 ;;
+        2) screenshot_mark_this_run refused;           printf '   x    the download did not match the pinned sha256; deleted\n'; return 1 ;;
+        3) screenshot_mark_this_run gatekeeper-policy; printf '   x    Gatekeeper on this Mac rejects Hammerspoon; deleted, not installed around it\n'; return 1 ;;
+        *) printf '   x    could not unpack Hammerspoon into %s\n' "$(dirname "$(screenshot_app_home_target)")"; return 1 ;;
+      esac
+    fi
+  fi
+
+  # 1b. Hammerspoon's two phone-home switches, BEFORE it first launches (see the header).
+  if screenshot_hammerspoon_prefs_off && screenshot_hammerspoon_prefs_ok; then
+    printf '   ok   Hammerspoon: crash-report upload off, automatic update checks off (read back)\n'
+  else
+    printf '   x    could not switch off Hammerspoon crash reports and update checks\n'
+    return 1
   fi
 
   # 2. the config itself — VENDORED, not cloned. A git checkout is used only when the operator
   #    explicitly named one (BOOTSTRAP_SCREENSHOT_REPO_DIR at a .git, or BOOTSTRAP_SCREENSHOT_REPO_URL); otherwise the file
-  #    comes from this repo's own assets and needs no git, no GitHub account and no network
-  #    beyond the pinned raw URL the driver already used.
+  #    comes from the release tree the driver verified, and needs no git, no GitHub account and no
+  #    network of its own.
   dir="$(screenshot_repo_dir)"
   if [ -n "$SCREENSHOT_REPO_URL" ] && ! screenshot_repo_ok; then
     if git="$(screenshot_git)"; then
@@ -472,8 +636,10 @@ install_screenshot() {
     else
       printf '   --   checkout has local changes; not pulling\n'
     fi
+  elif ! src="$(screenshot_config_source)"; then
+    if screenshot_repo_ok; then printf '   ok   config already installed at %s (this run has no release tree to refresh it from)\n' "$dir"
+    else printf '   x    this run has no release tree holding assets/hammerspoon/init.lua\n'; return 1; fi
   else
-    src="$(screenshot_config_source)" || { printf '   x    cannot find or fetch assets/hammerspoon/init.lua\n'; return 1; }
     mkdir -p "$dir" 2>/dev/null
     if [ -f "$dir/init.lua" ] && cmp -s "$src" "$dir/init.lua"; then
       printf '   ok   config already current at %s\n' "$dir"
@@ -533,11 +699,21 @@ install_screenshot() {
 
   # 6. launch, or reload a Hammerspoon that is already up — otherwise a running instance keeps
   #    whatever config it started with and every check below fails for a reason nothing names.
+  #    If 1b just switched crash upload off under a RUNNING copy, a reload is not enough: the switch
+  #    is read once at launch, so that copy keeps uploading. It is asked to quit (hs._exit is
+  #    [NSApp terminate:], MJLua.m:785) and started again below.
+  app="$(screenshot_app)"
+  if screenshot_running && [ "$SCREENSHOT_PREFS_CHANGED" = 1 ]; then
+    hs="$(screenshot_hammerspoon_bin)" && screenshot_run_bounded 8 "$hs" -q -t 2 -c 'hs._exit()' >/dev/null 2>&1
+    i=0; while [ "$i" -lt 10 ] && screenshot_running; do sleep 1; i=$((i + 1)); done
+    if screenshot_running; then printf '   --   Hammerspoon did not quit; crash upload stays on in it until it next starts\n'
+    else printf '   ok   quit the running Hammerspoon, so the crash-report switch takes effect\n'; fi
+  fi
   if screenshot_running; then
     hs="$(screenshot_hammerspoon_bin)" && screenshot_run_bounded 8 "$hs" -q -t 2 -c 'hs.reload()' >/dev/null 2>&1
     printf '   ok   Hammerspoon was running; asked it to reload\n'
   else
-    open -a Hammerspoon 2>/dev/null
+    open "$app" 2>/dev/null
     i=0; while [ "$i" -lt 20 ]; do screenshot_running && break; sleep 1; i=$((i + 1)); done
     if screenshot_running; then printf '   ok   Hammerspoon launched\n'
     else
@@ -661,7 +837,23 @@ uninstall_screenshot() {
     printf '   ok   screencapture defaults restored to what they were before this ran\n'
   fi
 
+  # Hammerspoon's two switches, back to what they were — both are -bool, and ABSENT means the
+  # app's own default (on) comes back.
+  p="$(screenshot_hammerspoon_snapshot)"
+  if [ -f "$p" ] && bootstrap_defaults_home_ok >/dev/null 2>&1; then
+    while IFS="$(printf '\t')" read -r k v; do
+      [ -n "${k:-}" ] || continue
+      case "${v:-}" in
+        ABSENT)         "$SCREENSHOT_DEFAULTS" delete "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k" >/dev/null 2>&1 ;;
+        0|false|no|NO)  "$SCREENSHOT_DEFAULTS" write "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k" -bool false >/dev/null 2>&1 ;;
+        *)              "$SCREENSHOT_DEFAULTS" write "$SCREENSHOT_HAMMERSPOON_DOMAIN" "$k" -bool true >/dev/null 2>&1 ;;
+      esac
+    done < "$p"
+    rm -f "$p" 2>/dev/null
+    printf '   ok   Hammerspoon crash-report and update-check settings restored to what they were before this ran\n'
+  fi
+
   rm -f "$(screenshot_blocked_marker)" "$(screenshot_human)" 2>/dev/null
-  printf '   --   left alone on purpose: %s, the checkout at %s, and %s\n' "$SCREENSHOT_APP" "$(screenshot_repo_dir)" "$(screenshot_shot_dir)"
+  printf '   --   left alone on purpose: %s, the checkout at %s, and %s\n' "$(screenshot_app 2>/dev/null || printf 'Hammerspoon.app')" "$(screenshot_repo_dir)" "$(screenshot_shot_dir)"
   return 0
 }
