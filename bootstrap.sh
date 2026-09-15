@@ -167,48 +167,96 @@ driver_sha_list() { driver_release_manifest | grep -v '^pin ' | grep .; }
 driver_manifest_pin() { driver_release_manifest | sed -n 's/^pin \([0-9a-f]*\)$/\1/p' | head -1; }
 
 # driver_tree_ok <dir> — 0 iff every file the manifest names is there with its sha256. One shasum
-# process for the whole tree, not one per file.
+# process for the whole tree, not one per file. --strict: a malformed manifest line is a failure, never
+# a line silently skipped (without it, shasum -c exits 0 over a list it could not read).
 driver_tree_ok() {
   [ -d "$1" ] || return 1
-  ( cd "$1" 2>/dev/null && driver_sha_list | shasum -a 256 -c --status - 2>/dev/null )
+  ( cd "$1" 2>/dev/null && driver_sha_list | shasum -a 256 -c --strict --status - 2>/dev/null )
 }
 
-driver_tree_from_tarball() {                        # driver_tree_from_tarball <dir> → rc 0 when it extracted
-  local d="$1" url="${BOOTSTRAP_TARBALL:-https://codeload.github.com/$BOOTSTRAP_REPO/tar.gz/$BOOTSTRAP_PIN}" rel want
-  [ -n "${BOOTSTRAP_RAW_MIRROR:-}" ] && [ -z "${BOOTSTRAP_TARBALL:-}" ] && return 1
-  curl -fsSL --retry 2 -o "$d.tgz" "$url" 2>/dev/null || { rm -f "$d.tgz"; driver_log "tree: tarball route unavailable ($url)"; return 1; }
-  mkdir -p "$d.x" && tar -xzf "$d.tgz" -C "$d.x" --strip-components 1 2>/dev/null || {
-    rm -rf "$d.tgz" "$d.x"; driver_log "tree: the tarball from $url did not extract"; return 1; }
-  # Only the files the manifest names are kept: the rest of the repo (README, scripts, this driver at
-  # another pin) is not vouched for, so it never lands in a tree a module reads from.
+# driver_get <url> <dest> — one download, and when it fails, WHY in DRIVER_WHY: a corporate proxy that
+# refuses the host, DNS, a firewall, TLS, or an HTTP error each fail differently (all measured), and
+# "could not fetch" alone sends the person to the wrong fix. A connect timeout, because a firewall
+# that silently drops the connection otherwise costs 75 s (measured) per attempt. https only, except
+# the file:// a mirror on disk or a test uses.
+DRIVER_WHY=""
+driver_get() {
+  local url="$1" dest="$2" host out rc
+  host="${url#*://}"; host="${host%%/*}"
+  case "$url" in
+    file://*) set -- -sS -o "$dest" -w '%{http_code} %{http_connect}' ;;
+    *)        set -- -sS -L --proto =https --proto-redir =https --connect-timeout 10 --max-time 300 --retry 2 \
+                     -o "$dest" -w '%{http_code} %{http_connect}' ;;
+  esac
+  out="$(curl "$@" "$url" 2>/dev/null)"; rc=$?
+  case "$rc:${out%% *}" in
+    0:200) [ -s "$dest" ] && return 0; DRIVER_WHY="an empty answer from $host" ;;
+    0:000) case "$url" in file://*) [ -s "$dest" ] && return 0 ;; esac; DRIVER_WHY="no answer from $host" ;;
+    0:*)   DRIVER_WHY="HTTP ${out%% *} from $host" ;;
+    56:*)  DRIVER_WHY="the proxy refused to connect to $host (it answered ${out##* })" ;;
+    6:*)   DRIVER_WHY="cannot resolve $host" ;;
+    7:*|28:*) DRIVER_WHY="cannot reach $host (curl $rc)" ;;
+    35:*|60:*) DRIVER_WHY="TLS to $host failed (curl $rc): a proxy whose certificate this Mac does not trust" ;;
+    37:*)  DRIVER_WHY="no such file at $url" ;;
+    *)     DRIVER_WHY="curl $rc, HTTP ${out%% *}, from $host" ;;
+  esac
+  rm -f "$dest" 2>/dev/null
+  return 1
+}
+
+# driver_tree_take <dir> <extracted-repo-root> — copy ONLY the files the manifest names. The rest of the
+# repo (README, scripts, the driver at another pin) is not vouched for, so it never lands where a module
+# reads from.
+driver_tree_take() {
+  local want rel
   while read -r want rel; do
     [ -n "$rel" ] || continue
-    mkdir -p "$d/$(dirname "$rel")" && cp -f "$d.x/$rel" "$d/$rel" 2>/dev/null
-  done <<EOF
+    mkdir -p "$1/$(dirname "$rel")" && cp -f "$2/$rel" "$1/$rel" 2>/dev/null
+  done <<TREE_LIST
 $(driver_sha_list)
-EOF
-  rm -rf "$d.tgz" "$d.x"
-  return 0
+TREE_LIST
 }
 
-driver_tree_from_files() {                          # driver_tree_from_files <dir> → rc 0 when every file arrived
-  local d="$1" rel want code
+driver_tree_from_tarball() {                        # one request, to codeload.github.com
+  local d="$1" url="${BOOTSTRAP_TARBALL:-https://codeload.github.com/$BOOTSTRAP_REPO/tar.gz/$BOOTSTRAP_PIN}"
+  if [ -n "${BOOTSTRAP_RAW_MIRROR:-}" ] && [ -z "${BOOTSTRAP_TARBALL:-}" ]; then DRIVER_WHY="skipped: a mirror was named"; return 1; fi
+  driver_get "$url" "$d.tgz" || return 1
+  mkdir -p "$d.x" && tar -xzf "$d.tgz" -C "$d.x" --strip-components 1 2>/dev/null || {
+    rm -rf "$d.tgz" "$d.x"; DRIVER_WHY="the tarball from $url did not extract"; return 1; }
+  driver_tree_take "$d" "$d.x"
+  rm -rf "$d.tgz" "$d.x"
+}
+
+# git, from github.com alone — the one route a network that allows only github.com leaves open. NEVER
+# the bare /usr/bin/git on a Mac without the Command Line Tools: there it is a shim that opens Apple's
+# installer dialog, and this driver never raises a dialog.
+driver_tree_from_git() {
+  local d="$1" url="${BOOTSTRAP_GIT_URL:-https://github.com/$BOOTSTRAP_REPO.git}"
+  if [ -n "${BOOTSTRAP_RAW_MIRROR:-}" ] && [ -z "${BOOTSTRAP_GIT_URL:-}" ]; then DRIVER_WHY="skipped: a mirror was named"; return 1; fi
+  { [ -x /usr/bin/git ] && /usr/bin/xcode-select -p >/dev/null 2>&1; } || { DRIVER_WHY="skipped: no Command Line Tools, so no git"; return 1; }
+  mkdir -p "$d.x" || return 1
+  /usr/bin/git init -q "$d.git" 2>/dev/null \
+    && /usr/bin/git -C "$d.git" -c protocol.version=2 fetch -q --depth 1 "$url" "$BOOTSTRAP_PIN" 2>/dev/null \
+    && /usr/bin/git -C "$d.git" archive "$BOOTSTRAP_PIN" 2>/dev/null | tar -xf - -C "$d.x" 2>/dev/null
+  rm -rf "$d.git"
+  if [ ! -d "$d.x/modules" ]; then rm -rf "$d.x"; DRIVER_WHY="git could not fetch $BOOTSTRAP_PIN from ${url%/*}"; return 1; fi
+  driver_tree_take "$d" "$d.x"
+  rm -rf "$d.x"
+}
+
+driver_tree_from_files() {                          # each file from BOOTSTRAP_RAW: GitHub's raw host, or a mirror
+  local d="$1" rel want
   while read -r want rel; do
     [ -n "$rel" ] || continue
     mkdir -p "$d/$(dirname "$rel")" || return 1
-    code="$(curl -sS -L --retry 2 -o "$d/$rel" -w '%{http_code}' "$BOOTSTRAP_RAW/$rel" 2>/dev/null)" || code="failed"
-    case "$code" in
-      200) : ;;
-      000) case "$BOOTSTRAP_RAW" in file://*) : ;; *) driver_log "tree: $rel — no answer from $BOOTSTRAP_RAW"; return 1 ;; esac ;;
-      *)   driver_log "tree: $rel — HTTP $code from $BOOTSTRAP_RAW"; return 1 ;;
-    esac
-  done <<EOF
+    driver_get "$BOOTSTRAP_RAW/$rel" "$d/$rel" || return 1
+  done <<TREE_LIST
 $(driver_sha_list)
-EOF
+TREE_LIST
 }
 
 driver_materialize() {                              # sets BOOTSTRAP_TREE → rc 0, or says why not → rc 1
-  local dir part bad
+  local dir part bad route why=""
   case "$BOOTSTRAP_PIN" in
     __PIN_SHA__|main|master|"")
       printf 'bootstrap: no modules/ beside this script, and pin "%s" is not a release — nothing can be fetched.\n' "$BOOTSTRAP_PIN" >&2
@@ -228,18 +276,24 @@ driver_materialize() {                              # sets BOOTSTRAP_TREE → rc
   dir="$BOOTSTRAP_STATE_DIR/release/$BOOTSTRAP_PIN"
   if driver_tree_ok "$dir"; then BOOTSTRAP_TREE="$dir"; return 0; fi
   part="$dir.part.$$"
-  rm -rf "$part" "$part.tgz" "$part.x"; mkdir -p "$part" || return 1
   driver_say "fetching the release tree at $BOOTSTRAP_PIN — every file is checked against this script's manifest"
-  if { driver_tree_from_tarball "$part" && driver_tree_ok "$part"; } \
-     || { rm -rf "$part" && mkdir -p "$part" && driver_tree_from_files "$part" && driver_tree_ok "$part"; }; then
-    rm -rf "$dir"; mv -f "$part" "$dir" && { BOOTSTRAP_TREE="$dir"; return 0; }
-  fi
-  bad="$( (cd "$part" 2>/dev/null && driver_sha_list | shasum -a 256 -c - 2>/dev/null) | grep -v ': OK$' | head -3 | tr '\n' ' ')"
-  rm -rf "$part" "$part.tgz" "$part.x"
-  printf 'bootstrap: could not assemble a verified copy of the release at %s.\n' "$BOOTSTRAP_PIN" >&2
-  [ -n "$bad" ] && printf '  first mismatches: %s\n' "$bad" >&2
-  printf '  Tried the tarball (codeload.github.com) and each file from %s.\n' "$BOOTSTRAP_RAW" >&2
-  printf '  Behind a proxy that blocks both, point BOOTSTRAP_RAW at a mirror of this repo at that commit.\n' >&2
+  for route in tarball git files; do
+    rm -rf "$part" "$part.tgz" "$part.x" "$part.git"; mkdir -p "$part" || return 1
+    DRIVER_WHY=""
+    if "driver_tree_from_$route" "$part"; then
+      if driver_tree_ok "$part"; then
+        rm -rf "$dir"; mv -f "$part" "$dir" && { BOOTSTRAP_TREE="$dir"; return 0; }
+      fi
+      bad="$( (cd "$part" 2>/dev/null && driver_sha_list | shasum -a 256 -c - 2>/dev/null) | grep -v ': OK$' | head -3 | tr '\n' ' ')"
+      DRIVER_WHY="served bytes that do not match the manifest: ${bad:-(no file)}"
+    fi
+    driver_log "tree: $route route: $DRIVER_WHY"
+    why="$why
+    $route: $DRIVER_WHY"
+  done
+  rm -rf "$part" "$part.tgz" "$part.x" "$part.git"
+  printf 'bootstrap: could not assemble a verified copy of the release at %s. Each route, and why:%s\n' "$BOOTSTRAP_PIN" "$why" >&2
+  printf '  Behind a proxy that blocks all three, point BOOTSTRAP_RAW at a mirror of this repo at that commit.\n' >&2
   return 1
 }
 
