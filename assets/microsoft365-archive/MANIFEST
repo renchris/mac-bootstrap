@@ -1,0 +1,14 @@
+archive.js
+fake-server.js
+fixtures/base.json
+fixtures/copilot-export.json
+fixtures/notes-overlap-reversed.json
+fixtures/notes-overlap.json
+fixtures/partial.json
+fixtures/tenant-external.json
+fixtures/tenant-personal.json
+fixtures/transcripts-available.json
+fixtures/transcripts-forbidden.json
+package.json
+render.js
+resolve.js

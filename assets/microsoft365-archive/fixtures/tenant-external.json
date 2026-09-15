@@ -1,0 +1,112 @@
+{
+  "description": "Overlay: whose tenant a meeting lives in. \"accounts\" is what the real server's --list-accounts flag prints (id = MSAL homeAccountId \"<object id>.<tenant id>\"); the decoy listed first sits in the organizer's tenant, so matching the wrong account would make the external meeting look internal. May holds one meeting organised in another tenant (its join URL's context carries Tid 0e0e0e0e-…): it must never be looked up, and the agenda in the user's own OneDrive still links. June holds a meeting in the caller's own tenant (context Tid in upper case, unencoded) whose transcript must still resolve, and one whose join URL has no context at all, which must still be looked up; its attendance answers a 400 whose message must survive into .state/status.json.",
+  "accounts": [
+    { "id": "44444444-4444-4444-8444-444444444444.0e0e0e0e-feed-4bad-8bad-0123456789ab", "username": "someone.else@example.com", "name": "Decoy Account", "selected": false },
+    { "id": "55555555-5555-4555-8555-555555555555.c0ffee00-1111-4222-8333-444455556666", "username": "SelfTest@Example.com", "name": "Selftest User", "selected": true }
+  ],
+  "graph": {
+    "GET /me/calendarView?startDateTime=2026-05-01T00:00:00.000Z&endDateTime=2026-06-01T00:00:00.000Z&$select=id,iCalUId,subject,start,end,organizer,attendees,isOnlineMeeting,onlineMeeting,onlineMeetingProvider,seriesMasterId,type,webLink,isCancelled&$top=100": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "event-external",
+            "iCalUId": "ical-external-0001",
+            "subject": "Client Steering Committee",
+            "start": { "dateTime": "2026-05-04T14:00:00.0000000", "timeZone": "UTC" },
+            "end": { "dateTime": "2026-05-04T15:00:00.0000000", "timeZone": "UTC" },
+            "organizer": { "emailAddress": { "name": "Dana Diaz", "address": "dana@client.example" } },
+            "attendees": [ { "type": "required", "emailAddress": { "name": "Selftest User", "address": "selftest@example.com" } } ],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": { "joinUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_external%40thread.v2/0?context=%7b%22Tid%22%3a%220e0e0e0e-feed-4bad-8bad-0123456789ab%22%2c%22Oid%22%3a%2233333333-3333-4333-8333-333333333333%22%7d" },
+            "seriesMasterId": null,
+            "type": "singleInstance",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-external",
+            "isCancelled": false
+          }
+        ]
+      }
+    },
+    "GET /me/calendarView?startDateTime=2026-06-01T00:00:00.000Z&endDateTime=2026-07-01T00:00:00.000Z&$select=id,iCalUId,subject,start,end,organizer,attendees,isOnlineMeeting,onlineMeeting,onlineMeetingProvider,seriesMasterId,type,webLink,isCancelled&$top=100": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "event-same-tenant",
+            "iCalUId": "ical-same-tenant-0001",
+            "subject": "Internal Planning",
+            "start": { "dateTime": "2026-06-02T10:00:00.0000000", "timeZone": "UTC" },
+            "end": { "dateTime": "2026-06-02T10:30:00.0000000", "timeZone": "UTC" },
+            "organizer": { "emailAddress": { "name": "Selftest User", "address": "selftest@example.com" } },
+            "attendees": [ { "type": "required", "emailAddress": { "name": "Bob Brown", "address": "bob@example.com" } } ],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": { "joinUrl": "https://teams.microsoft.com/l/meetup-join/19:meeting_same@thread.v2/0?context={\"Tid\":\"C0FFEE00-1111-4222-8333-444455556666\",\"Oid\":\"33333333-3333-4333-8333-333333333333\"}" },
+            "seriesMasterId": null,
+            "type": "singleInstance",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-same-tenant",
+            "isCancelled": false
+          },
+          {
+            "id": "event-no-context",
+            "iCalUId": "ical-no-context-0001",
+            "subject": "Vendor Call",
+            "start": { "dateTime": "2026-06-09T10:00:00.0000000", "timeZone": "UTC" },
+            "end": { "dateTime": "2026-06-09T10:30:00.0000000", "timeZone": "UTC" },
+            "organizer": { "emailAddress": { "name": "Selftest User", "address": "selftest@example.com" } },
+            "attendees": [ { "type": "required", "emailAddress": { "name": "Vera Vendor", "address": "vera@vendor.example" } } ],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": { "joinUrl": "https://teams.microsoft.com/l/meetup-join/19:meeting_nocontext@thread.v2/0" },
+            "seriesMasterId": null,
+            "type": "singleInstance",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-no-context",
+            "isCancelled": false
+          }
+        ]
+      }
+    },
+    "GET /me/onlineMeetings?$filter=JoinWebUrl eq 'https://teams.microsoft.com/l/meetup-join/19:meeting_same@thread.v2/0?context={\"Tid\":\"C0FFEE00-1111-4222-8333-444455556666\",\"Oid\":\"33333333-3333-4333-8333-333333333333\"}'": {
+      "status": 200,
+      "body": { "value": [ { "id": "online-meeting-same-tenant", "subject": "Internal Planning", "chatInfo": {} } ] }
+    },
+    "GET /me/onlineMeetings/online-meeting-same-tenant/transcripts": {
+      "status": 200,
+      "body": { "value": [ { "id": "transcript-same", "meetingId": "online-meeting-same-tenant", "createdDateTime": "2026-06-02T10:33:00Z", "endDateTime": "2026-06-02T10:30:00Z" } ] }
+    },
+    "GET /me/onlineMeetings/online-meeting-same-tenant/transcripts/transcript-same/content?$format=text/vtt": {
+      "status": 200,
+      "headers": { "Content-Type": "text/vtt" },
+      "text": "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\n<v Selftest User>Same tenant, so this transcript is ours to read.</v>\n"
+    },
+    "GET /me/onlineMeetings/online-meeting-same-tenant/attendanceReports": {
+      "status": 400,
+      "body": { "error": { "code": "BadRequest", "message": "selftest-attendance-400: the attendance report request was malformed.", "innerError": { "code": "InvalidRequest" } } }
+    },
+    "GET /me/onlineMeetings?$filter=JoinWebUrl eq 'https://teams.microsoft.com/l/meetup-join/19:meeting_nocontext@thread.v2/0'": {
+      "status": 200,
+      "body": { "value": [ { "id": "online-meeting-no-context", "subject": "Vendor Call", "chatInfo": {} } ] }
+    },
+    "GET /me/onlineMeetings/online-meeting-no-context/transcripts": {
+      "status": 200,
+      "body": { "value": [] }
+    },
+    "GET /me/drive/root:/Meetings:/children?$top=200": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "agenda-external",
+            "name": "Client Steering Agenda.docx",
+            "size": 1024,
+            "createdDateTime": "2026-05-04T14:10:00Z",
+            "lastModifiedDateTime": "2026-05-04T14:10:00Z",
+            "webUrl": "https://contoso-my.sharepoint.com/personal/selftest/Documents/Meetings/Client%20Steering%20Agenda.docx",
+            "file": { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+          }
+        ]
+      }
+    }
+  }
+}

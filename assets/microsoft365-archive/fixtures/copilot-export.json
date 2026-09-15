@@ -1,0 +1,42 @@
+{
+  "value": [
+    {
+      "id": "interaction-2",
+      "sessionId": "session-alpha",
+      "requestId": "request-1",
+      "appClass": "IPM.SkypeTeams.Message.Copilot.BizChat",
+      "interactionType": "aiResponse",
+      "conversationType": "bizchat",
+      "createdDateTime": "2026-01-07T09:00:05Z",
+      "locale": "en-us",
+      "from": { "application": { "id": "copilot", "displayName": "Microsoft 365 Chat" } },
+      "body": { "contentType": "html", "content": "<attachment id=\"card-1\"></attachment>" },
+      "attachments": [
+        { "attachmentId": "card-1", "contentType": "application/vnd.microsoft.card.adaptive", "content": "{\"type\":\"AdaptiveCard\",\"body\":[{\"type\":\"TextBlock\",\"text\":\"The plan has three phases [1](https://contoso.sharepoint.com/sites/Team/Shared%20Documents/Plan.docx).\"}]}", "name": null },
+        { "attachmentId": "ref-1", "contentType": "reference", "contentUrl": "https://contoso.sharepoint.com/sites/Team/Shared%20Documents/Budget.xlsx", "name": "Budget.xlsx" }
+      ],
+      "links": [
+        { "linkUrl": "https://contoso.sharepoint.com/sites/Team/Shared%20Documents/Plan.docx", "displayName": "Plan.docx", "linkType": "file" },
+        { "linkUrl": "https://www.example.com/pricing", "displayName": "Pricing", "linkType": "web" }
+      ],
+      "contexts": [],
+      "mentions": []
+    },
+    {
+      "id": "interaction-1",
+      "sessionId": "session-alpha",
+      "requestId": "request-1",
+      "appClass": "IPM.SkypeTeams.Message.Copilot.BizChat",
+      "interactionType": "userPrompt",
+      "conversationType": "bizchat",
+      "createdDateTime": "2026-01-07T09:00:00Z",
+      "locale": "en-us",
+      "from": { "user": { "id": "selftest-user-id", "displayName": "Selftest User" } },
+      "body": { "contentType": "text", "content": "Summarise the plan for the Acme review" },
+      "attachments": [],
+      "links": [],
+      "contexts": [],
+      "mentions": []
+    }
+  ]
+}

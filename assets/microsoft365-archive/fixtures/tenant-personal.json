@@ -1,0 +1,6 @@
+{
+  "description": "Overlay on tenant-external: the signed-in account is a personal Microsoft account — its MSAL homeAccountId ends in the consumer tenant 9188040d-6c67-4c5b-b112-36a304b66dad. No onlineMeetings request and no Copilot interaction-history probe may be sent: every one would be refused.",
+  "accounts": [
+    { "id": "00000000-0000-0000-2a3b-4c5d6e7f8091.9188040d-6c67-4c5b-b112-36a304b66dad", "username": "selftest@example.com", "name": "Selftest User", "selected": true }
+  ]
+}

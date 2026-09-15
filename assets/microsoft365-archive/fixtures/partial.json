@@ -1,0 +1,6 @@
+{
+  "description": "Overlay: the tool call carrying the one-off meeting's chat fails inside the server (a network failure, not an HTTP status). That meeting must be left unwritten, the others written, and the run must exit PARTIAL.",
+  "graph": {
+    "GET /chats/19:meeting_one@thread.v2/messages?$top=50": { "toolError": "fetch failed: getaddrinfo ENOTFOUND graph.microsoft.com" }
+  }
+}

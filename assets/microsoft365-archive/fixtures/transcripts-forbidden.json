@@ -1,0 +1,13 @@
+{
+  "description": "Overlay: transcript access is refused — the one-off meeting's token lacks the scope (403 naming it), and the series meets the tenant switch that is off by default since July 2026.",
+  "graph": {
+    "GET /me/onlineMeetings/online-meeting-one-off/transcripts": {
+      "status": 403,
+      "body": { "error": { "code": "Forbidden", "message": "Missing scope permissions on the request. API requires one of 'OnlineMeetingTranscript.Read.All'. Scopes on the request 'Calendars.ReadWrite, Files.ReadWrite, User.Read'", "innerError": { "code": "MissingScope" } } }
+    },
+    "GET /me/onlineMeetings/online-meeting-series/transcripts": {
+      "status": 403,
+      "body": { "error": { "code": "GraphAccessToTranscriptsDisabled", "message": "Graph API access to transcripts is disabled for this tenant." } }
+    }
+  }
+}

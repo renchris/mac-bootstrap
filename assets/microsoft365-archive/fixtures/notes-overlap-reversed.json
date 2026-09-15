@@ -1,0 +1,66 @@
+{
+  "description": "notes-overlap.json with the calendar listing the two occurrences in the opposite order.",
+  "graph": {
+    "GET /me/calendarView?startDateTime=2026-03-01T00:00:00.000Z&endDateTime=2026-04-01T00:00:00.000Z&$select=id,iCalUId,subject,start,end,organizer,attendees,isOnlineMeeting,onlineMeeting,onlineMeetingProvider,seriesMasterId,type,webLink,isCancelled&$top=100": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "event-overlap-2",
+            "iCalUId": "ical-overlap-0002",
+            "subject": "Stand-up",
+            "start": {
+              "dateTime": "2026-03-09T12:00:00.0000000",
+              "timeZone": "UTC"
+            },
+            "end": {
+              "dateTime": "2026-03-09T12:30:00.0000000",
+              "timeZone": "UTC"
+            },
+            "organizer": {
+              "emailAddress": {
+                "name": "Carol Chen",
+                "address": "carol@example.com"
+              }
+            },
+            "attendees": [],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": null,
+            "seriesMasterId": "event-overlap-master",
+            "type": "occurrence",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-overlap-2",
+            "isCancelled": false
+          },
+          {
+            "id": "event-overlap-1",
+            "iCalUId": "ical-overlap-0001",
+            "subject": "Stand-up",
+            "start": {
+              "dateTime": "2026-03-09T10:00:00.0000000",
+              "timeZone": "UTC"
+            },
+            "end": {
+              "dateTime": "2026-03-09T10:30:00.0000000",
+              "timeZone": "UTC"
+            },
+            "organizer": {
+              "emailAddress": {
+                "name": "Carol Chen",
+                "address": "carol@example.com"
+              }
+            },
+            "attendees": [],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": null,
+            "seriesMasterId": "event-overlap-master",
+            "type": "occurrence",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-overlap-1",
+            "isCancelled": false
+          }
+        ]
+      }
+    }
+  }
+}

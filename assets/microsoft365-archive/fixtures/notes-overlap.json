@@ -1,0 +1,93 @@
+{
+  "description": "Two occurrences of one series whose artifact windows overlap ([start-15m, end+4h]), and one .loop note created inside both windows whose content Graph refuses. Each occurrence must link the note the same way, whichever order the calendar lists them in (notes-overlap-reversed.json).",
+  "graph": {
+    "GET /me/calendarView?startDateTime=2026-03-01T00:00:00.000Z&endDateTime=2026-04-01T00:00:00.000Z&$select=id,iCalUId,subject,start,end,organizer,attendees,isOnlineMeeting,onlineMeeting,onlineMeetingProvider,seriesMasterId,type,webLink,isCancelled&$top=100": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "event-overlap-1",
+            "iCalUId": "ical-overlap-0001",
+            "subject": "Stand-up",
+            "start": {
+              "dateTime": "2026-03-09T10:00:00.0000000",
+              "timeZone": "UTC"
+            },
+            "end": {
+              "dateTime": "2026-03-09T10:30:00.0000000",
+              "timeZone": "UTC"
+            },
+            "organizer": {
+              "emailAddress": {
+                "name": "Carol Chen",
+                "address": "carol@example.com"
+              }
+            },
+            "attendees": [],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": null,
+            "seriesMasterId": "event-overlap-master",
+            "type": "occurrence",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-overlap-1",
+            "isCancelled": false
+          },
+          {
+            "id": "event-overlap-2",
+            "iCalUId": "ical-overlap-0002",
+            "subject": "Stand-up",
+            "start": {
+              "dateTime": "2026-03-09T12:00:00.0000000",
+              "timeZone": "UTC"
+            },
+            "end": {
+              "dateTime": "2026-03-09T12:30:00.0000000",
+              "timeZone": "UTC"
+            },
+            "organizer": {
+              "emailAddress": {
+                "name": "Carol Chen",
+                "address": "carol@example.com"
+              }
+            },
+            "attendees": [],
+            "isOnlineMeeting": true,
+            "onlineMeetingProvider": "teamsForBusiness",
+            "onlineMeeting": null,
+            "seriesMasterId": "event-overlap-master",
+            "type": "occurrence",
+            "webLink": "https://outlook.office365.com/owa/?itemid=event-overlap-2",
+            "isCancelled": false
+          }
+        ]
+      }
+    },
+    "GET /me/drive/root:/Meetings:/children?$top=200": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "sync-loop",
+            "name": "Stand-up Notes.loop",
+            "size": 1024,
+            "createdDateTime": "2026-03-09T12:05:00Z",
+            "lastModifiedDateTime": "2026-03-09T12:20:00Z",
+            "webUrl": "https://contoso-my.sharepoint.com/personal/selftest/Documents/Meetings/Stand-up%20Notes.loop",
+            "file": {
+              "mimeType": "application/octet-stream"
+            }
+          }
+        ]
+      }
+    },
+    "GET /me/drive/items/sync-loop/content?format=html": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "accessDenied",
+          "message": "Access denied"
+        }
+      }
+    }
+  }
+}
