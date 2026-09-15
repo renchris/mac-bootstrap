@@ -148,3 +148,53 @@ if /bin/bash "$CHECK_ROOT/assets/agent-handoff" selftest >"$CHECK_WORK/agent-han
 else
   fail "agent-handoff-selftest" "$(grep FAIL "$CHECK_WORK/agent-handoff-selftest" | head -3 | tr '\n' ' ')"
 fi
+
+# 10. /handoff carries WHICH HOST and WHICH MODEL, not only which provider. The REAL ah_write_launcher
+#     (the script with its command dispatch cut off) writes the launcher; the launcher then runs an
+#     agent stand-in that prints its environment, so what is read back is what a successor receives.
+AGENT_CONFIG_AH="$AGENT_CONFIG/handoff-route"
+mkdir -p "$AGENT_CONFIG_AH/run"
+sed '/^case "\${1:-status}" in/,$d' "$CHECK_ROOT/assets/agent-handoff" > "$AGENT_CONFIG_AH/lib.sh"
+printf '#!/bin/bash\nexec /usr/bin/env\n' > "$AGENT_CONFIG_AH/envstub"; chmod 755 "$AGENT_CONFIG_AH/envstub"
+AGENT_CONFIG_ROUTE="GH_HOST=acme.ghe.com COPILOT_GH_HOST=acme.ghe.com ANTHROPIC_MODEL=pin-model
+  ANTHROPIC_DEFAULT_OPUS_MODEL=pin-opus ANTHROPIC_DEFAULT_SONNET_MODEL=pin-sonnet ANTHROPIC_DEFAULT_HAIKU_MODEL=pin-haiku
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS=200000 GOOGLE_CLOUD_PROJECT=acme-project
+  VERTEX_REGION_CLAUDE_4_0_OPUS=us-east5 VERTEX_REGION_CLAUDE_3_5_HAIKU=europe-west1"
+# credential-shaped names under the family's prefix, and one variable on no list at all
+AGENT_CONFIG_NOT="VERTEX_REGION_CLAUDE_API_KEY=planted-secret VERTEX_REGION_CLAUDE_X_TOKEN=planted-secret NOT_A_ROUTE=planted-other"
+# agent_config_ah <extra env…> -- <shell snippet> — the snippet runs with the launcher's functions loaded
+agent_config_ah() {
+  local a=""
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do a="$a $1"; shift; done; shift
+  # shellcheck disable=SC2086
+  env -i HOME="$AGENT_CONFIG_AH/home" PATH=/usr/bin:/bin TMPDIR="$CHECK_WORK" $a \
+    /bin/bash -c ". \"\$0\" && $1" "$AGENT_CONFIG_AH/lib.sh"
+}
+mkdir -p "$AGENT_CONFIG_AH/home"
+# shellcheck disable=SC2086
+agent_config_ah $AGENT_CONFIG_ROUTE $AGENT_CONFIG_NOT -- \
+  "ah_write_launcher '$AGENT_CONFIG_AH/run' '$AGENT_CONFIG_AH/run/cfg' '$AGENT_CONFIG_AH/run' '$AGENT_CONFIG_AH/envstub' copilot SID 0 && '$AGENT_CONFIG_AH/run/launch.sh'" \
+  > "$AGENT_CONFIG_AH/successor.env" 2>/dev/null
+out=""
+for p in $AGENT_CONFIG_ROUTE; do
+  grep -qxF "export $p" "$AGENT_CONFIG_AH/run/env" 2>/dev/null || out="$out env-file:${p%%=*}"
+  grep -qxF "$p" "$AGENT_CONFIG_AH/successor.env" 2>/dev/null || out="$out successor:${p%%=*}"
+done
+same "handoff-carries-host-and-model-routing" "${out:-all 10 arrived}" "all 10 arrived"
+case "$(grep -c 'VERTEX_REGION_CLAUDE_' "$AGENT_CONFIG_AH/successor.env" 2>/dev/null)" in
+  2) pass "handoff-carries-vertex-region-family" "2 members, matched by prefix" ;;
+  *) fail "handoff-carries-vertex-region-family" "$(grep -o '^VERTEX_REGION_CLAUDE_[A-Z0-9_]*' "$AGENT_CONFIG_AH/successor.env" | tr '\n' ' ')" ;;
+esac
+if grep -q 'planted-secret' "$AGENT_CONFIG_AH/successor.env" "$AGENT_CONFIG_AH/run/env" "$AGENT_CONFIG_AH/run/launch.sh" 2>/dev/null; then
+  fail "handoff-drops-credential-shaped-family" "a VERTEX_REGION_CLAUDE_*_KEY/_TOKEN value was carried"
+else pass "handoff-drops-credential-shaped-family" "_API_KEY and _TOKEN under the prefix stay behind"; fi
+# CONTROL: a variable on no list stays behind, so the arrivals above are the allowlist, not a leak
+if grep -q 'planted-other' "$AGENT_CONFIG_AH/successor.env" 2>/dev/null; then fail "handoff-unlisted-variable-stays-behind"
+else pass "handoff-unlisted-variable-stays-behind"; fi
+agent_config_ah -- \
+  "AH_PASS_ENV='ANTHROPIC_DEFAULT_OPUS_MODEL CLAUDE_CODE_MAX_CONTEXT_TOKENS VERTEX_REGION_CLAUDE_4_0_OPUS' ah_write_launcher '$AGENT_CONFIG_AH/run' '$AGENT_CONFIG_AH/run/cfg' '$AGENT_CONFIG_AH/run' /bin/echo claude SID 0" >/dev/null 2>&1
+same "handoff-pass-env-of-carried-name-rc0" "$?" 0
+# CONTROL: the refusal is still there for the session marker the scrub exists to stop
+agent_config_ah -- \
+  "AH_PASS_ENV=CLAUDE_CODE_SESSION_ID ah_write_launcher '$AGENT_CONFIG_AH/run' '$AGENT_CONFIG_AH/run/cfg' '$AGENT_CONFIG_AH/run' /bin/echo claude SID 0" >/dev/null 2>&1
+same "handoff-pass-env-still-refuses-session-marker" "$?" 2
