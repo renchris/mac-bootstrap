@@ -89,7 +89,7 @@ release_embedded_manifest() {
 
 # release_verify <readme_ref> — the whole claim, from outside, with no local file trusted.
 release_verify() {
-  local ref="$1" tmp boot pin rel got want n=0 bad=0
+  local ref="$1" tmp boot pin rel got want n=0 bad=0 prompt_bad=0
   tmp="$(mktemp -d)" || return 1
   boot="$tmp/bootstrap.sh"
 
@@ -143,6 +143,28 @@ release_verify() {
       release_fail "  MISMATCH $rel"; bad=$((bad + 1))
     fi
   done
+  # Hop 3 — the one prompt's own LOOKING commands, run against the PUBLISHED script in a throwaway HOME.
+  # A README can cite a flag the published script does not have: measured once, `--egress` against a
+  # pin without it answered "unknown argument". Only a Mac can run the driver (plutil, sw_vers), so a
+  # Linux runner says it skipped rather than claiming a pass.
+  if ! grep -q "<<'BOOTSTRAP_RELEASE_MANIFEST'" "$boot"; then
+    release_say "  hop 3: skipped — a release from before the prompt's looking commands existed"
+  elif [ "$(uname -s)" = Darwin ] && [ "$bad" = 0 ]; then
+    local home="$tmp/home" args rc out
+    mkdir -p "$home"
+    for args in "--list" "--plan --profile full" "--egress" "--advise-model"; do
+      # shellcheck disable=SC2086  # the flags are deliberately word-split
+      out="$(cd "$tmp" && HOME="$home" BOOTSTRAP_NONINTERACTIVE=1 /bin/bash "$boot" $args 2>&1 </dev/null)"; rc=$?
+      case "$rc:$args" in
+        0:*|20:--egress) : ;;          # --egress exits 20 when THIS Mac has a cloud path — a finding, not a defect
+        *) release_fail "hop 3 FAILED: the published script answered '$args' with exit $rc: $(printf '%s\n' "$out" | grep -m1 -E 'bootstrap:|unknown')"
+           prompt_bad=$((prompt_bad + 1)) ;;
+      esac
+    done
+    [ "$prompt_bad" = 0 ] && release_say "  hop 3: the prompt's looking commands (--list, --plan, --egress, --advise-model) all answer"
+  else
+    release_say "  hop 3: skipped — the driver runs only on macOS"
+  fi
   rm -rf "$tmp"
 
   if [ "$n" = 0 ]; then
@@ -151,6 +173,10 @@ release_verify() {
   fi
   if [ "$bad" != 0 ]; then
     release_fail "$bad of $n payload file(s) are not fetchable at the pin"
+    return 1
+  fi
+  if [ "$prompt_bad" != 0 ]; then
+    release_fail "the README's prompt runs commands the published script cannot answer ($prompt_bad of 4)"
     return 1
   fi
   release_say "         $n payload file(s) fetched anonymously, every sha256 matching the pinned tree"
