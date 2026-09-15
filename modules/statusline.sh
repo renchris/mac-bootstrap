@@ -87,6 +87,8 @@ statusline_probe() {
 what_statusline()    { printf '%s' 'context-% in the agent status line, for Claude Code and Copilot CLI alike'; }
 cost_statusline()    { printf '%s' 'a ~4 KB script plus one key in each settings file. No installs, no permissions, no network.'; }
 profile_statusline() { printf '%s' 'lite'; }
+# No network of its own: the script reads the JSON the agent pipes to it and the local git branch.
+egress_statusline()  { :; }
 
 verify_statusline() {
   local sl f cur out

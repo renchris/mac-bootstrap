@@ -159,6 +159,9 @@ hooks_file_unusable() {
 what_hooks()    { printf '%s' 'session lifecycle hooks: a start brief, a state ledger, a context-fill advisory, a write guard'; }
 cost_hooks()    { printf '%s' 'four scripts plus hook entries in both settings files. No installs, no permissions.'; }
 profile_hooks() { printf '%s' 'lite'; }
+# No network of their own: the four hooks read their stdin, local files and local git (rev-parse,
+# rev-list, log, status — never fetch or push), and none of them starts an agent CLI.
+egress_hooks()  { :; }
 
 verify_hooks() {
   local d t n i s cmd ev rows T out before after rc=0

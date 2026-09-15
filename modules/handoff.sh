@@ -128,6 +128,15 @@ what_handoff()    { printf '%s' '/handoff: the session retires itself and starts
 cost_handoff()    { printf '%s' 'a few scripts. Needs tmux (brew install tmux) for its fault tolerance; without it, degrades and says so.'; }
 profile_handoff() { printf '%s' 'standard'; }
 needs_handoff()   { printf '%s' 'statusline hooks'; }
+# The scripts make no connection themselves. What they START does: the successor is a new agent
+# session, and it sends its brief and everything after to that agent's own model provider — the same
+# one the session it replaces was using, because agent-handoff carries the routing variables across
+# (COPILOT_PROVIDER_*, CLAUDE_CODE_USE_BEDROCK/VERTEX, ANTHROPIC_BASE_URL, …). The hosts named are the
+# defaults when nothing routes the agent elsewhere.
+egress_handoff()  {
+  printf '%s\n' 'api.anthropic.com run a Claude Code successor sends its brief to its provider (Anthropic, or the Bedrock/Vertex/gateway your settings route it to)'
+  printf '%s\n' 'api.githubcopilot.com run a Copilot CLI successor sends its brief to its provider (GitHub, or the one COPILOT_PROVIDER_BASE_URL names)'
+}
 
 verify_handoff() {
   local bin succ out rc p

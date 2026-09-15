@@ -149,6 +149,8 @@ instructions_exec_readback() {
 what_instructions()    { printf '%s' 'a 6 KB repo-agnostic instructions file both agents read, plus a per-repo template'; }
 cost_instructions()    { printf '%s' 'two files and one symlink. No installs, no permissions. Replaceable with your own.'; }
 profile_instructions() { printf '%s' 'lite'; }
+# No network of its own: two files and a symlink, and a per-repo helper that writes local files only.
+egress_instructions()  { :; }
 
 verify_instructions() {
   local g t r cop
