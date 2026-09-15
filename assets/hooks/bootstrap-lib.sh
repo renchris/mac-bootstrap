@@ -244,8 +244,30 @@ bootstrap_settings_refuse() {
     |awsAuthRefresh*|awsCredentialExport*|forceLoginMethod*|enableAllProjectMcpServers*\
     |enabledMcpjsonServers*|trust*|autoApprove*)
       bootstrap_warn "REFUSED: '$k' authorizes the agent; ask the operator in chat."; return 0 ;;
+    # An `env` block reaches every session and every process the agent starts, so a key there IS a
+    # credential written by us. Refused by the shape of the name, whatever the value.
+    env.*KEY*|env.*TOKEN*|env.*SECRET*|env.*PASSWORD*|env.*CREDENTIAL*|env.*AUTH*)
+      bootstrap_warn "REFUSED: '$k' would put a credential in the agent's environment; ask the operator in chat."; return 0 ;;
   esac
   return 1
+}
+
+# ── bootstrap_settings_remove <file> <keypath> — the one REMOVER, for uninstall_. ──────────────────
+# Same discipline as the writer: refuse a non-JSON-text file, back it up, remove on a temp copy, read
+# the copy back, and only then move it into place. rc 0 removed or already absent · 2 refused/failed.
+bootstrap_settings_remove() {
+  local f="${1:-}" k="${2:-}" tmp
+  [ -f "$f" ] || return 0
+  bootstrap_settings_type "$f" "$k" >/dev/null 2>&1 || return 0
+  bootstrap_json_ok "$f" >/dev/null 2>&1 || return 2
+  bootstrap_is_json_text "$f" >/dev/null 2>&1 || return 2
+  bootstrap_backup "$f"
+  tmp="$f.mac-bootstrap-tmp.$$"
+  cp -p "$f" "$tmp" 2>/dev/null || return 2
+  "$BOOTSTRAP_PLUTIL" -remove "$k" "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 2; }
+  bootstrap_json_ok "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 2; }
+  bootstrap_settings_type "$tmp" "$k" >/dev/null 2>&1 && { rm -f "$tmp"; return 2; }
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 2; }
 }
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -695,6 +717,57 @@ bootstrap_fetch_pinned() {
   /bin/mv -f "$dest.part" "$dest"
 }
 
+# ── A TLS-inspecting proxy (Zscaler, Netskope, …). IT installs its root in the System keychain, and
+# every Apple-built client trusts it — /usr/bin/curl, git, Homebrew, ollama, URLSession — because
+# Apple's LibreSSL falls back to the keychain. Node does NOT: it ships its own roots, so npm and every
+# node server fail with UNABLE_TO_GET_ISSUER_CERT_LOCALLY. NODE_EXTRA_CA_CERTS works on every node
+# version (--use-system-ca needs 22.15+, NODE_USE_SYSTEM_CA 22.19+), so it is the fix. All measured.
+#
+# bootstrap_tls_verdict <https-url> — the same curl twice: with the keychain fallback, and with it off
+# (OPENSSL_X509_TEA_DISABLE=1 leaves only the public bundle). Prints clean · intercepted-os-trusted
+# (export the roots for node) · intercepted-untrusted (IT has not installed its root: ask IT) ·
+# network-error (says nothing about trust).
+bootstrap_tls_verdict() {
+  local os pub
+  /usr/bin/curl -sS -o /dev/null -m 10 "$1" 2>/dev/null; os=$?
+  OPENSSL_X509_TEA_DISABLE=1 /usr/bin/curl -sS -o /dev/null -m 10 "$1" 2>/dev/null; pub=$?
+  case "$os:$pub" in
+    0:0)   printf 'clean' ;;
+    0:60)  printf 'intercepted-os-trusted' ;;
+    60:60) printf 'intercepted-untrusted' ;;
+    *)     printf 'network-error' ;;
+  esac
+}
+
+# bootstrap_node_ca_env [https-url] — what a node process needs on THIS network: prints
+# `NODE_EXTRA_CA_CERTS=<pem>` when TLS is intercepted by a root the OS trusts, nothing when it is not.
+# rc 0 · 1 network error (nothing known) · 2 intercepted by a root the OS does not trust (ask IT).
+# The PEM holds only unexpired certificates the OS itself trusts for TLS, each one parsed first — node
+# silently drops every certificate after a malformed one. Reads keychains; writes only the PEM.
+bootstrap_node_ca_env() {
+  local url="${1:-${BOOTSTRAP_TLS_PROBE_URL:-https://registry.npmjs.org/}}" out tmp c kc
+  case "$(bootstrap_tls_verdict "$url")" in
+    clean) return 0 ;;
+    intercepted-untrusted) return 2 ;;
+    network-error) return 1 ;;
+  esac
+  out="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/trusted-roots.pem"
+  tmp="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/bootstrap-roots.XXXXXX")" || return 1
+  for kc in /Library/Keychains/System.keychain "$HOME/Library/Keychains/login.keychain-db"; do
+    [ -r "$kc" ] && /usr/bin/security find-certificate -a -p "$kc" 2>/dev/null
+  done | /usr/bin/awk -v d="$tmp" '/-----BEGIN CERTIFICATE-----/{n++; f=d "/c" n ".pem"} f{print > f} /-----END CERTIFICATE-----/{close(f); f=""}'
+  : > "$out.part" || { /bin/rm -rf "$tmp"; return 1; }
+  for c in "$tmp"/c*.pem; do
+    [ -f "$c" ] || continue
+    /usr/bin/openssl x509 -in "$c" -noout -checkend 0 >/dev/null 2>&1 || continue
+    /usr/bin/security verify-cert -q -l -L -R offline -p ssl -c "$c" >/dev/null 2>&1 || continue
+    cat "$c" >> "$out.part"
+  done
+  /bin/rm -rf "$tmp"
+  [ -s "$out.part" ] || { /bin/rm -f "$out.part"; return 1; }
+  /bin/mv -f "$out.part" "$out" && printf 'NODE_EXTRA_CA_CERTS=%s' "$out"
+}
+
 # bootstrap_brew <brew> <args…> — Homebrew with its analytics off. `brew install` otherwise reports each
 # install to Homebrew's analytics host, and nothing a module installs needs that to happen.
 bootstrap_brew() { local b="$1"; shift; HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_ENV_HINTS=1 "$b" "$@"; }
@@ -950,6 +1023,18 @@ bootstrap_selftest() {
   printf '{"strictPluginOnlyCustomization": ["mcp"]}\n' > "$A/managed-settings.json"
   arm="$(BOOTSTRAP_MANAGED_ROOT="$T/managed" CLAUDE_CONFIG_DIR="$T/none" bootstrap_policy_restricts claude hooks && echo locked || echo open)/$(BOOTSTRAP_MANAGED_ROOT="$T/managed" CLAUDE_CONFIG_DIR="$T/none" bootstrap_policy_restricts claude mcp && echo locked || echo open)"
   bootstrap_is "strictPluginOnlyCustomization [mcp] reserves mcp and only mcp" "$arm" "open/locked"
+
+  # ── 15. env: a switch may be written; a credential-shaped name never; the remover reads back. ───
+  printf '{"keep": 1}\n' > "$T/env.json"
+  bootstrap_settings_merge "$T/env.json" env.DISABLE_ERROR_REPORTING '"1"' >/dev/null 2>&1
+  bootstrap_is "env: a reporting switch is written" "$(bootstrap_settings_get "$T/env.json" env.DISABLE_ERROR_REPORTING raw)" "1"
+  bootstrap_settings_merge "$T/env.json" env.ANTHROPIC_API_KEY '"x"' >/dev/null 2>&1; rc=$?
+  bootstrap_is "control: an env key shaped like a credential is refused" "$rc/$(bootstrap_settings_get "$T/env.json" env.ANTHROPIC_API_KEY raw 2>/dev/null)" "2/"
+  bootstrap_settings_remove "$T/env.json" env.DISABLE_ERROR_REPORTING; rc=$?
+  bootstrap_is "bootstrap_settings_remove: gone, and the other key survives" "$rc/$(bootstrap_settings_get "$T/env.json" env.DISABLE_ERROR_REPORTING raw 2>/dev/null)/$(bootstrap_settings_get "$T/env.json" keep raw)" "0//1"
+
+  # ── 16. TLS verdict: a port nobody listens on says NOTHING about trust. ─────────────────────────
+  bootstrap_is "control: an unreachable host is a network error, not a trust verdict" "$(bootstrap_tls_verdict https://127.0.0.1:1/)" "network-error"
 
   printf '\n%s/%s cases passed.\n' "$((bootstrap__t - bootstrap__f))" "$bootstrap__t"
   rm -rf "$T" 2>/dev/null
