@@ -21,7 +21,7 @@ mkdir -p "$AC_FX/src"
 cat >"$AC_FX/src/claude" <<'F'
 #!/bin/sh
 case "$1" in
-  --version) echo "${FIXTURE_CLAUDE_VERSION:-2.1.236} (Claude Code)" ;;
+  --version) echo "${FIXTURE_CLAUDE_VERSION:-2.1.267} (Claude Code)" ;;
   auth) [ -f "$HOME/.claude.json" ] || echo '{}' >"$HOME/.claude.json"; : >"$HOME/.fixture-auth-ran"
         [ "$2" = login ] && { : >"$HOME/.fixture-login-ran"; exit 0; }
         if [ -f "$HOME/.fixture-signed-in" ]; then echo '{"loggedIn": true}'; exit 0; fi
@@ -77,7 +77,7 @@ AC_STATES='gate_agent_cli; echo "gate=$?"; verify_agent_cli; echo "verify=$?"'
 h="$(fresh_home agentcli-both)"
 out="$(agent_unit "$h" 'install_agent_cli; echo "install=$?"')"
 same "agentcli-install-rc-waits-on-login" "$(printf '%s\n' "$out" | sed -n 's/^install=//p')" 3
-same "agentcli-claude-laid-out-like-vendor" "$(readlink "$h/.local/bin/claude")" "$h/.local/share/claude/versions/2.1.236"
+same "agentcli-claude-laid-out-like-vendor" "$(readlink "$h/.local/bin/claude")" "$h/.local/share/claude/versions/2.1.267"
 if [ -x "$h/.local/bin/copilot" ]; then pass "agentcli-copilot-in-local-bin"; else fail "agentcli-copilot-in-local-bin"; fi
 out="$(agent_unit "$h" "$AC_STATES"'; echo "G=$(gesture_agent_cli)"; echo "N=$(note_agent_cli)"')"
 case "$out" in *gate=0*verify=1*) pass "agentcli-unsigned-is-needs-human" ;; *) fail "agentcli-unsigned-is-needs-human" "$out" ;; esac
@@ -116,7 +116,7 @@ echo '{}' >"$h/.claude.json"
 out="$(FIXTURE_CLAUDE_VERSION=2.0.1 agent_unit "$h" 'BOOTSTRAP_AGENTS=claude; install_agent_cli; echo "install=$?"; echo "N=$(note_agent_cli)"')"
 case "$out" in *install=3*) pass "agentcli-preinstalled-not-reinstalled" ;; *) fail "agentcli-preinstalled-not-reinstalled" "$out" ;; esac
 [ -e "$h/.local/bin/claude" ] && fail "agentcli-preinstalled-nothing-downloaded" || pass "agentcli-preinstalled-nothing-downloaded"
-case "$out" in *"yours is 2.0.1"*"pin is 2.1.236"*) pass "agentcli-note-names-version-drift" ;; *) fail "agentcli-note-names-version-drift" "$out" ;; esac
+case "$out" in *"yours is 2.0.1"*"pin is 2.1.267"*) pass "agentcli-note-names-version-drift" ;; *) fail "agentcli-note-names-version-drift" "$out" ;; esac
 : >"$h/.fixture-signed-in"
 out="$(agent_unit "$h" 'BOOTSTRAP_AGENTS=claude; '"$AC_STATES"'; uninstall_agent_cli')"
 case "$out" in *gate=1*verify=0*) pass "agentcli-preinstalled-satisfied" ;; *) fail "agentcli-preinstalled-satisfied" "$out" ;; esac

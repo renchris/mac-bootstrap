@@ -11,7 +11,8 @@
 # counts as it is and is never reinstalled, upgraded or removed.
 #
 # WHAT IS PINNED, measured 2026-09-15 by downloading each artifact and running it:
-#   Claude Code 2.1.236 — the `stable` pointer that day. The native Mach-O the vendor's install.sh
+#   Claude Code 2.1.267 — the `stable` pointer on 2026-09-15 (it moved from 2.1.236 that same day; re-pinned
+#     and re-measured: sha256 = manifest.json, Team ID Q6L2SF6YDW, `--version` offline). The native Mach-O install.sh
 #     fetches, sha256 from that release's manifest.json, codesign --strict clean, Team ID Q6L2SF6YDW.
 #     Laid out as `claude install` lays it out: <data>/claude/versions/<ver> + ~/.local/bin/claude.
 #   Copilot CLI 1.0.83 — the release tarball gh.io/copilot-install fetches, sha256 from that
@@ -33,9 +34,9 @@
 #
 # bash 3.2 · set -u, no set -e · every verb runs in its own subshell.
 
-AGENT_CLI_CLAUDE_VERSION='2.1.236'
-AGENT_CLI_CLAUDE_SHA256_ARM64='6bc4ba992d2786cbf0237c4453ca53c1fdf0c3b3d83ffa0025c0d8190ed27848'
-AGENT_CLI_CLAUDE_SHA256_X64='3ce6a8e016fcae45ad3f2dc78f1980600d3908c302355396a0d6bc17b5d43333'
+AGENT_CLI_CLAUDE_VERSION='2.1.267'
+AGENT_CLI_CLAUDE_SHA256_ARM64='a681f3008f0050029aeebcab3af51bb6a55ddeb625a3af3141a4416d43cd2558'
+AGENT_CLI_CLAUDE_SHA256_X64='071988cb2e5a4378d8543d78e0ff5f8ed1ecc5e113271774a0582ee74fb0ef79'
 AGENT_CLI_CLAUDE_TEAM='Q6L2SF6YDW'
 AGENT_CLI_COPILOT_VERSION='1.0.83'
 AGENT_CLI_COPILOT_SHA256_ARM64='80a5ded6f1db484b4661af676ea914605ecfbcaf49f6b4bed81e6df16cbd56bd'

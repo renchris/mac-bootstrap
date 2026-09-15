@@ -25,6 +25,7 @@
 #                              commits the pinned sha does not (GitHub's compare status)
 #   node-line                  the newest nodejs.org release on the pinned major
 #   sparkle:<appcast url>      the highest version a Sparkle appcast offers
+#   text:<url>                 a URL whose whole body is the version (Claude Code's stable channel pointer)
 # --coverage keeps the table honest: a top-level assignment in modules/*.sh whose name ends _VERSION,
 # _TAG or _PIN, or whose literal value is a URL carrying a version (3.7.1, 3_7_1), must have a row.
 #
@@ -45,6 +46,8 @@ kitty               | modules/pane_equalize.sh | PANE_EQUALIZE_KITTY_URL        
 VoiceInk            | modules/voiceink.sh      | BOOTSTRAP_VOICEINK_TAG         | -                                | github:Beingpax/VoiceInk
 whisper.cpp         | modules/voiceink.sh      | BOOTSTRAP_VOICEINK_WHISPER_PIN | -                                | github-commit:ggml-org/whisper.cpp
 copilot-cli         | README.md                | -                              | Copilot CLI ([0-9][0-9.]*[0-9])  | npm:@github/copilot
+claude-code         | modules/agent_cli.sh     | AGENT_CLI_CLAUDE_VERSION       | -                                | text:https://downloads.claude.ai/claude-code-releases/stable
+copilot-cli-binary  | modules/agent_cli.sh     | AGENT_CLI_COPILOT_VERSION      | -                                | npm:@github/copilot
 CURRENCY_TABLE
 )"
 
@@ -113,7 +116,7 @@ currency_host() {  # <kind:arg> → the host a row's upstream query goes to, for
   local u
   case "$1" in
     npm:*) u="$CURRENCY_NPM" ;; github*) u="$CURRENCY_GITHUB_API" ;;
-    node-line*) u="$CURRENCY_NODE_INDEX" ;; sparkle:*) u="${1#sparkle:}" ;; *) u="$1" ;;
+    node-line*) u="$CURRENCY_NODE_INDEX" ;; sparkle:*) u="${1#sparkle:}" ;; text:*) u="${1#text:}" ;; *) u="$1" ;;
   esac
   u="${u#*://}"; printf '%s' "${u%%/*}"
 }
@@ -144,6 +147,9 @@ currency_upstream() {  # <kind:arg> <pinned>
       up="$(currency_get "$CURRENCY_NPM/-/package/$arg/dist-tags" | sed -nE 's/.*"latest": *"([^"]*)".*/\1/p' | head -1)" ;;
     github)
       up="$(currency_github_tag "$arg")" ;;
+    text)
+      up="$(currency_get "$arg" | tr -d '[:space:]')"
+      case "$up" in [0-9]*.*) : ;; *) up="" ;; esac ;;
     node-line)
       up="$(currency_get "$CURRENCY_NODE_INDEX" | sed -nE "s/^[[:space:]]*\\{\"version\":\"v(${2%%.*}\\.[0-9.]+)\".*/\\1/p" | head -1)" ;;
     sparkle)
