@@ -249,9 +249,13 @@ export BOOTSTRAP_STATE_DIR="$BOOTSTRAP_STATE_DIR"
 # only then uses it — the library included, which is why this runs before anything is sourced. After
 # this, no module fetches our own code over the network: every one of them reads $BOOTSTRAP_ASSETS.
 #
-# Two routes, in order: GitHub's tarball of the pinned commit (one request), then each file from
-# BOOTSTRAP_RAW. A corporate proxy commonly blocks one host and not the other; a mirror named in
-# BOOTSTRAP_RAW is used on its own. A route that fails, or serves one wrong byte, is simply not used.
+# Five routes, in order: GitHub's tarball of the pinned commit (one request), git over github.com, each
+# file from BOOTSTRAP_RAW, each file from jsDelivr's copy of the same commit, and each file from GitHub's
+# contents API. A corporate proxy commonly blocks one host and not the others — measured in a live dry
+# run: raw, codeload and github.com denied, api.github.com allowed, and with only three routes every
+# command exited 30 although the entry script itself had been fetched and checked. A mirror named in
+# BOOTSTRAP_RAW is used on its own. A route that fails, or serves one wrong byte, is simply not used:
+# where the bytes came from never matters, because every one is checked against the manifest.
 driver_sha_list() { driver_release_manifest | grep -v '^pin ' | grep .; }
 driver_manifest_pin() { driver_release_manifest | sed -n 's/^pin \([0-9a-f]*\)$/\1/p' | head -1; }
 
@@ -277,6 +281,7 @@ driver_get() {
     *)        set -- -sS -L --proto =https --proto-redir =https --connect-timeout 10 --max-time 300 --retry 2 \
                      -o "$dest" -w '%{http_code} %{http_connect}' ;;
   esac
+  [ -n "${DRIVER_GET_ACCEPT:-}" ] && set -- "$@" -H "Accept: $DRIVER_GET_ACCEPT"
   out="$(curl "$@" "$url" 2>/dev/null)"; rc=$?
   case "$rc:${out%% *}" in
     0:200) [ -s "$dest" ] && return 0; DRIVER_WHY="an empty answer from $host" ;;
@@ -333,15 +338,32 @@ driver_tree_from_git() {
   rm -rf "$d.x"
 }
 
-driver_tree_from_files() {                          # each file from BOOTSTRAP_RAW: GitHub's raw host, or a mirror
-  local d="$1" rel want
+# driver_tree_per_file <dir> <base> [suffix] — each manifest file from <base>/<rel><suffix>.
+driver_tree_per_file() {
+  local d="$1" base="$2" suffix="${3:-}" rel want
   while read -r want rel; do
     [ -n "$rel" ] || continue
     mkdir -p "$d/$(dirname "$rel")" || return 1
-    driver_get "$BOOTSTRAP_RAW/$rel" "$d/$rel" || return 1
+    driver_get "$base/$rel$suffix" "$d/$rel" || return 1
   done <<TREE_LIST
 $(driver_sha_list)
 TREE_LIST
+}
+driver_tree_from_files() {                          # each file from BOOTSTRAP_RAW: GitHub's raw host, or a mirror
+  driver_tree_per_file "$1" "$BOOTSTRAP_RAW"
+}
+# jsDelivr serves any public GitHub commit at cdn.jsdelivr.net/gh/<repo>@<sha>/<path>, with no rate limit.
+driver_tree_from_jsdelivr() {
+  if [ -n "${BOOTSTRAP_RAW_MIRROR:-}" ] && [ -z "${BOOTSTRAP_JSDELIVR:-}" ]; then DRIVER_WHY="skipped: a mirror was named"; return 1; fi
+  driver_tree_per_file "$1" "${BOOTSTRAP_JSDELIVR:-https://cdn.jsdelivr.net/gh/$BOOTSTRAP_REPO@$BOOTSTRAP_PIN}"
+}
+# GitHub's contents API, one anonymous request per file with the raw media type. Last, because GitHub
+# allows 60 anonymous API requests an hour per address, which a release's ~60 files and an office's
+# shared address can exhaust (the failure then reads HTTP 403 from api.github.com).
+driver_tree_from_api() {
+  if [ -n "${BOOTSTRAP_RAW_MIRROR:-}" ] && [ -z "${BOOTSTRAP_GITHUB_API:-}" ]; then DRIVER_WHY="skipped: a mirror was named"; return 1; fi
+  DRIVER_GET_ACCEPT="application/vnd.github.raw" \
+    driver_tree_per_file "$1" "${BOOTSTRAP_GITHUB_API:-https://api.github.com}/repos/$BOOTSTRAP_REPO/contents" "?ref=$BOOTSTRAP_PIN"
 }
 
 driver_materialize() {                              # sets BOOTSTRAP_TREE → rc 0, or says why not → rc 1
@@ -366,7 +388,7 @@ driver_materialize() {                              # sets BOOTSTRAP_TREE → rc
   if driver_tree_ok "$dir"; then BOOTSTRAP_TREE="$dir"; return 0; fi
   part="$dir.part.$$"
   driver_say "fetching the release tree at $BOOTSTRAP_PIN — every file is checked against this script's manifest"
-  for route in tarball git files; do
+  for route in tarball git files jsdelivr api; do
     rm -rf "$part" "$part.tgz" "$part.x" "$part.git"; mkdir -p "$part" || return 1
     DRIVER_WHY=""
     if "driver_tree_from_$route" "$part"; then
@@ -382,7 +404,8 @@ driver_materialize() {                              # sets BOOTSTRAP_TREE → rc
   done
   rm -rf "$part" "$part.tgz" "$part.x" "$part.git"
   printf 'bootstrap: could not assemble a verified copy of the release at %s. Each route, and why:%s\n' "$BOOTSTRAP_PIN" "$why" >&2
-  printf '  Behind a proxy that blocks all three, point BOOTSTRAP_RAW at a mirror of this repo at that commit.\n' >&2
+  printf '  Behind a proxy that blocks all five, point BOOTSTRAP_RAW at any copy of this repo at that commit —\n' >&2
+  printf '  a company mirror, or a folder (file://…) — every file is checked against the manifest whatever serves it.\n' >&2
   return 1
 }
 
@@ -679,6 +702,10 @@ driver_cmd_advise() {
 driver_cmd_egress() {
   local m f out rc=0 undeclared="" host when purpose first
   printf '\n  EGRESS — every host a module can reach. "install" = only while it installs; "run" = afterwards.\n\n'
+  # The driver's own fetch of this release, declared once here so no module repeats it.
+  printf '    %-21s %-34s %-8s %s\n' 'this script' 'codeload.github.com' install "this release's own files, from the first that answers" \
+    '' 'github.com' install '(git, only with the Command Line Tools)' '' 'raw.githubusercontent.com' install '' \
+    '' 'cdn.jsdelivr.net' install '' '' 'api.github.com' install "— or only BOOTSTRAP_RAW's mirror, when one is named"
   for m in $BOOTSTRAP_MANIFEST; do
     f="$(driver_module_file "$m")" || { printf '    %-21s (module file unavailable)\n' "$m"; rc=30; continue; }
     if ! driver_has_verb "$f" "$m" egress; then
@@ -697,8 +724,9 @@ $out
 EOF
   done
   printf '\n  Every coding agent sends what it reads to its own model provider — Claude Code to Anthropic (or\n'
-  printf '  the Bedrock or Vertex account your company routes it to), Copilot CLI to GitHub (or the provider\n'
-  printf '  COPILOT_PROVIDER_BASE_URL names). That is how an agent works; no module can change it, and none adds to it.\n'
+  printf '  the Bedrock, Vertex, Foundry or gateway route your company set), Copilot CLI to GitHub (or your GitHub\n'
+  printf '  Enterprise host, or the provider COPILOT_PROVIDER_BASE_URL names). That is how an agent works; no\n'
+  printf '  module can change it, and none adds to it.\n'
   printf '\n  LOCAL-ONLY CHECK — read from this machine, not from the declarations above\n\n'
   # Executed, never sourced: it is a second, independent reader of what the modules configured.
   f="$BOOTSTRAP_ASSETS/local-only-check.sh"

@@ -59,6 +59,27 @@ h="$(fresh_home tree-tarball)"
 tree_run "$h" BOOTSTRAP_PIN="$TREE_PIN" BOOTSTRAP_RAW="file://$CHECK_TMP/no-such-mirror" BOOTSTRAP_TARBALL="file://$CHECK_WORK/tree.tgz" -- --only "$TREE_FIRST"
 same "tree-from-tarball-rc" "$CHECK_RC" 0
 
+# 2b. When tarball, git and raw are all blocked — measured on a live proxy that allowed only
+#     api.github.com — jsDelivr's copy of the commit answers, and failing that GitHub's contents API.
+TREE_NOPE="file://$CHECK_TMP/no-such"
+h="$(fresh_home tree-jsdelivr)"
+tree_run "$h" BOOTSTRAP_PIN="$TREE_PIN" BOOTSTRAP_RAW="$TREE_NOPE" BOOTSTRAP_TARBALL="$TREE_NOPE.tgz" \
+  BOOTSTRAP_GIT_URL="$TREE_NOPE.git" BOOTSTRAP_JSDELIVR="file://$TREE_MIRROR" BOOTSTRAP_GITHUB_API="$TREE_NOPE" -- --only "$TREE_FIRST"
+same "tree-from-jsdelivr-rc" "$CHECK_RC" 0
+mkdir -p "$CHECK_TMP/api/repos/renchris/mac-bootstrap" && ln -sfn "$TREE_MIRROR" "$CHECK_TMP/api/repos/renchris/mac-bootstrap/contents"
+h="$(fresh_home tree-api)"
+tree_run "$h" BOOTSTRAP_PIN="$TREE_PIN" BOOTSTRAP_RAW="$TREE_NOPE" BOOTSTRAP_TARBALL="$TREE_NOPE.tgz" \
+  BOOTSTRAP_GIT_URL="$TREE_NOPE.git" BOOTSTRAP_JSDELIVR="$TREE_NOPE" BOOTSTRAP_GITHUB_API="file://$CHECK_TMP/api" -- --only "$TREE_FIRST"
+same "tree-from-github-api-rc" "$CHECK_RC" 0
+# …and the control: with every route blocked, the run says why for each of the five, and exits 30.
+h="$(fresh_home tree-none)"
+tree_run "$h" BOOTSTRAP_PIN="$TREE_PIN" BOOTSTRAP_RAW="$TREE_NOPE" BOOTSTRAP_TARBALL="$TREE_NOPE.tgz" \
+  BOOTSTRAP_GIT_URL="$TREE_NOPE.git" BOOTSTRAP_JSDELIVR="$TREE_NOPE" BOOTSTRAP_GITHUB_API="$TREE_NOPE" -- --only "$TREE_FIRST"
+case "$CHECK_RC:$CHECK_OUT" in
+  30:*jsdelivr:*api:*) pass "control-tree-no-route-names-all-five" ;;
+  *) fail "control-tree-no-route-names-all-five" "rc $CHECK_RC: $(printf '%s' "$CHECK_OUT" | grep -m3 -E 'tarball|jsdelivr|api' | tr '\n' ' ')" ;;
+esac
+
 # 3. NEGATIVE CONTROL — one byte changed in one module: refused before anything is sourced or written.
 cp -R "$CHECK_TMP/mirror" "$CHECK_TMP/mirror-bad"
 printf '\n# one extra byte\n' >> "$CHECK_TMP/mirror-bad/mac-bootstrap-$TREE_PIN/modules/$TREE_FIRST.sh"
