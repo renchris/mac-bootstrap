@@ -133,6 +133,9 @@ are the contract.
 | `BOOTSTRAP_TELEMETRY_DIR` · `BOOTSTRAP_CONTEXT_THRESHOLD_PCT` · `BOOTSTRAP_CONTEXT_MAX_AGE_S` | seams | context-advisory tuning; defaults `/tmp/mac-bootstrap-telemetry`, `70`, `600`. |
 | `BOOTSTRAP_MICROSOFT_TENANT` | the operator | the Microsoft sign-in tenant `microsoft365` registers: `organizations` (the default — any work account), a tenant id, or `consumers` for a personal account. Recorded at install, so a cold verify agrees. |
 | `BOOTSTRAP_MICROSOFT_CLIENT_ID` | the operator | the id of an app IT registered, for a tenant that refuses the default one. An app id is public, not a secret. Recorded at install. |
+| `BOOTSTRAP_MICROSOFT_ACCOUNT` | the operator | the signed-in account `microsoft365_archive` reads as, when more than one sits in the tenant. Checked against the server's signed-in accounts; recorded at install. |
+| `BOOTSTRAP_ARCHIVE_DIR` | the operator | where `microsoft365_archive` keeps the markdown archive (default `$HOME/Microsoft365Archive`). Refused under `$HOME/Library/CloudStorage` or `$HOME/Library/Mobile Documents`, so a sync client never re-uploads client content. Recorded at install; uninstall never deletes it. |
+| `SHARED_FOLDERS_CLOUD_DIR` | tests | replaces `$HOME/Library/CloudStorage` as the place `shared-folder` looks for OneDrive roots, so the relink and refusal paths are tested against a fake root. |
 
 ---
 
