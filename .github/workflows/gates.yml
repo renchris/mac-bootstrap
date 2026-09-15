@@ -1,0 +1,66 @@
+name: gates
+
+# The commit-time gates AGENTS.md names — lint, the target-bash parse, every selftest and the
+# characterization suite — run on every change here, not only on the author's Mac. Until this job
+# existed, 334 checks and every hook selftest were green only where they were written.
+#
+# macos-latest, because the suite drives the real driver, and the driver needs plutil, sw_vers and
+# /bin/bash 3.2.57 — the bash a fresh Mac ships, which Homebrew's bash 5 is not a stand-in for.
+# push is main only: a branch is gated when it opens a pull request, so no change is run twice.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0        # the release-tree checks fetch HEAD from this clone over file://
+
+      - name: shellcheck is present
+        env:
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          shellcheck --version
+
+      - name: lint (the AGENTS.md set)
+        run: shellcheck -S warning bootstrap.sh verify.sh scripts/*.sh scripts/checks/*.sh modules/*.sh assets/hooks/*.sh
+
+      - name: every shell file parses under /bin/bash 3.2
+        run: |
+          bad=""
+          for f in $(git ls-files); do
+            case "$f" in
+              *.sh) : ;;
+              *) head -1 "$f" 2>/dev/null | grep -q '^#!.*bash' || continue ;;
+            esac
+            /bin/bash -n "$f" || bad="$bad $f"
+          done
+          [ -z "$bad" ] || { echo "does not parse under /bin/bash 3.2:$bad"; exit 1; }
+
+      - name: selftests (the library and every hook that has one)
+        run: |
+          /bin/bash assets/hooks/bootstrap-lib.sh --selftest
+          for f in assets/hooks/*.sh; do
+            [ "$f" = assets/hooks/bootstrap-lib.sh ] && continue
+            if grep -q -- '--selftest)' "$f"; then echo "== $f"; /bin/bash "$f" --selftest
+            else echo "== $f: no selftest"; fi
+          done
+
+      - name: characterize
+        run: bash scripts/characterize.sh

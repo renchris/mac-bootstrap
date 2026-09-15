@@ -1,0 +1,27 @@
+name: currency
+
+# Weekly: is every third-party version this repo pins still the upstream latest? A BEHIND pin, or an
+# upstream that did not answer, fails the run, and the failure email is the notification.
+#
+# Schedule and manual runs only — never on push. This job asks four upstream hosts over the network, and a
+# registry's bad minute must never block a commit; a stale pin is news, not a broken build.
+# The job runs /bin/bash, the bash a fresh Mac ships, so the script is exercised as the target runs it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"        # Mondays 06:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  currency:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: every pin against its upstream
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # the GitHub API's anonymous limit is per runner IP, which is shared
+        run: /bin/bash scripts/currency.sh

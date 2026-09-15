@@ -6,6 +6,12 @@ name: release-pin
 # otherwise complete and public — a defect no test on this machine could see, because a clone
 # always has modules/ beside the script. This job is the arm that can see it: it fetches what a
 # stranger fetches, anonymously, and compares every byte against the pinned tree.
+#
+# macos-latest, not ubuntu-latest: hop 3 runs the README prompt's own commands against the PUBLISHED
+# script, and the driver runs only on macOS, so on Linux it printed "hop 3: skipped" (run 34987227311)
+# and the gate that runs on every push never ran it. Hops 1 and 2 are curl, shasum and git, identical
+# on either runner, so a second Ubuntu job would add no coverage — only a second anonymous fetch of
+# every file — and it was replaced rather than kept.
 
 on:
   workflow_dispatch:
@@ -14,11 +20,14 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0        # --check reads `git show <pin>:<path>`; a shallow clone has no pin
       - run: bash scripts/release.sh --check
