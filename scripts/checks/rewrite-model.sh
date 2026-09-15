@@ -25,12 +25,13 @@ VI_MOD="$CHECK_ROOT/modules/voiceink.sh"
 # nothing at all.
 cat > "$RM_DIR/bin/curl" <<'STUB'
 #!/bin/bash
-out=""; fmt=""; url=""; fail=0
+out=""; fmt=""; url=""; fail=0; body=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift ;;
     -w) fmt="$2"; shift ;;
-    -d|-H|-m) shift ;;
+    -d) body="$2"; shift ;;
+    -H|-m) shift ;;
     -*f*) fail=1 ;;
     http*) url="$1" ;;
   esac
@@ -39,6 +40,9 @@ done
 printf '%s\n' "$url" >> "$RM_FAKE_API/calls"
 p="${url#*://}"; p="/${p#*/}"
 f="$RM_FAKE_API/$(printf '%s' "${p#/api/}" | tr '/' '_').json"
+# /api/show answers per model when a show@<model>.json exists; show.json stays the default.
+m="$(printf '%s' "$body" | sed -n 's/.*"model":"\([^"]*\)".*/\1/p' | tr ':/' '__')"
+[ "$p" = /api/show ] && [ -n "$m" ] && [ -f "$RM_FAKE_API/show@$m.json" ] && f="$RM_FAKE_API/show@$m.json"
 if [ ! -f "$f" ]; then [ "$fail" = 1 ] && exit 22; [ -n "$fmt" ] && printf '404'; exit 0; fi
 if [ -n "$out" ]; then cat "$f" > "$out"; else cat "$f"; fi
 [ -n "$fmt" ] && printf '200'
@@ -53,10 +57,13 @@ rm_api() {
   rm -rf "$RM_DIR/api"; mkdir -p "$RM_DIR/api" "$RM_DIR/lo/api"
   ln -sfn "$RM_DIR/api/tags.json" "$RM_DIR/lo/api/tags"   # the same bytes, in the local-only reader's file:// layout
   printf '{"version":"0.34.0"}' > "$RM_DIR/api/version.json"
-  printf '{"models":[{"name":"voiceink-rewrite:latest","digest":"d1g3st","size":5225387842}]}' > "$RM_DIR/api/tags.json"
+  printf '{"models":[{"name":"voiceink-rewrite:latest","digest":"d1g3st","size":5225387842},{"name":"local-agent:latest","digest":"4g3nt","size":5225387842},{"name":"qwen3:8b","digest":"b4s3","size":5225387842}]}' > "$RM_DIR/api/tags.json"
   printf '{"details":{"parent_model":"qwen3:8b"},"parameters":"num_ctx                        4096\\ntemperature                    0.2"}' > "$RM_DIR/api/show.json"
+  rm_agent_show 32768
   printf '{"cloud":{"disabled":true,"source":"env"}}' > "$RM_DIR/api/status.json"
 }
+# rm_agent_show <num_ctx> — what the server reports for the local-agent tag.
+rm_agent_show() { printf '{"details":{"parent_model":"qwen3:8b"},"parameters":"num_ctx                        %s"}' "$1" > "$RM_DIR/api/show@local-agent.json"; }
 
 # rm_voiceink <plist> <modes-json> — a VoiceInk preference file with the timeout set and these modes.
 rm_voiceink() {
@@ -393,3 +400,67 @@ h="$(fresh_home vi-pin-ok)"; out="$(vi_fetch "$h" "$VI_SHA")"
 same "voiceink-pinned-commit-checks-out" "$?" 0
 h="$(fresh_home vi-pin-moved)"; out="$(vi_fetch "$h" 0000000000000000000000000000000000000000)"; rc=$?
 case "$rc/$out" in 1/*"was moved upstream"*) pass "voiceink-moved-tag-refused" ;; *) fail "voiceink-moved-tag-refused" "rc $rc: $out" ;; esac
+
+# 16. The local-agent tag: the same base at 32k context, beside voiceink-rewrite at 4096. ─────────
+# A recording ollama stands in: `create` turns the Modelfile it is handed into what the fake server
+# then reports for that model (parent and parameter block), and `rm` takes it away again.
+cat > "$RM_DIR/bin/ollama-recording" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$RM_FAKE_API/ollama-calls"
+case "${1:-}" in
+  create)
+    base="$(sed -n 's/^FROM //p' "$4" | head -1)"
+    params="$(sed -n 's/^PARAMETER \([a-z_]*\) \(.*\)$/\1 \2/p' "$4" | awk '{ printf "%s%s                        %s", s, $1, $2; s = "\\n" }')"
+    printf '{"details":{"parent_model":"%s"},"parameters":"%s"}' "$base" "$params" > "$RM_FAKE_API/show@$(printf '%s' "$2" | tr ':/' '__').json" ;;
+  rm) rm -f "$RM_FAKE_API/show@$(printf '%s' "$2" | tr ':/' '__').json" ;;
+esac
+exit 0
+STUB
+chmod +x "$RM_DIR/bin/ollama-recording"
+rm_record() { RM_OLLAMA="$RM_DIR/bin/ollama-recording"; BOOTSTRAP_MODEL=qwen3:8b; export RM_OLLAMA BOOTSTRAP_MODEL; "$@"; }
+rm_creates() { grep -c "^create $1 " "$RM_DIR/api/ollama-calls" 2>/dev/null | tr -d ' '; }
+
+h="$(fresh_home rm-local-agent)"; rm_receipt "$h"; rm_api
+rm -f "$RM_DIR/api/show.json" "$RM_DIR/api/show@local-agent.json"; : > "$RM_DIR/api/ollama-calls"
+rm_fx "[$RM_MODE_OLLAMA]"
+RM_OUT="$( (rm_record rm_call "$h" install_rewrite_model) 2>&1)"; RM_RC=$?
+same "local-agent-install-rc" "$RM_RC" 0
+same "local-agent-created-at-32k" "$(json_at "$RM_DIR/api/show@local-agent.json" details.parent_model)|$(json_at "$RM_DIR/api/show@local-agent.json" parameters)" \
+  "qwen3:8b|num_ctx                        32768"
+case "$(json_at "$RM_DIR/api/show@voiceink-rewrite.json" parameters)" in
+  *"num_ctx                        4096"*"temperature                        0.2"*) pass "local-agent-rewrite-model-keeps-4096" ;;
+  *) fail "local-agent-rewrite-model-keeps-4096" "$(json_at "$RM_DIR/api/show@voiceink-rewrite.json" parameters)" ;;
+esac
+( rm_record rm_call "$h" install_rewrite_model ) >/dev/null 2>&1
+same "local-agent-second-install-creates-nothing" "$(rm_creates local-agent)/$(rm_creates voiceink-rewrite)" "1/1"
+rm_call "$h" verify_rewrite_model 2>/dev/null; same "local-agent-verify" "$?" 0
+rm_agent_show 4096
+rm_call "$h" verify_rewrite_model 2>/dev/null; same "local-agent-verify-at-4096-fails" "$?" 1
+rm_call "$h" rewrite_model_machine_ready 2>/dev/null; same "local-agent-at-4096-is-machine-work" "$?" 1
+rm_agent_show 32768
+rm_call "$h" verify_rewrite_model 2>/dev/null; same "local-agent-verify-control-again" "$?" 0
+: > "$RM_DIR/api/ollama-calls"
+( rm_record rm_call "$h" uninstall_rewrite_model ) >/dev/null 2>&1
+same "local-agent-uninstall-removes-it" "$(grep -c '^rm local-agent$' "$RM_DIR/api/ollama-calls" | tr -d ' ')" 1
+same "local-agent-uninstall-keeps-the-base" "$(grep -c '^rm qwen3:8b' "$RM_DIR/api/ollama-calls" | tr -d ' ')" 0
+if [ -e "$h/.mac-bootstrap/rewrite-model-local-agent.created" ]; then fail "local-agent-uninstall-clears-its-marker"; else pass "local-agent-uninstall-clears-its-marker"; fi
+
+# A name that would overwrite the rewrite model or the base is refused before any request; a same-named
+# model this bootstrap did not make is left alone, and so is not removed by uninstall either.
+h="$(fresh_home rm-local-agent-refuse)"; rm_receipt "$h"; rm_api; : > "$RM_DIR/api/calls"
+for n in voiceink-rewrite qwen3:8b 'bad name'; do
+  RM_OUT="$( (BOOTSTRAP_REWRITE_MODEL_AGENT_NAME="$n"; export BOOTSTRAP_REWRITE_MODEL_AGENT_NAME; rm_record rm_call "$h" install_rewrite_model) 2>&1)"; RM_RC=$?
+  same "local-agent-name-$(printf %s "$n" | tr -c "a-z0-9:.\n-" -)-refused" "$RM_RC/$(grep -c . "$RM_DIR/api/calls" | tr -d ' ')" "2/0"
+done
+rm_agent_show 8192; : > "$RM_DIR/api/ollama-calls"; rm_fx "[$RM_MODE_OLLAMA]"
+RM_OUT="$( (rm_record rm_call "$h" install_rewrite_model) 2>&1)"; RM_RC=$?
+case "$RM_RC/$(rm_creates local-agent)/$RM_OUT" in
+  "2/0/"*"did not make it"*) pass "local-agent-foreign-tag-left-alone" ;;
+  *) fail "local-agent-foreign-tag-left-alone" "rc $RM_RC: $(printf '%s' "$RM_OUT" | tail -2)" ;;
+esac
+( rm_record rm_call "$h" uninstall_rewrite_model ) >/dev/null 2>&1
+same "local-agent-foreign-tag-not-uninstalled" "$(grep -c '^rm local-agent$' "$RM_DIR/api/ollama-calls" | tr -d ' ')" 0
+
+# What a person reads before choosing names the tag and how to point an agent at it.
+case "$(rm_call "$h" what_rewrite_model 2>/dev/null)" in *"local-agent tag at 32k context"*"COPILOT_MODEL=local-agent"*) pass "what-rewrite-model-names-local-agent" ;;
+  *) fail "what-rewrite-model-names-local-agent" "$(rm_call "$h" what_rewrite_model 2>/dev/null)" ;; esac

@@ -16,6 +16,8 @@
 #      num_ctx 4096 / temperature 0.2 / top_p 0.9 / top_k 20 / repeat_penalty 1.0 baked in, and
 #      NOT backed by a remote host. A cloud base (`*-cloud`, `:cloud`, or a model whose /api/tags
 #      entry carries remote_host) is refused by --model and --bench before any request.
+#   3b. a second derived tag `local-agent`, FROM the same base with num_ctx 32768 and nothing else,
+#      for a coding agent pointed at this server (see rewrite_model_local_agent_create).
 #   4. THAT EXACT MODEL (matched by digest, not by name) has passed assets/model-gate.sh
 #   5. VoiceInk's EnhancementTimeoutSeconds is 15
 #   6. EVERY enabled VoiceInk mode with AI enhancement on names provider Ollama AND model
@@ -136,6 +138,8 @@
 
 # ── seams. Every one has a default; none is required. ────────────────────────────────────────
 REWRITE_MODEL_NAME="${BOOTSTRAP_REWRITE_MODEL_NAME:-voiceink-rewrite}"            # the derived model, and the VoiceInk picker entry
+REWRITE_MODEL_LOCAL_AGENT_NAME="${BOOTSTRAP_REWRITE_MODEL_AGENT_NAME:-local-agent}"  # the same base at 32k, for a coding agent
+REWRITE_MODEL_LOCAL_AGENT_CTX=32768
 REWRITE_MODEL_URL="${MODEL_GATE_BASE_URL:-http://localhost:11434}"
 REWRITE_MODEL_DOMAIN="${BOOTSTRAP_REWRITE_MODEL_DOMAIN:-com.prakashjoshipax.VoiceInk}"
 REWRITE_MODEL_TIMEOUT_S="${BOOTSTRAP_REWRITE_MODEL_TIMEOUT_S:-15}"                # EnhancementTimeoutSeconds
@@ -463,6 +467,70 @@ rewrite_model_params_ok() {
   return 0
 }
 
+# ── the local-agent tag ──────────────────────────────────────────────────────────────────────
+# A coding agent pointed at this server (Copilot CLI with COPILOT_OFFLINE=true,
+# COPILOT_PROVIDER_BASE_URL=<this URL>/v1, COPILOT_MODEL=local-agent) talks to ollama's
+# OpenAI-compatible endpoint, which cannot carry num_ctx per request, and below 24 GiB of GPU
+# memory ollama serves 4,096 tokens by default. Measured: the prompt is truncated, the agent calls
+# the wrong tool, and it still exits 0. So the context is baked into a TAG. Only num_ctx is set —
+# the template and every other parameter are the base's — and it costs KV-cache memory only while
+# this tag is loaded; voiceink-rewrite keeps its own 4096.
+
+# rewrite_model_local_agent_ok <showfile> — the server's own parameter block says num_ctx 32768. The
+# same second engine as rewrite_model_params_ok: /api/show, rendered by the server from its manifest.
+rewrite_model_local_agent_ok() {
+  local p
+  p="$(rewrite_model_json_field "$1" parameters)" || return 1
+  printf '%s' "$p" | grep -qE "^[[:space:]]*num_ctx[[:space:]]+${REWRITE_MODEL_LOCAL_AGENT_CTX}[[:space:]]*\$"
+}
+
+# rewrite_model_local_agent_current <base> <showfile> — the tag exists, derives from <base>, and the
+# server reports num_ctx 32768 for it.
+rewrite_model_local_agent_current() {
+  rewrite_model_show "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$2" || return 1
+  rewrite_model_local_agent_ok "$2" || return 1
+  [ "$(rewrite_model_json_field "$2" details.parent_model 2>/dev/null)" = "$1" ]
+}
+
+# The tag this module created, by name, so uninstall removes that one and never a model of the same
+# name someone made themselves.
+rewrite_model_local_agent_marker() { rewrite_model_state rewrite-model-local-agent.created; }
+
+# rewrite_model_same_tag <a> <b> — one ollama model: a bare name means :latest.
+rewrite_model_same_tag() {
+  local a="$1" b="$2"
+  case "$a" in *:*) : ;; *) a="$a:latest" ;; esac
+  case "$b" in *:*) : ;; *) b="$b:latest" ;; esac
+  [ "$a" = "$b" ]
+}
+
+# rewrite_model_local_agent_create <ollama> <base> — rc 0 when the tag is current, 1 (after a warning)
+# when it could not be made. A tag of this name that this module did not make is never overwritten.
+rewrite_model_local_agent_create() {
+  local ollama="$1" base="$2" show rendered
+  show="$(rewrite_model_state rewrite-model-cache-local-agent-show.json)"
+  if rewrite_model_local_agent_current "$base" "$show"; then
+    printf 'rewrite_model: %s already derives from %s at num_ctx %s\n' "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$base" "$REWRITE_MODEL_LOCAL_AGENT_CTX"
+    return 0
+  fi
+  if rewrite_model_show "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$show" && [ ! -f "$(rewrite_model_local_agent_marker)" ]; then
+    bootstrap_warn "rewrite_model: a model named $REWRITE_MODEL_LOCAL_AGENT_NAME already exists and this bootstrap did not make it — leaving it alone; set BOOTSTRAP_REWRITE_MODEL_AGENT_NAME to another name"
+    return 1
+  fi
+  rendered="$(rewrite_model_state rewrite-model-local-agent.Modelfile)"
+  printf 'FROM %s\nPARAMETER num_ctx %s\n' "$base" "$REWRITE_MODEL_LOCAL_AGENT_CTX" >"$rendered" \
+    || { bootstrap_warn "rewrite_model: could not render the $REWRITE_MODEL_LOCAL_AGENT_NAME Modelfile"; return 1; }
+  printf 'rewrite_model: creating %s from %s at num_ctx %s\n' "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$base" "$REWRITE_MODEL_LOCAL_AGENT_CTX"
+  "$ollama" create "$REWRITE_MODEL_LOCAL_AGENT_NAME" -f "$rendered" \
+    || { bootstrap_warn "rewrite_model: ollama create $REWRITE_MODEL_LOCAL_AGENT_NAME failed"; return 1; }
+  printf '%s\n' "$REWRITE_MODEL_LOCAL_AGENT_NAME" >"$(rewrite_model_local_agent_marker)"
+  rewrite_model_show "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$show" \
+    || { bootstrap_warn "rewrite_model: $REWRITE_MODEL_LOCAL_AGENT_NAME is absent after create"; return 1; }
+  rewrite_model_local_agent_ok "$show" \
+    || { bootstrap_warn "rewrite_model: $REWRITE_MODEL_LOCAL_AGENT_NAME exists but the server does not report num_ctx $REWRITE_MODEL_LOCAL_AGENT_CTX"; return 1; }
+  return 0
+}
+
 # ── VoiceInk preferences ─────────────────────────────────────────────────────────────────────
 # `defaults`, not bootstrap_settings_merge: that function is the one writer for JSON settings FILES and
 # structurally refuses anything whose first byte is not `{` — this domain is a binary plist owned
@@ -786,6 +854,10 @@ rewrite_model_machine_ready() {
   # A derived model built FROM a cloud base renders its parameters locally and passes params_ok
   # (measured in the research), so only its remote_host tells it apart.
   rewrite_model_remote_model "$REWRITE_MODEL_NAME" && return 1
+  # The local-agent tag is machine work too: were it left out, a Mac still waiting on the VoiceInk
+  # GUI step would report NEEDS_HUMAN and install_ would never run to create it.
+  rewrite_model_local_agent_current "$(rewrite_model_json_field "$show" details.parent_model 2>/dev/null)" \
+    "$(rewrite_model_state rewrite-model-cache-local-agent-show.json)" || return 1
   return 0
 }
 
@@ -797,19 +869,24 @@ rewrite_model_machine_ready() {
 # what_ and cost_ name the ROUTE, because it is what a standard user most needs to know before
 # choosing this: whether it will ask for Homebrew, which they cannot install.
 what_rewrite_model() {
+  local agent
+  agent=", plus a $REWRITE_MODEL_LOCAL_AGENT_NAME tag at 32k context for an agent pointed at this Ollama (COPILOT_MODEL=$REWRITE_MODEL_LOCAL_AGENT_NAME)"
   case "$(rewrite_model_route 2>/dev/null)" in
-    brew)          printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — ollama via Homebrew' ;;
-    pinned|oldmac) printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — ollama from its pinned GitHub release, into your home folder, with no admin rights needed' ;;
-    *)             printf '%s' 'a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — on the ollama already installed' ;;
+    brew)          printf '%s' "a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — ollama via Homebrew$agent" ;;
+    pinned|oldmac) printf '%s' "a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — ollama from its pinned GitHub release, into your home folder, with no admin rights needed$agent" ;;
+    *)             printf '%s' "a LOCAL speech-rewrite model, so dictation cleanup needs no cloud API key — on the ollama already installed$agent" ;;
   esac
 }
+# The local-agent figure is arithmetic, not a measurement of the tag: qwen3:8b's KV geometry is
+# ~78 KB/token at ollama's default q8_0 cache (measured on the development Mac), times 32768.
 cost_rewrite_model() {
-  local server
+  local server agent
   server="An ollama server stays running from login, listening on 127.0.0.1:$(rewrite_model_url_port "$REWRITE_MODEL_URL")."
+  agent="The $REWRITE_MODEL_LOCAL_AGENT_NAME tag downloads nothing (it reuses the base's weights); only while it is loaded, its 32k context needs about 2.5 GB more memory than the rewrite model (qwen3:8b)."
   case "$(rewrite_model_route 2>/dev/null)" in
-    brew)          printf '%s' "Homebrew's ollama + a ~5 GB model download. Several minutes. $server One pass through VoiceInk's modes at the end." ;;
-    pinned|oldmac) printf '%s' "a pinned 160 MB ollama download + a ~5 GB model download. Several minutes. $server One pass through VoiceInk's modes at the end." ;;
-    *)             printf '%s' "a ~5 GB model download. Several minutes. $server One pass through VoiceInk's modes at the end." ;;
+    brew)          printf '%s' "Homebrew's ollama + a ~5 GB model download. Several minutes. $server $agent One pass through VoiceInk's modes at the end." ;;
+    pinned|oldmac) printf '%s' "a pinned 160 MB ollama download + a ~5 GB model download. Several minutes. $server $agent One pass through VoiceInk's modes at the end." ;;
+    *)             printf '%s' "a ~5 GB model download. Several minutes. $server $agent One pass through VoiceInk's modes at the end." ;;
   esac
 }
 profile_rewrite_model() { printf '%s' 'standard'; }
@@ -1058,6 +1135,18 @@ install_rewrite_model() {
       bootstrap_warn "rewrite_model: refusing base '$base' — that is not a well-formed ollama model tag"
       return 2 ;;
   esac
+  # The local-agent name comes from a seam and is handed to `ollama create` and `ollama rm`, so it is
+  # held to the same rule — and it may never name a model that `create` would overwrite and
+  # uninstall would then delete: the base, or the rewrite model itself.
+  case "$REWRITE_MODEL_LOCAL_AGENT_NAME" in
+    ''|*[!A-Za-z0-9._:/-]*)
+      bootstrap_warn "rewrite_model: refusing BOOTSTRAP_REWRITE_MODEL_AGENT_NAME '$REWRITE_MODEL_LOCAL_AGENT_NAME' — that is not a well-formed ollama model tag"
+      return 2 ;;
+  esac
+  if rewrite_model_same_tag "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$base" || rewrite_model_same_tag "$REWRITE_MODEL_LOCAL_AGENT_NAME" "$REWRITE_MODEL_NAME"; then
+    bootstrap_warn "rewrite_model: refusing BOOTSTRAP_REWRITE_MODEL_AGENT_NAME '$REWRITE_MODEL_LOCAL_AGENT_NAME' — it names $base or $REWRITE_MODEL_NAME, which creating it would overwrite. Nothing was requested."
+    return 2
+  fi
   if rewrite_model_cloud_ref "$base"; then
     bootstrap_warn "rewrite_model: refusing base '$base' — it is an ollama CLOUD model, whose every generation is sent to ollama.com. Nothing was requested."
     return 2
@@ -1181,6 +1270,8 @@ install_rewrite_model() {
     "$ollama" rm "$REWRITE_MODEL_NAME" >/dev/null 2>&1 || true
     return 2
   fi
+  # 6b. the local-agent tag: the same base at 32k context, for a coding agent (see its helpers).
+  rewrite_model_local_agent_create "$ollama" "$base" || return 2
 
   # 7. the acceptance gate — BEFORE anything is called done ───────────────────────────────────
   # A model that answers the dictated question instead of rewriting it pastes its answer into
@@ -1262,9 +1353,15 @@ install_rewrite_model() {
 }
 
 uninstall_rewrite_model() {
-  local ollama prev
+  local ollama prev agent
   if ollama="$(rewrite_model_ollama)" && rewrite_model_server_up && rewrite_model_model_present "$REWRITE_MODEL_NAME"; then
     "$ollama" rm "$REWRITE_MODEL_NAME" >/dev/null 2>&1 || bootstrap_warn "rewrite_model: ollama rm $REWRITE_MODEL_NAME failed"
+  fi
+  # The local-agent tag by the name its marker recorded, so a changed seam cannot aim this at
+  # another model, and a same-named model this bootstrap did not create is never removed.
+  agent="$(/usr/bin/head -1 "$(rewrite_model_local_agent_marker)" 2>/dev/null)"
+  if [ -n "$agent" ] && ollama="$(rewrite_model_ollama)" && rewrite_model_server_up && rewrite_model_model_present "$agent"; then
+    "$ollama" rm "$agent" >/dev/null 2>&1 || bootstrap_warn "rewrite_model: ollama rm $agent failed"
   fi
   # The BASE model is left alone unless asked: re-pulling several GB over someone's network is
   # not a reversal anybody wants by surprise, and other things on the machine may use it.
@@ -1317,7 +1414,8 @@ uninstall_rewrite_model() {
         "$(rewrite_model_state rewrite-model-cache-show.json)" "$(rewrite_model_state rewrite-model-cache-tags.json)" \
         "$(rewrite_model_state rewrite-model-cache-status.json)" "$(rewrite_model_state rewrite-model-fetch-failed)" \
         "$(rewrite_model_state rewrite-model-cache-bench-show.json)" "$(rewrite_model_state rewrite-model-cache-bench-ps.json)" \
-        "$(rewrite_model_state ollama-serve.log)" 2>/dev/null || true
+        "$(rewrite_model_state ollama-serve.log)" "$(rewrite_model_local_agent_marker)" \
+        "$(rewrite_model_state rewrite-model-local-agent.Modelfile)" "$(rewrite_model_state rewrite-model-cache-local-agent-show.json)" 2>/dev/null || true
   return 0
 }
 
