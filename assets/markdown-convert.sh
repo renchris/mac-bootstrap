@@ -16,7 +16,9 @@
 #    0  converted
 #    1  the converter ran and failed (its stderr is passed through)
 #    2  usage: no such file, not a regular file, no argument
-#   10  no converter installed for this type — stderr names the one install command
+#   10  no converter for this file — stderr says why in one line: none installed for the type (and the
+#       one install command, where this user can run one), the bytes are audio or video, or the only
+#       markitdown here could send audio off the Mac and is not used
 #   11  dataless — the file is a File Provider placeholder whose bytes are not on this Mac
 #
 # 🚨 A DATALESS FILE IS NEVER READ. OneDrive and iCloud keep "online-only" files as placeholders whose
@@ -28,16 +30,40 @@
 # opened with one that is chmod 000: reading it would have failed.
 #
 # WHERE THE TOOLS ARE LOOKED FOR: PATH first, then MARKDOWN_CONVERT_TOOL_DIRS (colon-separated;
-# default Homebrew's two prefixes and uv's $HOME/.local/bin). The second list exists because a launchd
-# job runs with PATH=/usr/bin:/bin:/usr/sbin:/sbin, where neither pandoc nor markitdown ever is.
+# default the bootstrap's own user-owned tools/bin, Homebrew's two prefixes and uv's $HOME/.local/bin).
+# The second list exists because a launchd job runs with PATH=/usr/bin:/bin:/usr/sbin:/sbin, where
+# neither pandoc nor markitdown ever is.
 #
-# Nothing here needs a network, writes a file outside its own temp dir, or needs any permission.
+# 🚨 NOTHING HERE REACHES A NETWORK, AND THIS IS HOW THAT IS KEPT TRUE FOR EACH TOOL.
+#   pandoc     runs with --sandbox, which limits its readers and writers to the one file named on the
+#              command line: a client's html or docx that names an image URL or another file is not
+#              followed (pandoc MANUAL, --sandbox). Measured on pandoc 3.8.2 against a local listener:
+#              our exact call on html naming an <img>, a stylesheet and an <iframe> made 0 requests;
+#              the control, --embed-resources WITHOUT --sandbox, made 3; --sandbox with it, 0. So the
+#              sandbox is what makes "nothing is fetched" a guarantee rather than a default of -t gfm.
+#   markitdown (read from its 0.1.7 source) has four converters that can reach a network, and our one
+#              invocation, `<its python> -I <markitdown> ./<file>`, reaches none of them:
+#     · audio and video transcription posts the audio to Google's speech API (recognize_google, plain
+#       http). markitdown sniffs CONTENT as well as the name and tries both guesses, so audio named
+#       report.pdf reaches it. Two locks: a file whose bytes are audio or video is never handed over
+#       (decided by `file`, below), and a markitdown whose Python can import speech_recognition is
+#       never used at all — without it the transcriber is skipped (MissingDependencyException is
+#       caught), so even audio inside a zip named .pptx sends nothing.
+#     · YouTube transcripts need a YouTube URL; we only ever pass a local path, and a path that starts
+#       ./ or / can never be read as a URL (convert() treats only http:, https:, file:, data: as one).
+#     · Azure Document Intelligence and Content Understanding run only under -d or --use-cu, which we
+#       never pass; their endpoints come from those flags, not from the environment.
+#     · LLM image and slide captions need an llm_client, which the CLI never builds; plugins load only
+#       under -p, which we never pass.
+#   So the install we recommend carries no transcription extra at all: markitdown[pdf,pptx,xlsx,xls]
+#   is exactly the four types routed to it (extras names measured in markitdown 0.1.0 and 0.1.7).
+#
+# Nothing here writes a file outside its own temp dir, or needs any permission.
 
 set -u
 
 MARKDOWN_CONVERT_SF_DATALESS=1073741824        # 0x40000000, from <sys/stat.h>
-MARKDOWN_CONVERT_PANDOC_INSTALL="brew install pandoc"
-MARKDOWN_CONVERT_MARKITDOWN_INSTALL="uv tool install 'markitdown[all]'"
+MARKDOWN_CONVERT_MARKITDOWN_SPEC="markitdown[pdf,pptx,xlsx,xls]"
 MARKDOWN_CONVERT_TYPES="md markdown txt csv json html htm docx odt rtf epub pptx xlsx xls pdf vtt"
 
 markdown_convert_say() { printf 'markdown-convert: %s\n' "$*" >&2; }
@@ -77,7 +103,7 @@ markdown_convert_find_tool() {
   local name="$1" found dir dirs
   found="$(command -v "$name" 2>/dev/null)"
   case "$found" in /*) [ -x "$found" ] && { printf '%s' "$found"; return 0; } ;; esac
-  dirs="${MARKDOWN_CONVERT_TOOL_DIRS-/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin}"
+  dirs="${MARKDOWN_CONVERT_TOOL_DIRS-${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/tools/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin}"
   local IFS=:
   for dir in $dirs; do
     [ -n "$dir" ] && [ -x "$dir/$name" ] && [ ! -d "$dir/$name" ] && { printf '%s' "$dir/$name"; return 0; }
@@ -85,22 +111,97 @@ markdown_convert_find_tool() {
   return 1
 }
 
-# markdown_convert_tool_version <path> — the version word of a tool's `--version` first line.
+# markdown_convert_tool_version <command…> — the version word of a tool's `--version` first line.
 # `pandoc --version` → "pandoc 3.11"; `markitdown --version` → "markitdown 0.1.7". Last word, either way.
 markdown_convert_tool_version() {
   local first
-  first="$("$1" --version 2>/dev/null | sed -n 1p)"
+  first="$("$@" --version 2>/dev/null | sed -n 1p)"
   first="${first##* }"
   case "$first" in ''|*[!0-9A-Za-z.+_-]*) printf 'unknown' ;; *) printf '%s' "$first" ;; esac
 }
 
+# ── the install hints. A standard user cannot run Homebrew, so a `brew install` is offered only to an
+#    admin who has it; uv installs into $HOME with no admin, so it is offered to anyone who has uv. ──
+markdown_convert_is_admin() {
+  [ "${BOOTSTRAP_ASSUME_STANDARD_USER:-0}" = 1 ] && return 1
+  /usr/bin/id -Gn 2>/dev/null | /usr/bin/tr ' ' '\n' | /usr/bin/grep -qx admin
+}
+
+# markdown_convert_command_word <name> — how to type <name> so it runs: the bare name when PATH finds
+# it, else its absolute path spelled from "$HOME"; rc 1 when it is nowhere.
+markdown_convert_command_word() {
+  local found
+  found="$(command -v "$1" 2>/dev/null)"
+  case "$found" in /*) printf '%s' "$1"; return 0 ;; esac
+  found="$(markdown_convert_find_tool "$1")" || return 1
+  case "$found" in "$HOME"/*) printf '"$HOME/%s"' "${found#"$HOME"/}" ;; *) printf '%s' "$found" ;; esac
+}
+
+markdown_convert_pandoc_hint() {
+  local brew
+  if markdown_convert_is_admin && brew="$(markdown_convert_command_word brew)"; then
+    printf 'install one with: HOMEBREW_NO_ANALYTICS=1 %s install pandoc' "$brew"
+  elif markdown_convert_is_admin; then
+    printf 'pandoc is not on this Mac, and there is no Homebrew here to install it with'
+  else
+    printf 'pandoc is not on this Mac, and a standard user cannot install it with Homebrew — ask IT for pandoc'
+  fi
+}
+
+markdown_convert_markitdown_hint() {
+  local uv
+  if uv="$(markdown_convert_command_word uv)"; then
+    printf "install one with: %s tool install '%s'" "$uv" "$MARKDOWN_CONVERT_MARKITDOWN_SPEC"
+  else
+    printf 'markitdown is not on this Mac, and neither is uv, the tool it installs with (uv needs no admin: https://docs.astral.sh/uv/)'
+  fi
+}
+
+# ── the one markitdown we will run ─────────────────────────────────────────────────────────────────
+# markdown_convert_markitdown_python <markitdown> — the Python its launcher names, rc 1 when it cannot
+# be read. pip and uv write `#!<python>` on line 1, or, for a path that holds a space, `#!/bin/sh` and
+# `'''exec' "<python>" "$0" "$@"` on line 2. That Python is then both what is probed and what runs
+# markitdown, so the probe's answer is about the interpreter that is actually used.
+markdown_convert_markitdown_python() {
+  local first py
+  first="$(sed -n 1p "$1" 2>/dev/null)"
+  case "$first" in
+    '#!/bin/sh'*) py="$(sed -n "2s/^'''exec' [\"']\([^\"']*\)[\"'].*/\1/p" "$1" 2>/dev/null)" ;;
+    '#!/'*)       py="${first#\#!}"; py="${py%% *}" ;;
+    *)            return 1 ;;
+  esac
+  case "${py##*/}" in python*) : ;; *) return 1 ;; esac
+  [ -x "$py" ] && [ ! -d "$py" ] || return 1
+  printf '%s' "$py"
+}
+
+# markdown_convert_speech <python> — "absent" only when that Python, isolated (-I: no PYTHONPATH, no
+# user site), cannot find speech_recognition, the module markitdown transcribes audio with. find_spec
+# locates without importing. Anything else — "present", an error, no answer — is not "absent".
+markdown_convert_speech() {
+  local out
+  out="$("$1" -I -c 'import importlib.util as u; print("present" if u.find_spec("speech_recognition") else "absent")' 2>/dev/null)"
+  case "$out" in absent|present) printf '%s' "$out" ;; *) printf 'unknown' ;; esac
+}
+
+# markdown_convert_reinstall_hint <markitdown> — the one command that replaces an unusable markitdown.
+markdown_convert_reinstall_hint() {
+  local uv
+  uv="$(markdown_convert_command_word uv)" || uv=uv
+  case "$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")" in
+    */uv/tools/*|"$HOME/.local/bin/"*) printf "%s tool uninstall markitdown && %s tool install '%s'" "$uv" "$uv" "$MARKDOWN_CONVERT_MARKITDOWN_SPEC" ;;
+    *) printf "remove the markitdown at %s, then: %s tool install '%s'" "$1" "$uv" "$MARKDOWN_CONVERT_MARKITDOWN_SPEC" ;;
+  esac
+}
+
 # markdown_convert_plan <file> — decide, without reading the file, how it would be converted.
-# Sets: plan_kind (passthrough|csv|json|pandoc|markitdown|none), plan_tool (path), plan_id (the
-# converter id), plan_why (the rc-10 message when kind is none).
+# Sets: plan_kind (passthrough|csv|json|pandoc|markitdown|none), plan_tool (path), plan_python (the
+# interpreter markitdown runs under), plan_id (the converter id), plan_why (the rc-10 message when kind
+# is none).
 markdown_convert_plan() {
-  local ext
+  local ext speech
   ext="$(markdown_convert_extension "$1")"
-  plan_kind=none; plan_tool=""; plan_id=none; plan_why=""
+  plan_kind=none; plan_tool=""; plan_python=""; plan_id=none; plan_why=""
   case "$ext" in
     md|markdown|txt) plan_kind=passthrough; plan_id="passthrough 1" ;;
     csv)             plan_kind=csv;         plan_id="csv-table 1" ;;
@@ -109,15 +210,22 @@ markdown_convert_plan() {
       if plan_tool="$(markdown_convert_find_tool pandoc)"; then
         plan_kind=pandoc; plan_id="pandoc $(markdown_convert_tool_version "$plan_tool")"
       else
-        plan_why="no converter for .$ext files is installed — install one with: $MARKDOWN_CONVERT_PANDOC_INSTALL"
+        plan_why="no converter for .$ext files is installed — $(markdown_convert_pandoc_hint)"
       fi ;;
     pptx|xlsx|xls|pdf)
       # pandoc is deliberately NOT a fallback here: markitdown is the one that keeps pptx speaker
       # notes and reads pdf at all.
-      if plan_tool="$(markdown_convert_find_tool markitdown)"; then
-        plan_kind=markitdown; plan_id="markitdown $(markdown_convert_tool_version "$plan_tool")"
+      if ! plan_tool="$(markdown_convert_find_tool markitdown)"; then
+        plan_why="no converter for .$ext files is installed — $(markdown_convert_markitdown_hint)"
+      elif ! plan_python="$(markdown_convert_markitdown_python "$plan_tool")"; then
+        plan_why="the markitdown at $plan_tool does not say which Python runs it, so whether it can send audio to Google's speech service cannot be checked, and it is not used — $(markdown_convert_reinstall_hint "$plan_tool")"
       else
-        plan_why="no converter for .$ext files is installed — install one with: $MARKDOWN_CONVERT_MARKITDOWN_INSTALL"
+        speech="$(markdown_convert_speech "$plan_python")"
+        case "$speech" in
+          absent)  plan_kind=markitdown; plan_id="markitdown $(markdown_convert_tool_version "$plan_python" -I "$plan_tool")" ;;
+          present) plan_why="the markitdown at $plan_tool can transcribe audio, which sends it to Google's speech service, so it is not used — $(markdown_convert_reinstall_hint "$plan_tool")" ;;
+          *)       plan_why="the Python that runs $plan_tool did not answer whether it can transcribe audio (which sends it to Google's speech service), so it is not used — $(markdown_convert_reinstall_hint "$plan_tool")" ;;
+        esac
       fi ;;
     vtt) plan_why="a .vtt transcript is rendered by the meeting archive itself, not here — nothing to install" ;;
     "")  plan_why="no converter for a file with no extension — nothing to install" ;;
@@ -182,7 +290,7 @@ markdown_convert_json() {
 
 # markdown_convert_run <file> — the whole pipeline for one file; returns the contract's exit code.
 markdown_convert_run() {
-  local file="${1:-}" safe
+  local file="${1:-}" safe mime
   [ -n "$file" ] || { markdown_convert_say "usage: markdown-convert.sh <file>"; return 2; }
   [ -e "$file" ] || { markdown_convert_say "$file: no such file"; return 2; }
   [ -f "$file" ] || { markdown_convert_say "$file: not a regular file"; return 2; }
@@ -194,6 +302,22 @@ markdown_convert_run() {
   if markdown_convert_is_dataless "$safe"; then
     markdown_convert_say "$file: dataless — not downloaded; reading it would download it. In Finder choose Always keep on this device, then convert again."
     return 11
+  fi
+  # markitdown decides a file's type from its bytes as well as its name, and transcribes audio and
+  # video through Google's speech service — so what it is handed is decided by the bytes too, never
+  # by the extension. `file` reads the header only, and only now: after the dataless test, because
+  # reading a placeholder downloads it.
+  if [ "$plan_kind" = markitdown ]; then
+    mime="$(/usr/bin/file -b -L --mime-type -- "$safe" 2>/dev/null)"
+    case "$mime" in
+      audio/*|video/*|application/ogg)
+        markdown_convert_say "$file: not converted — its bytes are $mime, not a .$(markdown_convert_extension "$file") document, and markitdown sends audio and video to Google's speech service, so it is never handed either — nothing to install"
+        return 10 ;;
+      */*) : ;;
+      *)
+        markdown_convert_say "$file: not converted — its type could not be read from its bytes, and markitdown is only handed a file known not to be audio or video — nothing to install"
+        return 10 ;;
+    esac
   fi
   case "$plan_kind" in
     passthrough) /bin/cat "$safe" || return 1 ;;
@@ -209,7 +333,9 @@ markdown_convert_run() {
       else
         "$plan_tool" --sandbox -f "$format" -t gfm --wrap=none "$safe" || return 1
       fi ;;
-    markitdown)  "$plan_tool" "$safe" || return 1 ;;
+    # Run under the very Python that was probed, isolated as the probe was: no flag that reaches a
+    # network is passed, and ./ or / in front means the argument is never read as a URL.
+    markitdown)  "$plan_python" -I "$plan_tool" "$safe" || return 1 ;;
   esac
   return 0
 }
@@ -302,17 +428,37 @@ markdown_convert_selftest() {
     && markdown_convert_ok "--help documents the -- form" || markdown_convert_bad "--help does not document the -- form"
 
   # 5. the missing-converter arm runs on EVERY machine: with PATH and the tool dirs emptied, pandoc
-  #    and markitdown types must say rc 10 and name the install command — read back from stderr.
+  #    and markitdown types must say rc 10, and name the install command only to someone who can run
+  #    it — read back from stderr. The tool dirs then hold stand-in brew and uv, which only exist.
   printf '<h1>x</h1>\n' > "$work/p.html"
   printf 'x' > "$work/s.pptx"
+  mkdir -p "$work/installers"
+  printf '#!/bin/bash\nexit 0\n' > "$work/installers/brew"; cp "$work/installers/brew" "$work/installers/uv"
+  chmod 755 "$work/installers/brew" "$work/installers/uv"
   out="$(PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS='' /bin/bash "$self" "$work/p.html" 2>&1 >/dev/null)"; rc=$?
   markdown_convert_is "no pandoc: html is rc 10" "$rc" "10"
-  case "$out" in *"$MARKDOWN_CONVERT_PANDOC_INSTALL") markdown_convert_ok "no pandoc: stderr ends with the one install command" ;;
-    *) markdown_convert_bad "no pandoc: stderr does not end with the install command" "$out" ;; esac
+  case "$out" in *"brew install"*) markdown_convert_bad "no pandoc and no Homebrew: a brew command was offered anyway" "$out" ;;
+    *) markdown_convert_ok "no pandoc and no Homebrew: no brew command is offered" ;; esac
+  out="$(BOOTSTRAP_ASSUME_STANDARD_USER=1 PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS="$work/installers" /bin/bash "$self" "$work/p.html" 2>&1 >/dev/null)"
+  case "$out" in *"brew install"*) markdown_convert_bad "a standard user with Homebrew present is offered a brew command" "$out" ;;
+    *"ask IT for pandoc") markdown_convert_ok "a standard user is told to ask IT for pandoc, never offered brew" ;;
+    *) markdown_convert_bad "a standard user got neither the IT note nor silence about brew" "$out" ;; esac
+  if markdown_convert_is_admin; then
+    out="$(PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS="$work/installers" /bin/bash "$self" "$work/p.html" 2>&1 >/dev/null)"
+    case "$out" in *"HOMEBREW_NO_ANALYTICS=1 $work/installers/brew install pandoc") markdown_convert_ok "an admin with Homebrew: stderr ends with the one brew command, analytics off" ;;
+      *) markdown_convert_bad "an admin with Homebrew: stderr does not end with the brew command" "$out" ;; esac
+  else
+    printf '  --   skipped: not an admin, so the brew arm cannot be shown here\n'
+  fi
   out="$(PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS='' /bin/bash "$self" "$work/s.pptx" 2>&1 >/dev/null)"; rc=$?
   markdown_convert_is "no markitdown: pptx is rc 10" "$rc" "10"
-  case "$out" in *"$MARKDOWN_CONVERT_MARKITDOWN_INSTALL") markdown_convert_ok "no markitdown: stderr ends with the one install command" ;;
-    *) markdown_convert_bad "no markitdown: stderr does not end with the install command" "$out" ;; esac
+  case "$out" in *"tool install"*) markdown_convert_bad "no markitdown and no uv: an install command was offered anyway" "$out" ;;
+    *) markdown_convert_ok "no markitdown and no uv: no install command is offered" ;; esac
+  out="$(BOOTSTRAP_ASSUME_STANDARD_USER=1 PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS="$work/installers" /bin/bash "$self" "$work/s.pptx" 2>&1 >/dev/null)"
+  case "$out" in *"$work/installers/uv tool install '$MARKDOWN_CONVERT_MARKITDOWN_SPEC'") markdown_convert_ok "uv present, even for a standard user: stderr ends with the uv command for the no-audio extras" ;;
+    *) markdown_convert_bad "uv present: stderr does not end with the uv command" "$out" ;; esac
+  case "$MARKDOWN_CONVERT_MARKITDOWN_SPEC" in *all*|*audio*|*youtube*|*az-*) markdown_convert_bad "the recommended markitdown extras carry a network converter: $MARKDOWN_CONVERT_MARKITDOWN_SPEC" ;;
+    *) markdown_convert_ok "the recommended extras name no all, audio, youtube or azure extra" ;; esac
   markdown_convert_is "no pandoc: converter id is none" \
     "$(PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS='' /bin/bash "$self" --converter-id "$work/p.html")" "none"
 
@@ -364,7 +510,9 @@ STUB
   else
     printf '  --   skipped: no pandoc (html/htm/docx/odt/rtf/epub arms)\n'
   fi
-  if markdown_convert_find_tool markitdown > /dev/null; then
+  if markdown_convert_find_tool markitdown > /dev/null && [ "$(/bin/bash "$self" --converter-id "$work/s.pptx" | cut -d' ' -f1)" = none ]; then
+    printf '  --   skipped: the markitdown here is refused (it can transcribe audio, or its Python cannot be read) — see: markdown-convert.sh %s\n' "$work/s.pptx"
+  elif markdown_convert_find_tool markitdown > /dev/null; then
     if [ -n "${pandoc:-}" ] && "$pandoc" -o "$work/deck.pptx" "$work/seed.md" 2>/dev/null; then
       /bin/bash "$self" "$work/deck.pptx" > "$work/deck.out" 2>/dev/null; rc=$?
       markdown_convert_is "markitdown pptx: rc 0" "$rc" "0"
@@ -378,6 +526,47 @@ STUB
     printf '  --   skipped: no markitdown (pptx/xlsx/xls/pdf arms)\n'
   fi
 
+  # 8. WHAT MARKITDOWN IS HANDED, on every machine, through a stand-in. Its "Python" answers the
+  #    speech probe from STUB_SPEECH and records every file it is asked to convert, so the read-back
+  #    is the record of what markitdown WOULD have read — not a phrase in a message.
+  mkdir -p "$work/stub-markitdown"
+  cat > "$work/stub-markitdown/python3" <<'STUB'
+#!/bin/bash
+[ "${1:-}" = -I ] && shift
+if [ "${1:-}" = -c ]; then printf '%s\n' "${STUB_SPEECH:-absent}"; exit 0; fi
+shift
+[ "${1:-}" = --version ] && { printf 'markitdown 0.0.0-stub\n'; exit 0; }
+printf '%s\n' "$1" >> "$STUB_LOG"
+printf '# converted by the stand-in\n'
+STUB
+  printf '#!%s\n# a markitdown launcher, as pip and uv write one\n' "$work/stub-markitdown/python3" > "$work/stub-markitdown/markitdown"
+  chmod 755 "$work/stub-markitdown/python3" "$work/stub-markitdown/markitdown"
+  printf 'RIFF\044\000\000\000WAVEfmt \020\000\000\000\001\000\001\000\104\254\000\000\210\130\001\000\002\000\020\000data\000\000\000\000' > "$work/report.pdf"
+  printf '\000\000\000\030ftypmp42\000\000\000\000mp42isom\000\000\000\010free' > "$work/deck.pptx"
+  printf '%%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%%%EOF\n' > "$work/text.pdf"
+  : > "$work/stub.log"
+  markdown_convert_stub() { PATH=/usr/bin:/bin MARKDOWN_CONVERT_TOOL_DIRS="$work/stub-markitdown" STUB_LOG="$work/stub.log" /bin/bash "$self" "$@"; }
+  markdown_convert_stub "$work/report.pdf" > /dev/null 2>&1; rc=$?
+  markdown_convert_is "audio bytes named report.pdf: rc 10 and markitdown was never handed it" "$rc|$(cat "$work/stub.log")" "10|"
+  : > "$work/stub.log"
+  markdown_convert_stub "$work/deck.pptx" > /dev/null 2>&1; rc=$?
+  markdown_convert_is "video bytes named deck.pptx: rc 10 and markitdown was never handed it" "$rc|$(cat "$work/stub.log")" "10|"
+  : > "$work/stub.log"
+  markdown_convert_stub "$work/text.pdf" > /dev/null 2>&1; rc=$?
+  markdown_convert_is "negative control — a real text PDF IS handed to markitdown (rc 0, recorded)" "$rc|$(cat "$work/stub.log")" "0|$work/text.pdf"
+  markdown_convert_is "the stand-in's converter id is read through its own Python" "$(markdown_convert_stub --converter-id "$work/text.pdf")" "markitdown 0.0.0-stub"
+  : > "$work/stub.log"
+  STUB_SPEECH=present markdown_convert_stub "$work/text.pdf" > /dev/null 2>&1; rc=$?
+  markdown_convert_is "a markitdown that can transcribe is never used, even for a text PDF (rc 10, nothing handed)" "$rc|$(cat "$work/stub.log")" "10|"
+  markdown_convert_is "…and its converter id is none, so every view rebaselines once it is replaced" "$(STUB_SPEECH=present markdown_convert_stub --converter-id "$work/text.pdf")" "none"
+  : > "$work/stub.log"
+  STUB_SPEECH=garbled markdown_convert_stub "$work/text.pdf" > /dev/null 2>&1; rc=$?
+  markdown_convert_is "a probe with no clear answer is not 'absent' (rc 10, nothing handed)" "$rc|$(cat "$work/stub.log")" "10|"
+  : > "$work/stub.log"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$1" >> "$STUB_LOG"\n' > "$work/stub-markitdown/markitdown"
+  markdown_convert_stub "$work/text.pdf" > /dev/null 2>&1; rc=$?
+  markdown_convert_is "a launcher that names no Python is never run (rc 10, nothing handed)" "$rc|$(cat "$work/stub.log")" "10|"
+
   chmod -R u+rwx "$work" 2>/dev/null
   rm -rf "$work"
   printf '%d/%d passed\n' "$((markdown_convert_selftest_total - markdown_convert_selftest_failed))" "$markdown_convert_selftest_total"
@@ -390,7 +579,7 @@ case "${1:-}" in
   --converter-id)
     [ -n "${2:-}" ] || { markdown_convert_say "usage: markdown-convert.sh --converter-id <file>"; exit 2; }
     markdown_convert_plan "$2"; printf '%s\n' "$plan_id"; exit 0 ;;
-  -h|--help)      sed -n '2,33p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help)      /usr/bin/awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]:-$0}"; exit 0 ;;
   --)             markdown_convert_run "${2:-}"; exit $? ;;
   -*)             markdown_convert_say "unknown option: $1"; exit 2 ;;
   *)              markdown_convert_run "${1:-}"; exit $? ;;
