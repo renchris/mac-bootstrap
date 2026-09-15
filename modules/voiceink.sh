@@ -98,7 +98,18 @@ BOOTSTRAP_VOICEINK_DEPS="${BOOTSTRAP_VOICEINK_DEPS:-$HOME/VoiceInk-Dependencies}
 BOOTSTRAP_VOICEINK_APP="${BOOTSTRAP_VOICEINK_APP:-$HOME/Applications/VoiceInk.app}"
 BOOTSTRAP_VOICEINK_UPSTREAM="${BOOTSTRAP_VOICEINK_UPSTREAM:-https://github.com/Beingpax/VoiceInk.git}"
 BOOTSTRAP_VOICEINK_TAG="${BOOTSTRAP_VOICEINK_TAG:-v2.13}"          # or `latest` to resolve the newest non-beta tag
-BOOTSTRAP_VOICEINK_WHISPER_URL="${BOOTSTRAP_VOICEINK_WHISPER_URL:-https://github.com/ggerganov/whisper.cpp.git}"
+# The COMMIT the tag names, because a tag can be moved and a commit cannot. v2.13 is an annotated tag
+# (tag object 1143b64f); this is the commit it peels to, read with `git ls-remote` on 2026-09-15. The
+# pin applies only to the default tag: name another tag and it is empty unless you set it too.
+if [ "$BOOTSTRAP_VOICEINK_TAG" = v2.13 ]; then
+  BOOTSTRAP_VOICEINK_COMMIT="${BOOTSTRAP_VOICEINK_COMMIT:-68b871e79e2b1ec4c3b4914cccd2e0907d94237a}"
+else
+  BOOTSTRAP_VOICEINK_COMMIT="${BOOTSTRAP_VOICEINK_COMMIT:-}"
+fi
+# whisper.cpp's home is ggml-org now: github.com/ggerganov/whisper.cpp answers 301 to it (HEAD request,
+# 2026-09-15). NOT YET VALIDATED: this v2.13 + whisper pin PAIR has not been proven by a build on a
+# clean Mac — the pin is v1.8.2-32 and was chosen beside v2.13, but no recorded build used both.
+BOOTSTRAP_VOICEINK_WHISPER_URL="${BOOTSTRAP_VOICEINK_WHISPER_URL:-https://github.com/ggml-org/whisper.cpp.git}"
 BOOTSTRAP_VOICEINK_WHISPER_PIN="${BOOTSTRAP_VOICEINK_WHISPER_PIN:-c62adfbd1ecdaea9e295c72d672992514a2d887c}"  # v1.8.2-32
 BOOTSTRAP_VOICEINK_LOCK="${BOOTSTRAP_VOICEINK_LOCK:-/tmp/voiceink-build.lock}"
 BOOTSTRAP_VOICEINK_LAUNCH="${BOOTSTRAP_VOICEINK_LAUNCH:-1}"        # 0 = never START the app; an already-running app still counts
@@ -308,7 +319,7 @@ profile_voiceink() { printf '%s' 'full'; }
 # rewrite_model's verify is the reader that fails when one is.
 egress_voiceink() {
   printf '%s\n' \
-    'github.com install git clone of Beingpax/VoiceInk and ggerganov/whisper.cpp, and the SwiftPM packages make local resolves' \
+    'github.com install git clone of Beingpax/VoiceInk and ggml-org/whisper.cpp, and the SwiftPM packages make local resolves' \
     'release-assets.githubusercontent.com install SwiftPM binary targets (Sparkle, NemoTextProcessing), redirected from github.com' \
     'huggingface.co run transcription and Refine model downloads, only when the person downloads one in the app' \
     'beingpax.github.io run the Sparkle appcast, only when the person clicks Check for Updates (automatic checks and announcements are switched off before first launch)'
@@ -925,6 +936,13 @@ voiceink_fetch_source() {
     return 1
   fi
   git -C "$src" checkout --quiet "$tag" || { printf 'voiceink: checkout %s failed.\n' "$tag"; return 1; }
+  # The pin, read back from the checkout: a tag that now names another commit was moved upstream,
+  # and building it would build source nobody here has read.
+  if [ -n "$BOOTSTRAP_VOICEINK_COMMIT" ] && [ "$(git -C "$src" rev-parse HEAD 2>/dev/null)" != "$BOOTSTRAP_VOICEINK_COMMIT" ]; then
+    printf 'voiceink: tag %s now names commit %s, but this release pins %s — the tag was moved upstream; refusing to build it.\n' \
+      "$tag" "$(git -C "$src" rev-parse HEAD 2>/dev/null)" "$BOOTSTRAP_VOICEINK_COMMIT"
+    return 1
+  fi
   printf 'voiceink: source at %s (%s)\n' "$tag" "$(git -C "$src" rev-parse --short HEAD 2>/dev/null)"
   return 0
 }

@@ -373,3 +373,23 @@ case "$(RM_OLLAMA="$RM_DIR/refused/ollama" rm_call "$h" note_rewrite_model 2>/de
 h="$(fresh_home rm-broken-not-refused)"
 ( BOOTSTRAP_MODEL=qwen3:8b; RM_OLLAMA="$RM_DIR/bin/ollama-broken"; export BOOTSTRAP_MODEL RM_OLLAMA; rm_call "$h" install_rewrite_model ) >/dev/null 2>&1
 case "$(RM_OLLAMA="$RM_DIR/bin/ollama-broken" rm_call "$h" rewrite_model_pending 2>/dev/null)" in REFUSED) fail "broken-ollama-is-not-a-refusal" ;; *) pass "broken-ollama-is-not-a-refusal" ;; esac
+
+# 15. voiceink is pinned by COMMIT beside its tag, and a moved tag is refused. A local git fixture, no network.
+vi_pin() { ( . "$RM_LIB" >/dev/null 2>&1; unset BOOTSTRAP_VOICEINK_COMMIT; [ -n "${1:-}" ] && BOOTSTRAP_VOICEINK_TAG="$1"; . "$VI_MOD" >/dev/null 2>&1; printf '%s' "$BOOTSTRAP_VOICEINK_COMMIT" ) 2>/dev/null; }
+same "voiceink-default-tag-pins-its-commit" "$(vi_pin)" 68b871e79e2b1ec4c3b4914cccd2e0907d94237a
+same "voiceink-other-tag-carries-no-pin" "$(vi_pin v2.14)" ""
+case "$( ( . "$RM_LIB" >/dev/null 2>&1; . "$VI_MOD" >/dev/null 2>&1; printf '%s' "$BOOTSTRAP_VOICEINK_WHISPER_URL" ) 2>/dev/null)" in
+  https://github.com/ggml-org/whisper.cpp.git) pass "voiceink-whisper-at-its-current-home" ;; *) fail "voiceink-whisper-at-its-current-home" ;; esac
+VI_UP="$RM_DIR/voiceink-upstream"; rm -rf "$VI_UP"; mkdir -p "$VI_UP"
+( cd "$VI_UP" && git init -q && git -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m one \
+  && git -c user.name=t -c user.email=t@example.invalid tag -a v2.13 -m v2.13 ) >/dev/null 2>&1
+VI_SHA="$(git -C "$VI_UP" rev-parse 'v2.13^{commit}' 2>/dev/null)"
+vi_fetch() {                                          # vi_fetch <home> <pinned commit>
+  ( export HOME="$1" BOOTSTRAP_STATE_DIR="$1/.mac-bootstrap" BOOTSTRAP_VOICEINK_UPSTREAM="file://$VI_UP" \
+           BOOTSTRAP_VOICEINK_SRC="$1/voiceink-src" BOOTSTRAP_VOICEINK_COMMIT="$2"; unset BOOTSTRAP_LOG
+    . "$RM_LIB" >/dev/null 2>&1; . "$VI_MOD" >/dev/null 2>&1; voiceink_fetch_source ) 2>&1
+}
+h="$(fresh_home vi-pin-ok)"; out="$(vi_fetch "$h" "$VI_SHA")"
+same "voiceink-pinned-commit-checks-out" "$?" 0
+h="$(fresh_home vi-pin-moved)"; out="$(vi_fetch "$h" 0000000000000000000000000000000000000000)"; rc=$?
+case "$rc/$out" in 1/*"was moved upstream"*) pass "voiceink-moved-tag-refused" ;; *) fail "voiceink-moved-tag-refused" "rc $rc: $out" ;; esac
