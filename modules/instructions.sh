@@ -44,24 +44,16 @@ instructions_copilot_bridge() { printf '%s' "${COPILOT_HOME:-$HOME/.copilot}/cop
 instructions_template()     { printf '%s/templates/repo-CLAUDE.md' "$(instructions_state)"; }
 instructions_repo_init()    { printf '%s/bin/agent-repo-init' "$(instructions_state)"; }
 
-# ── instructions_asset <name> — a readable path to assets/<name>, fetching it if this is a curl'd run ──
-# CONTRACT DEVIATION, declared: bootstrap-lib.sh has no asset resolver, so this one lives here rather than
-# in the rail. It mirrors the driver's own order — beside the script, then the state dir, then
-# the pinned raw URL — and it refuses a moving ref exactly as driver_fetch does.
+# ── instructions_asset <name> — a readable path to assets/<name> in the release tree the driver verified ──
+# Only $BOOTSTRAP_ASSETS. This used to fall back to a state-dir cache and then fetch the file itself
+# from the raw URL; the driver now fetches and hash-checks the whole release once, so that fetch could
+# only ever supply bytes nobody checked. There is no "installed copy" to fall back to either: the
+# installed file is the thing verify_ compares against the shipped one, and it cannot vouch for itself.
 instructions_asset() {
-  local n="${1:-}" dest code
+  local n="${1:-}"
   [ -n "$n" ] || return 1
   if [ -n "${BOOTSTRAP_ASSETS:-}" ] && [ -r "$BOOTSTRAP_ASSETS/$n" ]; then printf '%s' "$BOOTSTRAP_ASSETS/$n"; return 0; fi
-  dest="$(instructions_state)/assets/$n"
-  [ -r "$dest" ] && { printf '%s' "$dest"; return 0; }
-  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
-  command -v curl >/dev/null 2>&1 || return 1
-  mkdir -p "$(instructions_state)/assets" 2>/dev/null || return 1
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$n" 2>/dev/null)" || {
-    rm -f "$dest.part" 2>/dev/null; return 1; }
-  [ "$code" = "200" ] && [ -s "$dest.part" ] || { rm -f "$dest.part" 2>/dev/null; return 1; }
-  mv -f "$dest.part" "$dest" 2>/dev/null || return 1
-  printf '%s' "$dest"
+  return 1
 }
 
 # $HOME/x rather than an expanded home directory — rule 9, applied to what we PRINT as well as what we ship.
@@ -209,7 +201,7 @@ gate_instructions() {
 note_instructions() {
   local g gl cop
   g="$(instructions_asset global-CLAUDE.md)" || {
-    printf 'the shipped instructions file could not be found beside this script or fetched at this pin'
+    printf 'the shipped instructions file is not in the release tree this run verified'
     return 0; }
 
   gl="$(instructions_global)"

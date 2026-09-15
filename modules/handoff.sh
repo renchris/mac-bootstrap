@@ -67,27 +67,15 @@ handoff_copilot_skill()   { printf '%s/.copilot/skills/handoff/SKILL.md' "$HOME"
 handoff_parts()   { printf 'oracle.sh seed.sh driver-tmux.sh driver-kitty.sh driver-iterm2.sh README.md'; }
 
 # ── handoff_source <asset-relpath> — print a readable path to the shipped asset, or nothing. ────
-# Three places, in order: the clone beside bootstrap.sh; the cache this module fills; the pinned
-# raw URL. A helper of this shape is not in bootstrap-lib.sh (the library has no fetcher by design — the
-# driver owns fetching), so it lives here, which is where the contract says it belongs.
+# Only the release tree the driver verified ($BOOTSTRAP_ASSETS). This used to fall back to a state-dir
+# cache and then fetch the file itself from the raw URL; the driver now fetches and hash-checks the
+# whole release once, so that fetch could only ever supply bytes nobody checked. With no release tree,
+# handoff_doc_ok still makes its structural check and says the byte check was not possible.
 handoff_source() {
-  local rel="${1:-}" c dest code
-  for c in "${BOOTSTRAP_ASSETS:-}/$rel" "$(handoff_state_dir)/assets/$rel"; do
-    case "$c" in /*) : ;; *) continue ;; esac
-    [ -r "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  case "${BOOTSTRAP_PIN:-}" in
-    __PIN_SHA__|main|master|"") return 1 ;;          # a moving ref is not a pin; never fetch one
-  esac
-  command -v curl >/dev/null 2>&1 || return 1
-  dest="$(handoff_state_dir)/assets/$rel"
-  mkdir -p "$(dirname "$dest")" 2>/dev/null || return 1
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$rel" 2>/dev/null)" || code=""
-  if [ "$code" = "200" ] && [ -s "$dest.part" ]; then
-    mv -f "$dest.part" "$dest" && { printf '%s' "$dest"; return 0; }
-  fi
-  rm -f "$dest.part" 2>/dev/null
-  return 1
+  local c="${BOOTSTRAP_ASSETS:-}/${1:-}"
+  case "$c" in /*) : ;; *) return 1 ;; esac
+  [ -n "${1:-}" ] && [ -r "$c" ] || return 1
+  printf '%s' "$c"
 }
 
 # ── handoff_frontmatter_ok <file> — a STRUCTURAL parse, not a grep for our own text. ────────────

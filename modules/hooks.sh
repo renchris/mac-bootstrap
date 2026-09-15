@@ -45,21 +45,19 @@ hooks_copilot_settings()      { printf '%s' "$HOME/.copilot/hooks/00-lifecycle.j
 hooks_scripts()  { printf '%s' "session-start.sh stop.sh guard-write.sh guard-bash.sh"; }
 hooks_unwired()  { printf '%s' "guard-bash.sh"; }
 
-# hooks_asset <relpath> <dest> — resolve a shipped asset: the clone first, then the installed copy,
-# then the pinned raw URL. Returns 1 if it cannot be had, and never leaves a partial file.
+# hooks_asset <relpath> <dest> — resolve a shipped asset: the release tree the driver verified
+# ($BOOTSTRAP_ASSETS), then the copy already installed (which is already <dest> on a re-run). There is
+# no fetch here any more: the driver fetches and hash-checks the whole release once, and a module's own
+# fetch could only ever place bytes nobody checked.
 hooks_asset() {
-  local rel="${1:-}" dest="${2:-}" code
+  local rel="${1:-}" dest="${2:-}"
   [ -n "$rel" ] && [ -n "$dest" ] || return 1
   if [ -r "${BOOTSTRAP_ASSETS:-}/$rel" ]; then cp -f "${BOOTSTRAP_ASSETS}/$rel" "$dest" 2>/dev/null && return 0; fi
-  if [ -r "$(hooks_dir)/$(basename "$rel")" ] && [ "$dest" != "$(hooks_dir)/$(basename "$rel")" ]; then
+  [ "$dest" = "$(hooks_dir)/$(basename "$rel")" ] && [ -r "$dest" ] && return 0
+  if [ -r "$(hooks_dir)/$(basename "$rel")" ]; then
     cp -f "$(hooks_dir)/$(basename "$rel")" "$dest" 2>/dev/null && return 0
   fi
-  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|"") return 1 ;; esac
-  command -v curl >/dev/null 2>&1 || return 1
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/$rel" 2>/dev/null)" || {
-    rm -f "$dest.part" 2>/dev/null; return 1; }
-  [ "$code" = 200 ] && [ -s "$dest.part" ] || { rm -f "$dest.part" 2>/dev/null; return 1; }
-  mv -f "$dest.part" "$dest" 2>/dev/null
+  return 1
 }
 
 # hooks_wire_table — the wire table's path: the clone's copy if we have it, else the installed one.

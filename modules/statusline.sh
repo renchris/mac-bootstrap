@@ -32,25 +32,17 @@ STATUSLINE_FIXTURE_NEGATIVE='{"session_id":"statusline-probe3","cwd":"/tmp/statu
 # jq's `//` fires on null and false ONLY, so 0 must survive it and render as 0%.
 STATUSLINE_FIXTURE_ZERO='{"session_id":"statusline-probe4","cwd":"/tmp/statusline-fixture","model":{"display_name":"probe"},"context_window":{"used_percentage":0,"remaining_percentage":100}}'
 
-# statusline_source — where the asset bytes come from: the clone, then the state-dir cache, then the
-# pinned raw URL. NOT in bootstrap-lib.sh (the library deliberately does no network), so it lives here.
+# statusline_source — where the asset bytes come from: the release tree the driver verified
+# ($BOOTSTRAP_ASSETS), else the copy already installed. This module used to fetch the file itself from
+# the raw URL; the driver now fetches and hash-checks the whole release once, so a second, unverified
+# fetch here could only ever run bytes nobody checked.
 statusline_source() {
-  local c t
-  for c in "${BOOTSTRAP_ASSETS:-}/agent-statusline.sh" \
-           "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/agent-statusline.sh"; do
+  local c
+  for c in "${BOOTSTRAP_ASSETS:-}/agent-statusline.sh" "$(statusline_script)"; do
     case "$c" in /agent-statusline.sh) continue ;; esac
     [ -r "$c" ] && { printf '%s' "$c"; return 0; }
   done
-  case "${BOOTSTRAP_PIN:-}" in __PIN_SHA__|main|master|'') return 1 ;; esac
-  command -v curl >/dev/null 2>&1 || return 1
-  t="${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/assets/agent-statusline.sh"
-  mkdir -p "$(dirname "$t")" 2>/dev/null || return 1
-  local code
-  code="$(curl -sS -L -o "$t.part" -w '%{http_code}' "${BOOTSTRAP_RAW:-}/assets/agent-statusline.sh" 2>/dev/null)" || {
-    rm -f "$t.part" 2>/dev/null; return 1; }
-  [ "$code" = "200" ] && [ -s "$t.part" ] || { rm -f "$t.part" 2>/dev/null; return 1; }
-  mv -f "$t.part" "$t" 2>/dev/null || return 1
-  printf '%s' "$t"
+  return 1
 }
 
 # statusline_shim_path <dir> — a PATH holding everything the status line needs EXCEPT jq.
