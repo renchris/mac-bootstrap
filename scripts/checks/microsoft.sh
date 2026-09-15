@@ -243,3 +243,138 @@ case "$(ms_policy "$CHECK_TMP/ms-policy-deny" microsoft365_mcp_block claude)" in
   *deniedMcpServers*) pass "ms365-denied-server-is-named" ;; *) fail "ms365-denied-server-is-named" ;; esac
 case "$(ms_policy "$CHECK_TMP/ms-policy-deny" microsoft365_policy_note)" in
   *[Aa]sk\ IT*|*IT*) pass "ms365-policy-note-names-it" ;; *) fail "ms365-policy-note-names-it" ;; esac
+
+# ── 5. IT POLICY — per agent, through the real driver ────────────────────────────────────────
+# BOOTSTRAP_MANAGED_ROOT prefixes the system paths the policy readers look in, so a policy is a
+# fixture. A fake Softeria server (node over stdio, no network) stands in for the npm install, so the
+# driver reaches the states that exist only after the reversible work.
+ms_policy_root() {                              # ms_policy_root <name> <claude-json|-> <copilot-json|-> → root
+  local r="$CHECK_TMP/policy-$1"
+  rm -rf "$r"
+  mkdir -p "$r/Library/Application Support/ClaudeCode" "$r/Library/Application Support/GitHubCopilot"
+  [ "$2" = - ] || printf '%s' "$2" > "$r/Library/Application Support/ClaudeCode/managed-settings.json"
+  [ "$3" = - ] || printf '%s' "$3" > "$r/Library/Application Support/GitHubCopilot/managed-settings.json"
+  printf '%s' "$r"
+}
+MS_EMPTY_ROOT="$(ms_policy_root none - -)"
+
+h="$(fresh_home policy-hooks)"
+MS_ROOT="$(ms_policy_root hooks '{"allowManagedHooksOnly":true}' -)"
+BOOTSTRAP_MANAGED_ROOT="$MS_ROOT" ms_drive "$h" --plan --only microsoft365
+ms_line="$(ms_plan_line microsoft365)"
+case "$ms_line" in
+  *"would install"*"Claude Code's policy runs only hooks IT deploys (allowManagedHooksOnly"*"deliberately not registered"*)
+    case "$ms_line" in *"Copilot CLI"*) fail "microsoft-policy-hooks-withhold-claude-only" "$ms_line" ;;
+                       *) pass "microsoft-policy-hooks-withhold-claude-only" "Copilot's half still installs" ;; esac ;;
+  *) fail "microsoft-policy-hooks-withhold-claude-only" "$ms_line" ;;
+esac
+h="$(fresh_home policy-deny-both)"
+MS_ROOT="$(ms_policy_root deny-both '{"deniedMcpServers":[{"serverName":"ms365"}]}' '{"deniedMcpServers":[{"serverName":"ms365"}]}')"
+BOOTSTRAP_MANAGED_ROOT="$MS_ROOT" ms_drive "$h" --plan --only microsoft365
+case "$(ms_plan_line microsoft365)" in
+  *"NEEDS YOU"*"Claude Code will not start"*"deniedMcpServers"*"Copilot CLI will not start"*"deniedMcpServers"*) pass "microsoft-policy-deny-both-needs-human" ;;
+  *) fail "microsoft-policy-deny-both-needs-human" "$(ms_plan_line microsoft365)" ;;
+esac
+h="$(fresh_home policy-none)"
+BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT" ms_drive "$h" --plan --only microsoft365
+case "$(ms_plan_line microsoft365)" in
+  *"would install"*"policy"*|*"will not start"*|*"NEEDS YOU"*) fail "microsoft-policy-none-control" "$(ms_plan_line microsoft365)" ;;
+  *"would install"*) pass "microsoft-policy-none-control" ;;
+  *) fail "microsoft-policy-none-control" "$(ms_plan_line microsoft365)" ;;
+esac
+
+# The installed states, only where a node exists to run the fake server.
+if [ -n "$(ms_run "$CHECK_HOME" microsoft365_node)" ]; then
+  h="$(fresh_home policy-installed)"
+  ms_srv="$h/.mac-bootstrap/microsoft365/node_modules/@softeria/ms-365-mcp-server/dist"
+  mkdir -p "$ms_srv"
+  cat > "$ms_srv/index.js" <<'JS'
+// A stand-in for Softeria's server: the answers the module reads, and nothing that leaves the Mac.
+const a = process.argv.slice(2);
+if (a.includes("--version")) { console.log("0.143.0"); process.exit(0); }
+if (a.includes("--list-accounts")) { console.log(JSON.stringify({accounts: []})); process.exit(0); }
+if (a.includes("--verify-login")) { console.log(JSON.stringify({success: false, message: "no account"})); process.exit(0); }
+let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d; let i;
+  while ((i = buf.indexOf("\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    let m; try { m = JSON.parse(line); } catch (e) { continue; }
+    if (m.id === undefined) continue;
+    const r = m.method === "initialize" ? {result: {protocolVersion: "2025-06-18", capabilities: {tools: {}}, serverInfo: {name: "fake", version: "0.143.0"}}}
+            : m.method === "tools/list" ? {result: {tools: [{name: "list-mail-messages"}, {name: "send-mail"}]}}
+            : {error: {code: -32601, message: "no such method"}};
+    process.stdout.write(JSON.stringify(Object.assign({jsonrpc: "2.0", id: m.id}, r)) + "\n");
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+JS
+  # Claude Code's MCP policy denies ms365: registered on both agents (harmless — the guard is wired),
+  # and the row is NEEDS_HUMAN naming the policy, never SATISFIED.
+  MS_ROOT="$(ms_policy_root deny-claude '{"deniedMcpServers":[{"serverName":"ms365"}]}' -)"
+  BOOTSTRAP_MANAGED_ROOT="$MS_ROOT" ms_drive "$h" --only microsoft365
+  same "microsoft-policy-deny-claude-rc" "$CHECK_RC" 10
+  same "microsoft-policy-deny-claude-row" "$(receipt_states "$h/.mac-bootstrap/receipt.json" | tr '\n' ' ')" "microsoft365 NEEDS_HUMAN "
+  ms_note="$(BOOTSTRAP_MANAGED_ROOT="$MS_ROOT" ms_run "$h" note_microsoft365)"
+  case "$ms_note" in *"Claude Code will not start the ms365 server (deniedMcpServers"*"Meanwhile, for Copilot CLI:"*) pass "microsoft-policy-deny-claude-names-policy" ;;
+    *) fail "microsoft-policy-deny-claude-names-policy" "$ms_note" ;; esac
+  same "microsoft-policy-deny-claude-still-registered" \
+    "$(json_at "$h/.claude.json" mcpServers.ms365.args.0)|$(json_at "$h/.copilot/mcp-config.json" mcpServers.ms365.args.0)" "$ms_srv/index.js|$ms_srv/index.js"
+  # Now Claude Code's hooks are locked too: the server comes OUT of Claude Code, Copilot keeps it.
+  MS_ROOT="$(ms_policy_root lock-claude '{"allowManagedHooksOnly":true}' -)"
+  BOOTSTRAP_MANAGED_ROOT="$MS_ROOT" ms_drive "$h" --only microsoft365
+  same "microsoft-policy-hooks-lock-rc" "$CHECK_RC" 10
+  if json_at "$h/.claude.json" mcpServers.ms365.args.0 >/dev/null; then fail "microsoft-policy-hooks-lock-takes-it-back" "still in .claude.json"
+  else pass "microsoft-policy-hooks-lock-takes-it-back" "gone from Claude Code"; fi
+  same "microsoft-policy-hooks-lock-copilot-kept" "$(json_at "$h/.copilot/mcp-config.json" mcpServers.ms365.args.0)" "$ms_srv/index.js"
+  BOOTSTRAP_MANAGED_ROOT="$MS_ROOT" ms_run "$h" verify_microsoft365 && fail "microsoft-policy-hooks-lock-not-satisfied" \
+    || pass "microsoft-policy-hooks-lock-not-satisfied"
+  # Control: the same installed Mac with no policy is gated only on the sign-in.
+  ms_note="$(BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT" ms_run "$h" 'install_microsoft365 >/dev/null 2>&1; note_microsoft365')"
+  case "$ms_note" in *policy*|*"will not start"*) fail "microsoft-policy-installed-control" "$ms_note" ;;
+    *"sign in once with your work account"*) pass "microsoft-policy-installed-control" ;;
+    *) fail "microsoft-policy-installed-control" "$ms_note" ;; esac
+  # The person's own disableAllHooks is theirs to change: the gesture opens that file.
+  mkdir -p "$h/.claude"; printf '{"disableAllHooks":true}' > "$h/.claude/settings.json"
+  same "microsoft-policy-own-disable-gesture" "$(BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT" ms_run "$h" gesture_microsoft365)" 'open -e "$HOME/.claude/settings.json"'
+else
+  for ms_c in deny-claude-rc deny-claude-row deny-claude-names-policy deny-claude-still-registered hooks-lock-rc \
+              hooks-lock-takes-it-back hooks-lock-copilot-kept hooks-lock-not-satisfied installed-control own-disable-gesture; do
+    pass "microsoft-policy-$ms_c" "n/a: no node on this Mac"
+  done
+fi
+# Copilot's own seat policy, read from its user cache after a sign-in.
+h="$(fresh_home policy-copilot-seat)"; mkdir -p "$h/Library/Caches/copilot"
+printf '// cache\n// v1\n{"abc":{"is_mcp_enabled": false}}' > "$h/Library/Caches/copilot/copilot-user-cache.json"
+case "$(BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT" ms_run "$h" 'microsoft365_mcp_block copilot')" in
+  *"MCP servers in Copilot"*) pass "microsoft-policy-copilot-seat-off" ;; *) fail "microsoft-policy-copilot-seat-off" ;; esac
+printf '{"abc":{"is_mcp_enabled": true}}' > "$h/Library/Caches/copilot/copilot-user-cache.json"
+same "microsoft-policy-copilot-seat-on-control" "$(BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT" ms_run "$h" 'microsoft365_mcp_block copilot || printf none')" none
+
+# ── 6. TENANT — what signing in takes, said only where it can be true ────────────────────────
+MS_NO_ACCOUNT='microsoft365_account_in_tenant() { return 1; }'
+ms_out="$(ms_run "$CHECK_HOME" "$MS_NO_ACCOUNT; microsoft365_signin_note /x")"
+case "$ms_out" in *"approve the app"*) fail "microsoft-tenant-work-no-self-approve" "$ms_out" ;;
+  *"AADSTS65001"*"admin consent to app 084a3e9f-a9f4-43f7-89f9-d229cf97853e"*"AADSTS53003"*"--auth-browser"*) pass "microsoft-tenant-work-no-self-approve" ;;
+  *) fail "microsoft-tenant-work-no-self-approve" "$ms_out" ;; esac
+ms_out="$(ms_run "$CHECK_HOME" "$MS_NO_ACCOUNT; microsoft365_signin_note /x" BOOTSTRAP_MICROSOFT_TENANT=consumers)"
+case "$ms_out" in *"personal Microsoft account and approve the app"*) pass "microsoft-tenant-personal-approves" ;; *) fail "microsoft-tenant-personal-approves" "$ms_out" ;; esac
+ms_out="$(ms_run "$CHECK_HOME" "$MS_NO_ACCOUNT; microsoft365_signin_note /x" BOOTSTRAP_MICROSOFT_CLIENT_ID=11111111-2222-3333-4444-555555555555)"
+case "$ms_out" in *"app your IT registered (11111111-"*) pass "microsoft-tenant-it-app" ;; *) fail "microsoft-tenant-it-app" "$ms_out" ;; esac
+ms_out="$(ms_run "$CHECK_HOME" 'microsoft365_account_in_tenant() { return 0; }; microsoft365_run() { printf "{\"success\":false,\"message\":\"AADSTS53003: blocked\"}\n"; }; microsoft365_signin_note /x')"
+case "$ms_out" in *"(AADSTS53003)"*"Conditional Access"*"--auth-browser"*) pass "microsoft-tenant-conditional-access" ;; *) fail "microsoft-tenant-conditional-access" "$ms_out" ;; esac
+ms_out="$(ms_run "$CHECK_HOME" 'microsoft365_account_in_tenant() { return 0; }; microsoft365_run() { printf "{\"success\":false,\"message\":\"AADSTS65001: consent\"}\n"; }; microsoft365_signin_note /x')"
+case "$ms_out" in *"(AADSTS65001)"*"admin consent"*) pass "microsoft-tenant-admin-consent" ;; *) fail "microsoft-tenant-admin-consent" "$ms_out" ;; esac
+
+# ── 7. ARCHIVE — Background Items off is the person's switch, and re-run hints name BOOTSTRAP_ENTRY ──
+MS_BTM_ON="$(printf '\tdisabled services = {\n\t\t"com.mac-bootstrap.microsoft365-archive" => enabled\n\t\t"com.other" => disabled\n\t}')"
+MS_BTM_OFF="$(printf '\tdisabled services = {\n\t\t"com.mac-bootstrap.microsoft365-archive" => disabled\n\t}')"
+ms_out="$(env HOME="$CHECK_HOME" BOOTSTRAP_LIB="$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" /bin/bash -c \
+  '. "$BOOTSTRAP_LIB"; . "$1"; microsoft365_archive_disabled_in "$2" && printf off; microsoft365_archive_disabled_in "$3" && printf " off" || printf " on"' \
+  x "$CHECK_ROOT/modules/microsoft365_archive.sh" "$MS_BTM_OFF" "$MS_BTM_ON" 2>/dev/null)"
+same "microsoft-archive-background-off-read" "$ms_out" "off on"
+ms_out="$(ms_run "$CHECK_HOME" 'microsoft365_archive_note_text background-off; printf "|"; microsoft365_archive_gate_reason() { printf background-off; }; gesture_microsoft365_archive')"
+case "$ms_out" in *"Allow in the Background"*'|open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"') pass "microsoft-archive-background-off-needs-human" ;;
+  *) fail "microsoft-archive-background-off-needs-human" "$ms_out" ;; esac
+same "microsoft-archive-rerun-entry" "$(ms_run "$CHECK_HOME" 'microsoft365_archive_rerun microsoft365' BOOTSTRAP_ENTRY="$CHECK_HOME/x/bootstrap.sh")" 'bash "$HOME/x/bootstrap.sh" --only microsoft365'
+same "microsoft-archive-rerun-curl-pipe" "$(ms_run "$CHECK_HOME" 'microsoft365_archive_rerun microsoft365' BOOTSTRAP_ENTRY= BOOTSTRAP_PIN=abc BOOTSTRAP_RAW=https://raw.githubusercontent.com/o/r/abc)" ""
