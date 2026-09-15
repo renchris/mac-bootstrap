@@ -88,6 +88,29 @@ release_embedded_manifest() {
 }
 
 # release_verify <readme_ref> — the whole claim, from outside, with no local file trusted.
+# release_readme_invocations — every `bash /tmp/mac-bootstrap.sh <args>` in README.md, as the args alone,
+# one per line, de-duplicated. A token that is not a flag or a flag's plain value ends the command, so a
+# placeholder (`<tag>`) or the prose that follows a command on its line is never taken as an argument.
+release_readme_invocations() {
+  grep -o 'bash /tmp/mac-bootstrap[.]sh[^`]*' README.md 2>/dev/null | sed 's#^bash /tmp/mac-bootstrap[.]sh##' |
+    awk '{ out = ""; want = 0
+           for (i = 1; i <= NF; i++) {
+             t = $i
+             if (t ~ /^--[a-z-]+$/) { out = out " " t; want = (t ~ /^--(profile|only|except|model|bench)$/); continue }
+             if (want && t ~ /^[a-z0-9_,.:-]+$/) { out = out " " t; want = 0; continue }
+             break
+           }
+           sub(/^ /, "", out); if (out != "") print out }' | sort -u
+}
+# release_is_looking <args> — true when every flag is one that changes nothing on the Mac.
+release_is_looking() {
+  local t
+  for t in $1; do
+    case "$t" in --list|--plan|--manifest|--egress|--advise-model|--profile) : ;; --*) return 1 ;; esac
+  done
+  return 0
+}
+
 release_verify() {
   local ref="$1" tmp boot pin rel got want n=0 bad=0 prompt_bad=0
   tmp="$(mktemp -d)" || return 1
@@ -145,25 +168,43 @@ release_verify() {
       release_fail "  MISMATCH $rel"; bad=$((bad + 1))
     fi
   done
-  # Hop 3 — the one prompt's own LOOKING commands, run against the PUBLISHED script in a throwaway HOME.
-  # A README can cite a flag the published script does not have: measured once, `--egress` against a
-  # pin without it answered "unknown argument". Only a Mac can run the driver (plutil, sw_vers), so a
-  # Linux runner says it skipped rather than claiming a pass.
+  # Hop 3 — every command the README tells a person or an agent to run, against the PUBLISHED script in
+  # a throwaway HOME. A README can cite a flag the published script does not have: measured once,
+  # `--egress` against a pin without it answered "unknown argument". The commands are READ OUT OF THE
+  # README (release_readme_invocations), never a list kept here — a list here passed a README that named
+  # a flag nobody tested. The looking ones run; every flag of the others must be a case in the published
+  # script's argument parser. Only a Mac can run the driver (plutil, sw_vers), so a Linux runner says it
+  # skipped rather than claiming a pass.
   if ! grep -q "<<'BOOTSTRAP_RELEASE_MANIFEST'" "$boot"; then
     release_say "  hop 3: skipped — a release from before the prompt's looking commands existed"
   elif [ "$(uname -s)" = Darwin ] && [ "$bad" = 0 ]; then
-    local home="$tmp/home" args rc out
+    local home="$tmp/home" args rc out flag ran=0 flags=0
     mkdir -p "$home"
-    for args in "--list" "--plan --profile full" "--egress" "--advise-model"; do
+    while IFS= read -r args; do
+      for flag in $args; do
+        case "$flag" in --*) : ;; *) continue ;; esac
+        flags=$((flags + 1))
+        grep -Eq "^[[:space:]]*([^ )]*[|])?${flag}([|][^ )]*)?[)]" "$boot" && continue
+        release_fail "hop 3 FAILED: the README runs '$flag', which the published script does not parse"
+        prompt_bad=$((prompt_bad + 1))
+      done
+      release_is_looking "$args" || continue
+      ran=$((ran + 1))
       # shellcheck disable=SC2086  # the flags are deliberately word-split
       out="$(cd "$tmp" && HOME="$home" BOOTSTRAP_NONINTERACTIVE=1 /bin/bash "$boot" $args 2>&1 </dev/null)"; rc=$?
       case "$rc:$args" in
-        0:*|20:--egress) : ;;          # --egress exits 20 when THIS Mac has a cloud path — a finding, not a defect
+        0:*|10:--plan*|20:--egress) : ;;   # --plan 10 = a row needs the person; --egress 20 = THIS Mac has a cloud path — findings, not defects
         *) release_fail "hop 3 FAILED: the published script answered '$args' with exit $rc: $(printf '%s\n' "$out" | grep -m1 -E 'bootstrap:|unknown')"
            prompt_bad=$((prompt_bad + 1)) ;;
       esac
-    done
-    [ "$prompt_bad" = 0 ] && release_say "  hop 3: the prompt's looking commands (--list, --plan, --egress, --advise-model) all answer"
+    done <<EOF
+$(release_readme_invocations)
+EOF
+    if [ "$ran" = 0 ]; then
+      release_fail "hop 3 FAILED: found no looking command in README.md — the reader of this check is broken"
+      prompt_bad=$((prompt_bad + 1))
+    fi
+    [ "$prompt_bad" = 0 ] && release_say "  hop 3: the README's $ran looking command(s) answer and its $flags flag use(s) all parse"
   elif [ "$bad" != 0 ]; then
     release_say "  hop 3: skipped — hop 2 is incomplete, so the published script could not assemble its tree"
   else
@@ -180,7 +221,7 @@ release_verify() {
     return 1
   fi
   if [ "$prompt_bad" != 0 ]; then
-    release_fail "the README's prompt runs commands the published script cannot answer ($prompt_bad of 4)"
+    release_fail "the README runs $prompt_bad command(s) or flag(s) the published script cannot answer"
     return 1
   fi
   release_say "         $n payload file(s) fetched anonymously, every sha256 matching the pinned tree"
