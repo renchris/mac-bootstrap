@@ -53,7 +53,7 @@ run_gesture() { HOME="$TERM_H" PATH="$TERM_FX/bin:$TERM_PATH" /bin/zsh -c "$1" 2
 # ── 1. The driver's plan, as a standard user with no brew on PATH ─────────────────────────────
 h="$(fresh_home terminal-plan)"
 PATH="$TERM_PATH" BOOTSTRAP_ASSUME_STANDARD_USER=1 drive_at "$h" --plan --only pane_equalize,screenshot
-same "terminal-plan-rc" "$CHECK_RC" 0
+case "$CHECK_OUT" in *"NEEDS YOU:"*) same "terminal-plan-rc" "$CHECK_RC" 10 ;; *) same "terminal-plan-rc" "$CHECK_RC" 0 ;; esac   # --plan foresees on the install scale
 case "$CHECK_OUT" in
   *[Bb]rew*) fail "terminal-plan-offers-no-homebrew" "$(printf '%s\n' "$CHECK_OUT" | grep -i brew | head -2)" ;;
   *)         pass "terminal-plan-offers-no-homebrew" ;;

@@ -27,6 +27,7 @@
 #    30   precondition/internal error: this run is not a verdict about the machine. A SELECTED
 #         module the run could not evaluate lands here, NOT in 0. A module you did not select is
 #         declined, not judged: the verdict is over the selection, whatever older rows say.
+#   --plan uses the same scale for what it foresees: 0 nothing needs you · 10 a row needs you.
 #   Under --uninstall the scale is: 0 everything removed · 20 an uninstall_ failed · 30 a row
 #   nobody can read. Zero rows is uninstall's SUCCESS, and only uninstall's.
 #   Precedence when several apply: 30 > 20 > 10 > 0. 30 wins because a run that could not
@@ -922,8 +923,13 @@ EOF
 }
 
 # ── --plan — writes NOTHING. Distinct from the removed --dry-run, which wrote the receipt. ─────
+# It foresees in INSTALL ORDER. A gate can depend on an earlier module's output — microsoft365_archive's
+# says "the microsoft365 module has not installed it" — so when that module is in the same selection and
+# would install first, the later row says so instead of reporting a false NEEDS YOU (measured: --plan
+# --profile full flagged microsoft365_archive while listing microsoft365 as "would install").
+# Exit: 0 nothing needs you · 10 a row needs you · 30 nothing to plan — the install scale, foreseen.
 driver_cmd_plan() {
-  local m f sel st line
+  local m f sel st dep deps pending line need=0 installing=" "
   sel="$(driver_select)" || return 30
   if [ -z "$sel" ]; then
     driver_note_out "bootstrap: this selection contains no modules — nothing to plan. Try --list."
@@ -935,8 +941,14 @@ driver_cmd_plan() {
     case " $sel " in *" $m "*) : ;; *) printf '    skip  %-16s (not in this selection)\n' "$m"; continue ;; esac
     f="$(driver_module_file "$m")" || { printf '    ??    %-16s module unavailable\n' "$m"; continue; }
     if driver_call "$f" "$m" verify >/dev/null 2>&1; then st="already satisfied — would do nothing"
-    elif driver_call "$f" "$m" gate >/dev/null 2>&1; then st="NEEDS YOU: $(driver_note "$f" "$m")"
-    else st="would install: $(driver_meta "$f" "$m" what "$m")"; fi
+    elif driver_call "$f" "$m" gate >/dev/null 2>&1; then
+      deps="$(driver_meta "$f" "$m" needs "")"; pending=""
+      for dep in $deps; do case "$installing" in *" $dep "*) pending="$pending $dep" ;; esac; done
+      if [ -n "$pending" ]; then
+        st="decided after${pending}, which this run installs first — then: $(driver_note "$f" "$m")"
+        installing="$installing$m "
+      else st="NEEDS YOU: $(driver_note "$f" "$m")"; need=1; fi
+    else st="would install: $(driver_meta "$f" "$m" what "$m")"; installing="$installing$m "; fi
     printf '    %-16s %s\n' "$m" "$st"
     driver_clearance "$f" "$m" | while IFS= read -r line; do
       [ -n "$line" ] || continue
@@ -945,6 +957,8 @@ driver_cmd_plan() {
     done
   done
   printf '\n  Nothing above has happened. Run without --plan to act.\n\n'
+  [ "$need" = 1 ] && return 10
+  return 0
 }
 
 # ── the self-authorization audit ─────────────────────────────────────────────────────────────

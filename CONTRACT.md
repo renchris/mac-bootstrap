@@ -92,6 +92,11 @@ is not re-run at all and simply keeps the row it already had.
 
 Precedence when several apply: **30 > 20 > 10 > 0**.
 
+The scale is scored over the **selection**. A row an earlier run left for a module this run did not
+select stays in the receipt, marked `"this_run": false`, and does not move the exit code. `--plan`
+foresees on the same scale: **10** when a row it prints says NEEDS YOU, **0** when none does, judging
+each module in install order, so a module whose dependency this run installs first is not flagged.
+
 Two consequences worth stating, because the design this replaces got both wrong:
 
 - `--verify` exiting **0** means *every module is satisfied*, not *nothing is left for the

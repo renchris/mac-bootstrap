@@ -264,8 +264,16 @@ true_ "profile-ladder-is-nested" "$LADDER" "lite $N_LITE ⊆ standard $N_STD ⊆
 for p in lite standard full; do
   drive --plan --profile "$p"
   printf '%s\n' "$CHECK_OUT" | snap "plan-$p.txt"
-  same "plan-$p-rc" "$CHECK_RC" 0
+  # --plan foresees on the install scale: 10 exactly when a row says NEEDS YOU, 0 exactly when none does.
+  case "$CHECK_OUT" in *"NEEDS YOU:"*) same "plan-$p-rc" "$CHECK_RC" 10 ;; *) same "plan-$p-rc" "$CHECK_RC" 0 ;; esac
 done
+# The same plan, in install order: a module whose dependency this run installs first is not NEEDS YOU.
+drive --plan --profile full
+case "$CHECK_OUT" in
+  *"microsoft365_archive NEEDS YOU"*) fail "plan-respects-install-order" "microsoft365_archive flagged while microsoft365 would install first" ;;
+  *"microsoft365_archive decided after microsoft365"*|*"microsoft365_archive already satisfied"*) pass "plan-respects-install-order" ;;
+  *) fail "plan-respects-install-order" "$(printf '%s\n' "$CHECK_OUT" | grep -m1 microsoft365_archive)" ;;
+esac
 
 # ── 6. READ-ONLY MEANS READ-ONLY ─────────────────────────────────────────────────────────────
 # --list, --plan and --manifest have now run seven times between them. The receipt is the file a
