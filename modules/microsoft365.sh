@@ -244,7 +244,9 @@ microsoft365_ca_path() {
 microsoft365_env_json() {
   local id ca out
   id="$(microsoft365_client_id)"; ca="$(microsoft365_ca_path)"
-  out="{\"MS365_MCP_TENANT_ID\":\"$(bootstrap_json_escape "$(microsoft365_tenant)")\""
+  # MS365_MCP_ORG_MODE pinned OFF: "1" or "true" inherited from the agent's environment would switch the
+  # server into org mode, which adds Teams send tools. The guard refuses those too; this keeps them unoffered.
+  out="{\"MS365_MCP_TENANT_ID\":\"$(bootstrap_json_escape "$(microsoft365_tenant)")\",\"MS365_MCP_ORG_MODE\":\"0\""
   [ -n "$id" ] && out="$out,\"MS365_MCP_CLIENT_ID\":\"$(bootstrap_json_escape "$id")\""
   [ -n "$ca" ] && out="$out,\"NODE_EXTRA_CA_CERTS\":\"$(bootstrap_json_escape "$ca")\""
   printf '%s}' "$out"
@@ -257,7 +259,7 @@ microsoft365_run() {
   local node="$1" logs rc id ca; shift
   logs="$(mktemp -d -t microsoft365logs)" || return 1
   id="$(microsoft365_client_id)"; ca="$(microsoft365_ca_path)"
-  set -- MS365_MCP_LOG_DIR="$logs" MS365_MCP_TENANT_ID="$(microsoft365_tenant)" "$node" "$@"
+  set -- MS365_MCP_LOG_DIR="$logs" MS365_MCP_ORG_MODE=0 MS365_MCP_TENANT_ID="$(microsoft365_tenant)" "$node" "$@"
   [ -n "$id" ] && set -- MS365_MCP_CLIENT_ID="$id" "$@"
   [ -n "$ca" ] && set -- NODE_EXTRA_CA_CERTS="$ca" "$@"
   /usr/bin/env "$@"; rc=$?
@@ -371,6 +373,7 @@ microsoft365_registered() {
   [ "$(bootstrap_settings_get "$f" "$k.args" raw 2>/dev/null)" = "1" ] || return 1
   [ "$(bootstrap_settings_get "$f" "$k.args.0" raw 2>/dev/null)" = "$(microsoft365_entry)" ] || return 1
   [ "$(bootstrap_settings_get "$f" "$k.env.MS365_MCP_TENANT_ID" raw 2>/dev/null)" = "$(microsoft365_tenant)" ] || return 1
+  [ "$(bootstrap_settings_get "$f" "$k.env.MS365_MCP_ORG_MODE" raw 2>/dev/null)" = 0 ] || return 1
   id="$(microsoft365_client_id)"
   [ "$(bootstrap_settings_get "$f" "$k.env.MS365_MCP_CLIENT_ID" raw 2>/dev/null)" = "$id" ] || return 1
   [ "$(bootstrap_settings_get "$f" "$k.env.NODE_EXTRA_CA_CERTS" raw 2>/dev/null)" = "$(microsoft365_ca_path)" ] || return 1

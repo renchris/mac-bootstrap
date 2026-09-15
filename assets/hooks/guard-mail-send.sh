@@ -259,6 +259,19 @@ mail_main() {
       return 0 ;;
   esac
 
+  # DENY BY DEFAULT for a tool whose name says it sends. Measured 2026-09-15: under org mode the pinned
+  # server also offers send-chat-message, send-channel-message, reply-to-chat-message,
+  # reply-to-channel-message and send-my-activity-notification, and this guard let all five through
+  # because it knew only mail's names — so a name it has not classified must not mean "allowed". The
+  # verb is the PREFIX: create-reply-draft and create-forward-draft compose a draft and stay allowed.
+  # send-draft-message is the one classified send, handled below.
+  case "$name" in
+    send-draft-message) : ;;
+    send-*|reply-*|forward-*)
+      mail_deny "$name sends a message to other people the moment it runs, and this Mac never lets an agent do that on its own. Write what you would send and show it to the person; they send it themselves."
+      return 0 ;;
+  esac
+
   if mail_composes_always "$name"; then
     [ -n "$sid" ] && mkdir -p "$d" 2>/dev/null && touch "$d/$sid.composed" 2>/dev/null
     return 0
@@ -315,6 +328,13 @@ mail_selftest() {
     expect "[$arm] Copilot send-mail is denied"              deny  "$(pre s1 ms365-send-mail)"
     expect "[$arm] shared-mailbox reply is denied"           deny  "$(pre s1 mcp__ms365__reply-shared-mailbox-mail)"
     expect "[$arm] calendar forward is denied"               deny  "$(pre s1 ms365-forward-calendar-event)"
+    for t in send-chat-message send-channel-message reply-to-chat-message reply-to-channel-message send-my-activity-notification; do
+      expect "[$arm] Teams (org mode) $t is denied"          deny  "$(pre s1 "mcp__ms365__$t")"
+      expect "[$arm] …and on Copilot"                        deny  "$(pre s1 "ms365-$t")"
+    done
+    expect "[$arm] an unknown future send-* is denied"      deny  "$(pre s1 mcp__ms365__send-shared-mailbox-thing)"
+    expect "[$arm] control: create-reply-draft stays allowed" quiet "$(pre s9 mcp__ms365__create-reply-draft)"
+    expect "[$arm] control: list-chat-messages stays allowed" quiet "$(pre s9 ms365-list-chat-messages)"
     expect "[$arm] reading mail is untouched"                quiet "$(pre s1 mcp__ms365__list-mail-messages)"
     expect "[$arm] ANOTHER server's send-mail is untouched"  quiet "$(pre s1 mcp__other__send-mail)"
     expect "[$arm] a non-mail tool is untouched"             quiet "$(pre s1 Bash '{"command":"ms365 send-mail"}')"
