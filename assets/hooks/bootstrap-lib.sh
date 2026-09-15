@@ -243,9 +243,17 @@ bootstrap_settings_refuse() {
   esac
   case "$k" in
     permissions|permissions.*|allowedTools|allowedTools.*|apiKeyHelper|apiKeyHelper.*\
-    |awsAuthRefresh*|awsCredentialExport*|forceLoginMethod*|enableAllProjectMcpServers*\
+    |awsAuthRefresh*|awsCredentialExport*|gcpAuthRefresh*|otelHeadersHelper*|proxyAuthHelper*\
+    |forceLoginMethod*|forceLoginOrgUUID*|forceLoginGatewayUrl*|enableAllProjectMcpServers*\
     |enabledMcpjsonServers*|trust*|autoApprove*)
       bootstrap_warn "REFUSED: '$k' authorizes the agent; ask the operator in chat."; return 0 ;;
+    # A token COUNT is not a credential: CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_MAX_OUTPUT_TOKENS and
+    # MAX_THINKING_TOKENS are sizes. Only that exact shape is let past the TOKEN arm below, and only when
+    # no other credential word is in the name — so the refusal still errs toward refusing.
+    env.*MAX_*_TOKENS)
+      case "$k" in env.*KEY*|env.*SECRET*|env.*PASSWORD*|env.*CREDENTIAL*|env.*AUTH*) : ;; *) return 1 ;; esac ;;
+  esac
+  case "$k" in
     # An `env` block reaches every session and every process the agent starts, so a key there IS a
     # credential written by us. Refused by the shape of the name, whatever the value.
     env.*KEY*|env.*TOKEN*|env.*SECRET*|env.*PASSWORD*|env.*CREDENTIAL*|env.*AUTH*)
@@ -1037,6 +1045,17 @@ bootstrap_selftest() {
 
   # ── 16. TLS verdict: a port nobody listens on says NOTHING about trust. ─────────────────────────
   bootstrap_is "control: an unreachable host is a network error, not a trust verdict" "$(bootstrap_tls_verdict https://127.0.0.1:1/)" "network-error"
+
+  # ── 17. The guard: helpers that mint credentials are refused; a token COUNT is not a credential. ────
+  for k in gcpAuthRefresh otelHeadersHelper proxyAuthHelper forceLoginOrgUUID forceLoginGatewayUrl; do
+    bootstrap_is "guard refuses $k" "$(bootstrap_settings_refuse "$T/g.json" "$k" 2>/dev/null && echo refused || echo allowed)" "refused"
+  done
+  for k in env.CLAUDE_CODE_MAX_CONTEXT_TOKENS env.CLAUDE_CODE_MAX_OUTPUT_TOKENS env.MAX_THINKING_TOKENS; do
+    bootstrap_is "guard allows the size $k" "$(bootstrap_settings_refuse "$T/g.json" "$k" 2>/dev/null && echo refused || echo allowed)" "allowed"
+  done
+  for k in env.GITHUB_TOKEN env.MAX_AUTH_TOKENS env.MAX_API_KEY_TOKENS env.COPILOT_PROVIDER_BEARER_TOKEN; do
+    bootstrap_is "control: guard still refuses $k" "$(bootstrap_settings_refuse "$T/g.json" "$k" 2>/dev/null && echo refused || echo allowed)" "refused"
+  done
 
   printf '\n%s/%s cases passed.\n' "$((bootstrap__t - bootstrap__f))" "$bootstrap__t"
   rm -rf "$T" 2>/dev/null
