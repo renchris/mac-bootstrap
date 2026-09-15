@@ -195,3 +195,5 @@ case "$out" in *"not added to your login items"*) pass "clearance-screenshot-no-
 out="$(terminal_unit pane_equalize 'clearance_pane_equalize')"
 if [ -n "$out" ] && [ -z "$(terminal_clearance_bad "$out")" ]; then pass "clearance-pane-equalize-well-formed" "$out"
 else fail "clearance-pane-equalize-well-formed" "${out:-no lines}"; fi
+case "$(terminal_unit screenshot 'cost_screenshot')" in *"every keystroke"*hs.ipc*"borrow that Accessibility grant"*) pass "cost-screenshot-names-hook-and-proxy" ;;
+  *) fail "cost-screenshot-names-hook-and-proxy" "$(terminal_unit screenshot 'cost_screenshot')" ;; esac

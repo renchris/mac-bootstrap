@@ -359,7 +359,7 @@ screenshot_live_probe() {
 
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
 what_screenshot()    { printf '%s' 'Cmd+Shift+4 to a bottom-right thumbnail to the clipboard to a paste into your agent'; }
-cost_screenshot()    { printf '%s' 'Hammerspoon (a pinned download into ~/Applications, no admin needed), and one Accessibility toggle that no script can grant for you — on a standard account, an administrator has to approve it.'; }
+cost_screenshot()    { printf '%s' 'Hammerspoon (a pinned download into ~/Applications, no admin needed), and one Accessibility toggle that no script can grant for you — on a standard account, an administrator has to approve it. Hammerspoon then stays running with a key hook that sees every keystroke, and its hs.ipc command port lets any program you run borrow that Accessibility grant.'; }
 profile_screenshot() { printf '%s' 'full'; }
 
 # egress_ — the install route's hosts, and Hammerspoon's own. Crash reports to Sentry are not listed:

@@ -300,7 +300,7 @@ voiceink_liveness() {
 
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
 what_voiceink()    { printf '%s' 'a local build of the open-source VoiceInk dictation app, no licence key'; }
-cost_voiceink()    { printf '%s' 'Xcode ~9 GB via the App Store (Apple ID), cmake, two sudo commands, ~10 min of building.'; }
+cost_voiceink()    { printf '%s' 'Xcode ~9 GB via the App Store (Apple ID), cmake, two sudo commands, ~10 min of building, and a self-signed code-signing certificate you add to your login keychain and mark trusted — the step EDR products flag, so on a company Mac clear it with IT first.'; }
 profile_voiceink() { printf '%s' 'full'; }
 
 # Every host this module reaches, or sets the app up to reach. The cloud AI and transcription hosts

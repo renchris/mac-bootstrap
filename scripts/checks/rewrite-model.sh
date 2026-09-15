@@ -82,6 +82,7 @@ rm_call() {
   ( export HOME="$h" BOOTSTRAP_STATE_DIR="$h/.mac-bootstrap" BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1 \
            BOOTSTRAP_REWRITE_MODEL_DOMAIN="$RM_DOMAIN" \
            BOOTSTRAP_REWRITE_MODEL_OLLAMA="${RM_OLLAMA:-$RM_DIR/bin/ollama}" \
+           BOOTSTRAP_REWRITE_MODEL_BREW="${BOOTSTRAP_REWRITE_MODEL_BREW:-$RM_DIR/no-brew}" \
            BOOTSTRAP_REWRITE_MODEL_CURL="$RM_DIR/bin/curl" RM_FAKE_API="$RM_DIR/api" LOCAL_ONLY_OLLAMA_URL="file://$RM_DIR/lo" BOOTSTRAP_ASSETS="$CHECK_ROOT/assets" \
            BOOTSTRAP_REWRITE_MODEL_APP_PROCESS=no-such-voiceink-process
     unset BOOTSTRAP_LOG
@@ -323,3 +324,23 @@ case "$RM_CL" in
   *) fail "clearance-voiceink-names-both-trust-changes" "$RM_CL" ;;
 esac
 case "$RM_CL" in *"permission Microphone"*Accessibility*) pass "clearance-voiceink-names-permissions" ;; *) fail "clearance-voiceink-names-permissions" "$RM_CL" ;; esac
+
+# 13. What a person reads BEFORE choosing names the server, the port, and the keychain trust. ──────
+case "$(rm_call "$h" cost_rewrite_model 2>/dev/null)" in *"stays running from login"*127.0.0.1:11434*) pass "cost-rewrite-model-names-server-and-port" ;;
+  *) fail "cost-rewrite-model-names-server-and-port" "$(rm_call "$h" cost_rewrite_model 2>/dev/null)" ;; esac
+case "$( ( . "$RM_LIB" >/dev/null 2>&1; . "$VI_MOD" >/dev/null 2>&1; cost_voiceink ) 2>/dev/null)" in *"mark trusted"*EDR*IT*) pass "cost-voiceink-names-keychain-trust" ;;
+  *) fail "cost-voiceink-names-keychain-trust" ;; esac
+
+# …and uninstall says so when it leaves Homebrew's ollama service running, with the one command.
+rm_fake_brew() {                                      # rm_fake_brew <name> <ollama status>
+  mkdir -p "$RM_DIR/$1/bin" "$RM_DIR/$1/Cellar"
+  printf '#!/bin/bash\n[ "$1 $2" = "services list" ] && printf "Name   Status  User File\\nollama %s  me   ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist\\n"\nexit 0\n' "$2" > "$RM_DIR/$1/bin/brew"
+  chmod +x "$RM_DIR/$1/bin/brew"
+}
+rm_fake_brew brew-started started; rm_fake_brew brew-none none
+h="$(fresh_home rm-uninstall-brew)"; rm_api
+RM_OUT="$(BOOTSTRAP_REWRITE_MODEL_BREW="$RM_DIR/brew-started/bin/brew" rm_call "$h" uninstall_rewrite_model 2>&1)"
+case "$RM_OUT" in *"still running"*"brew services stop ollama"*) pass "uninstall-names-the-homebrew-service" ;; *) fail "uninstall-names-the-homebrew-service" "$RM_OUT" ;; esac
+same "uninstall-stop-command-on-its-own-line" "$(printf '%s\n' "$RM_OUT" | grep -c '^brew services stop ollama$')" 1
+RM_OUT="$(BOOTSTRAP_REWRITE_MODEL_BREW="$RM_DIR/brew-none/bin/brew" rm_call "$h" uninstall_rewrite_model 2>&1)"
+case "$RM_OUT" in *"brew services stop"*) fail "uninstall-silent-when-no-homebrew-service" "$RM_OUT" ;; *) pass "uninstall-silent-when-no-homebrew-service" ;; esac

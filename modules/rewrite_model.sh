@@ -580,6 +580,15 @@ rewrite_model_server_label() {
   return 1
 }
 
+# rewrite_model_brew_service_on — Homebrew's own ollama service is registered and not stopped, read
+# from `brew services list`, whose rows are `<name> <status> <user> <file>`; `none` and `stopped` are
+# the two statuses under which nothing runs at login.
+rewrite_model_brew_service_on() {
+  local b
+  b="$(rewrite_model_brew)" || return 1
+  bootstrap_brew "$b" services list 2>/dev/null | /usr/bin/awk '$1 == "ollama" && $2 != "none" && $2 != "stopped" { f = 1 } END { exit !f }'
+}
+
 rewrite_model_xml_escape() { printf '%s' "$1" | /usr/bin/sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 # rewrite_model_agent_render <ollama> — the LaunchAgent, as text. Bound to 127.0.0.1 on the base URL's port,
@@ -760,10 +769,12 @@ what_rewrite_model() {
   esac
 }
 cost_rewrite_model() {
+  local server
+  server="An ollama server stays running from login, listening on 127.0.0.1:$(rewrite_model_url_port "$REWRITE_MODEL_URL")."
   case "$(rewrite_model_route 2>/dev/null)" in
-    brew)          printf '%s' "Homebrew's ollama + a ~5 GB model download. Several minutes. One pass through VoiceInk's modes at the end." ;;
-    pinned|oldmac) printf '%s' "a pinned 160 MB ollama download + a ~5 GB model download. Several minutes. One pass through VoiceInk's modes at the end." ;;
-    *)             printf '%s' "a ~5 GB model download. Several minutes. One pass through VoiceInk's modes at the end." ;;
+    brew)          printf '%s' "Homebrew's ollama + a ~5 GB model download. Several minutes. $server One pass through VoiceInk's modes at the end." ;;
+    pinned|oldmac) printf '%s' "a pinned 160 MB ollama download + a ~5 GB model download. Several minutes. $server One pass through VoiceInk's modes at the end." ;;
+    *)             printf '%s' "a ~5 GB model download. Several minutes. $server One pass through VoiceInk's modes at the end." ;;
   esac
 }
 profile_rewrite_model() { printf '%s' 'standard'; }
@@ -1239,6 +1250,12 @@ uninstall_rewrite_model() {
   rm -rf "$(rewrite_model_pinned_dir)" "$(rewrite_model_pinned_dir).part" \
          "$(bootstrap_tools_dir)/ollama-$REWRITE_MODEL_OLLAMA_VERSION-darwin.tgz" "$(bootstrap_tools_dir)/ollama-$REWRITE_MODEL_OLLAMA_VERSION-darwin.tgz.part" 2>/dev/null || true
   rmdir "$(bootstrap_tools_dir)/bin" "$(bootstrap_tools_dir)" 2>/dev/null || true     # only if now empty
+  # Homebrew's service is left alone — install_ may have started it, but Homebrew owns it and other
+  # things may use it — and a server still listening at login is not something to leave unsaid.
+  if rewrite_model_brew_service_on; then
+    printf 'rewrite_model: Homebrew'"'"'s own ollama service is still running and starts at login; it was left alone on purpose. To stop it:\n'
+    printf 'brew services stop ollama\n'
+  fi
 
   # LAST, not first: every read above (is the model there? what base was it?) re-creates the
   # API caches, so deleting them at the top of the function leaves them behind at the bottom.
