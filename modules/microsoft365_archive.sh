@@ -13,11 +13,15 @@
 #                                                [wrapper, run] at minute 7 of every hour, and at load
 #   the archive folder itself                    BOOTSTRAP_ARCHIVE_DIR, default $HOME/Microsoft365Archive
 #
-# HOW IT TALKS TO MICROSOFT: it does not, directly. The engine starts the SAME Softeria server the
-# microsoft365 module installed, over stdio, exactly as an agent does, and asks it only for Graph
-# GETs — the engine refuses any other tool, any non-GET batch request and any /special/ path before
-# every call, because a launchd job never passes the agent's PreToolUse guard. The sign-in is the
-# one microsoft365 already asks for; this module never reads a token and never writes one.
+# HOW IT TALKS TO MICROSOFT: it does not, directly. The engine starts a Softeria server over stdio,
+# exactly as an agent does, and asks it only for Graph GETs — the engine refuses any other tool, any
+# non-GET batch request and any /special/ path before every call, because a launchd job never passes
+# the agent's PreToolUse guard. WHICH server, in order: the one BOOTSTRAP_MICROSOFT_SERVER names; the
+# one the microsoft365 module installed; the ms365 server an agent already runs, read (never written)
+# from $HOME/.claude.json. A Mac whose agent already runs Softeria's server keeps its registration and
+# its tenant, and the archive signs in the way that agent does. Each candidate is accepted only when
+# it RUNS as the server. The sign-in is the server's own; this module never reads a token and never
+# writes one.
 #
 # WHY THE LAUNCHD LOAD IS REFUSED UNDER A SANDBOXED HOME: `launchctl bootstrap gui/<uid>` acts on the
 # REAL per-user launchd domain whatever $HOME says — the same escape class as `defaults`, which
@@ -52,15 +56,20 @@ microsoft365_archive_converter() { printf '%s/markdown-convert.sh' "$(microsoft3
 microsoft365_archive_log()       { printf '%s/launchd.log' "$(microsoft365_archive_dir)"; }
 microsoft365_archive_plist()     { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$MICROSOFT365_ARCHIVE_LABEL"; }
 microsoft365_archive_domain()    { printf 'gui/%s' "$(/usr/bin/id -u)"; }
-# The microsoft365 module's server. Its module file cannot be sourced from here (each verb sources
-# only its own module), so the path is re-derived the way that module spells it.
-microsoft365_archive_server()    { printf '%s/microsoft365/node_modules/@softeria/ms-365-mcp-server/dist/index.js' "$(microsoft365_archive_state_dir)"; }
+# The microsoft365 module's server, and the key it registers under. Its module file cannot be sourced
+# from here (each verb sources only its own module), so both are re-derived the way that module spells
+# them. Which server the archive actually uses is microsoft365_archive_server, further down.
+microsoft365_archive_module_server() { printf '%s/microsoft365/node_modules/@softeria/ms-365-mcp-server/dist/index.js' "$(microsoft365_archive_state_dir)"; }
+MICROSOFT365_ARCHIVE_REGISTRATION_KEY="ms365"
+MICROSOFT365_ARCHIVE_SERVER_TAIL="/@softeria/ms-365-mcp-server/dist/index.js"
+microsoft365_archive_agent_config()  { printf '%s/.claude.json' "$HOME"; }
 
 # The choices a person made through the environment, recorded at install so a cold verify with no
 # environment agrees. Written only when the variable is set, so a re-run without it never resets
 # a choice made earlier.
 microsoft365_archive_chosen_root_file()    { printf '%s/chosen-archive-dir' "$(microsoft365_archive_dir)"; }
 microsoft365_archive_chosen_account_file() { printf '%s/chosen-account' "$(microsoft365_archive_dir)"; }
+microsoft365_archive_chosen_server_file()  { printf '%s/chosen-server' "$(microsoft365_archive_dir)"; }
 
 microsoft365_archive_root() {
   local f
@@ -70,10 +79,17 @@ microsoft365_archive_root() {
   printf '%s/Microsoft365Archive' "$HOME"
 }
 
-# Tenant and client id exactly as microsoft365 derives them: environment, then what that module
-# recorded, then its work-account default — so the archive signs in the way the agents do.
+# Tenant and client id the way the server in use is signed in to. For the microsoft365 module's server
+# (or one BOOTSTRAP_MICROSOFT_SERVER names) exactly as microsoft365 derives them: environment, then what
+# that module recorded, then its work-account default. For a server an agent already runs, from THAT
+# registration's env — no MS365_MCP_TENANT_ID there is Softeria's own default, common — so the archive
+# signs in the way the agent does, and never on a tenant the agent does not use.
 microsoft365_archive_tenant() {
-  local f
+  local f t
+  if [ "$(microsoft365_archive_server_source)" = agent-registration ]; then
+    t="$(microsoft365_archive_registration_env MS365_MCP_TENANT_ID)"
+    printf '%s' "${t:-common}"; return 0
+  fi
   [ -n "${BOOTSTRAP_MICROSOFT_TENANT:-}" ] && { printf '%s' "$BOOTSTRAP_MICROSOFT_TENANT"; return 0; }
   f="$(microsoft365_archive_state_dir)/microsoft365/tenant"
   [ -s "$f" ] && { head -n 1 "$f"; return 0; }
@@ -81,28 +97,56 @@ microsoft365_archive_tenant() {
 }
 microsoft365_archive_client_id() {
   local f
+  if [ "$(microsoft365_archive_server_source)" = agent-registration ]; then
+    microsoft365_archive_registration_env MS365_MCP_CLIENT_ID; return 0
+  fi
   [ -n "${BOOTSTRAP_MICROSOFT_CLIENT_ID:-}" ] && { printf '%s' "$BOOTSTRAP_MICROSOFT_CLIENT_ID"; return 0; }
   f="$(microsoft365_archive_state_dir)/microsoft365/client-id"
   [ -s "$f" ] && head -n 1 "$f"
   return 0
 }
 
-# microsoft365_archive_node — the same candidate list, in the same order, as microsoft365_node: a node
-# >= 18 at a path that survives a node upgrade. A per-shell fnm_multishells path is refused, because
-# it vanishes with the shell and the hourly job would die with it, silently.
+# microsoft365_archive_node_ok <path> — an executable node >= 18 at a path that survives a node
+# upgrade. A per-shell fnm_multishells path is refused, because it vanishes with the shell and the
+# hourly job would die with it, silently. A "|" is refused because the server pick below is "|"-joined.
+microsoft365_archive_node_ok() {
+  local c="$1" major
+  [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || return 1
+  case "$c" in */fnm_multishells/*|*'|'*) return 1 ;; esac
+  major="$("$c" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" || return 1
+  case "$major" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$major" -ge 18 ]
+}
+
+# microsoft365_archive_node — the same candidate list, in the same order, as microsoft365_node. It is
+# the node that probes candidate servers, and the one that runs the microsoft365 module's server;
+# a server an agent already runs is run by that agent's node (microsoft365_archive_node_beside).
 microsoft365_archive_node() {
-  local c major
+  local c
   for c in /opt/homebrew/bin/node /usr/local/bin/node \
            "$HOME/Library/Application Support/fnm/aliases/default/bin/node" \
            "$(command -v node 2>/dev/null)"; do
-    [ -n "$c" ] && [ -x "$c" ] || continue
-    case "$c" in */fnm_multishells/*) continue ;; esac
-    major="$("$c" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" || continue
-    case "$major" in ''|*[!0-9]*) continue ;; esac
-    [ "$major" -ge 18 ] || continue
-    printf '%s' "$c"; return 0
+    microsoft365_archive_node_ok "$c" && { printf '%s' "$c"; return 0; }
   done
   return 1
+}
+
+# microsoft365_archive_real_file <node> <path> — the physical path of a FILE, symlinks resolved, read
+# by node's own realpath — node is required on every path that gets this far, so nothing else is.
+MICROSOFT365_ARCHIVE_REALPATH_JS='try { process.stdout.write(require("fs").realpathSync(process.argv[1])); } catch (e) { process.exit(1); }'
+microsoft365_archive_real_file() { "$1" -e "$MICROSOFT365_ARCHIVE_REALPATH_JS" "$2" 2>/dev/null; }
+
+# microsoft365_archive_node_beside <probe-node> <server-as-named> — the node an agent runs a named
+# server with. A bin link (`…/bin/ms-365-mcp-server`, what an agent registers) starts through its
+# `#!/usr/bin/env node`, and fnm, nvm, nodejs.org and Homebrew all put that node in the same bin/, so
+# the node beside the link is the agent's. It matters beyond the version: the server keeps its sign-in
+# key in the login Keychain, whose access list trusts the binary that stored it — measured on this
+# kind of Mac, Homebrew's node is ad-hoc signed and fnm's is Developer ID signed — and a job that reads
+# it as a different binary meets the Keychain's access check as a stranger. No node beside it: the probe.
+microsoft365_archive_node_beside() {
+  local probe="$1" named="$2" beside
+  beside="$(dirname "$named")/node"
+  if microsoft365_archive_node_ok "$beside"; then printf '%s' "$beside"; else printf '%s' "$probe"; fi
 }
 
 # Paths are shown as $HOME/… literally: executable as typed, and no username in the output.
@@ -144,22 +188,157 @@ microsoft365_archive_bounded() {                    # <node> <ms> <program> <arg
   "$node" -e "$MICROSOFT365_ARCHIVE_BOUNDED_JS" "$@"
 }
 
+# ── the server: which one, and proving it is one ─────────────────────────────────────────────
+# microsoft365_archive_is_server <node> <path> — rc 0 iff <path> is Softeria's server: absolute, its
+# real path ends in the package's dist/index.js, and EXECUTING it on <node> answers --version with one
+# semver line and rc 0. Neither half alone is acceptance: any file can sit at that path, and any script
+# can print a version. Bounded, so a candidate that hangs cannot hang the bootstrap; its log goes to a
+# throwaway folder, never the real server's.
+microsoft365_archive_is_server() {
+  local node="$1" p="$2" real logs out rc
+  case "$p" in /*) : ;; *) return 1 ;; esac
+  case "$p" in */fnm_multishells/*|*'|'*) return 1 ;; esac
+  [ -f "$p" ] || return 1
+  real="$(microsoft365_archive_real_file "$node" "$p")" || return 1
+  case "$real" in *"$MICROSOFT365_ARCHIVE_SERVER_TAIL") : ;; *) return 1 ;; esac
+  logs="$(mktemp -d -t microsoft365archiveprobe)" || return 1
+  out="$(export MS365_MCP_LOG_DIR="$logs"; microsoft365_archive_bounded "$node" 20000 "$node" "$p" --version 2>/dev/null)"; rc=$?
+  rm -rf "$logs" 2>/dev/null
+  [ "$rc" = 0 ] || return 1
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] || return 1
+  printf '%s\n' "$out" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?'
+}
+
+# microsoft365_archive_registration_env <NAME> — that variable in the agent's ms365 registration's
+# env block, or nothing. Read with bootstrap_settings_get; this module never writes $HOME/.claude.json.
+microsoft365_archive_registration_env() {
+  local v
+  v="$(bootstrap_settings_get "$(microsoft365_archive_agent_config)" "mcpServers.$MICROSOFT365_ARCHIVE_REGISTRATION_KEY.env.$1" raw 2>/dev/null)" || v=""
+  printf '%s' "$v"
+}
+
+# microsoft365_archive_registration <probe-node> — "<node>|<server>" for the ms365 server an agent
+# already runs, or rc 1. Two registration shapes are Softeria's: a `command` whose real path is the
+# package's dist/index.js (the bin link a global install puts on PATH), or a node `command` whose
+# args.0 is. A bare command name is looked up on PATH; one that lands in a per-shell fnm_multishells
+# folder is replaced by its real path, the same binary at a path that outlives the shell. A tenant or
+# client id holding anything but [A-Za-z0-9._-] is refused: both are printed into a command a person runs.
+microsoft365_archive_registration() {
+  local probe="$1" f k cmd real node server v
+  f="$(microsoft365_archive_agent_config)"
+  k="mcpServers.$MICROSOFT365_ARCHIVE_REGISTRATION_KEY"
+  [ -f "$f" ] || return 1
+  cmd="$(bootstrap_settings_get "$f" "$k.command" raw 2>/dev/null)" || return 1
+  case "$cmd" in
+    /*) : ;;
+    ''|*/*) return 1 ;;
+    *) cmd="$(command -v "$cmd" 2>/dev/null)" || return 1
+       case "$cmd" in /*) : ;; *) return 1 ;; esac ;;
+  esac
+  real="$(microsoft365_archive_real_file "$probe" "$cmd")" || return 1
+  case "$cmd" in */fnm_multishells/*) cmd="$real" ;; esac
+  case "$real" in
+    *"$MICROSOFT365_ARCHIVE_SERVER_TAIL")
+      server="$cmd"
+      node="$(microsoft365_archive_node_beside "$probe" "$cmd")" ;;
+    */node)
+      server="$(bootstrap_settings_get "$f" "$k.args.0" raw 2>/dev/null)" || return 1
+      node="$cmd"
+      microsoft365_archive_node_ok "$node" || node="$real"
+      microsoft365_archive_node_ok "$node" || node="$probe" ;;
+    *) return 1 ;;
+  esac
+  for v in "$(microsoft365_archive_registration_env MS365_MCP_TENANT_ID)" "$(microsoft365_archive_registration_env MS365_MCP_CLIENT_ID)"; do
+    case "$v" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+  done
+  microsoft365_archive_is_server "$node" "$server" || return 1
+  printf '%s|%s' "$node" "$server"
+}
+
+# microsoft365_archive_pick_derive — "<source>|<node>|<server>": the server the archive reads through
+# and the node that runs it, in the documented order, each accepted only by microsoft365_archive_is_server.
+#   bootstrap-env       BOOTSTRAP_MICROSOFT_SERVER, else the one it named at an earlier install
+#   module              the microsoft365 module's own install
+#   agent-registration  the ms365 server in $HOME/.claude.json
+# rc 1 = none. rc 2 = a NAMED server that does not run as one: printed anyway so the note can name it,
+# and never replaced by a later candidate — a person who named a server is told it is wrong, not
+# silently given another one on a tenant they did not pick.
+microsoft365_archive_pick_derive() {
+  local probe named f node server
+  probe="$(microsoft365_archive_node)" || return 1
+  named="${BOOTSTRAP_MICROSOFT_SERVER:-}"
+  if [ -z "$named" ]; then
+    f="$(microsoft365_archive_chosen_server_file)"
+    [ -s "$f" ] && named="$(head -n 1 "$f")"
+  fi
+  if [ -n "$named" ]; then
+    node="$(microsoft365_archive_node_beside "$probe" "$named")"
+    printf 'bootstrap-env|%s|%s' "$node" "$named"
+    microsoft365_archive_is_server "$node" "$named" && return 0
+    return 2
+  fi
+  server="$(microsoft365_archive_module_server)"
+  if [ -f "$server" ] && microsoft365_archive_is_server "$probe" "$server"; then
+    printf 'module|%s|%s' "$probe" "$server"; return 0
+  fi
+  node="$(microsoft365_archive_registration "$probe")" || return 1
+  printf 'agent-registration|%s' "$node"
+}
+
+# microsoft365_archive_pick — the same, remembered for the rest of ONE verb. Proving a candidate runs
+# it, and a verb asks a dozen times, so each verb calls this once at its top (never inside $(…), whose
+# subshell would forget it) and every later $(…) inherits the answer. The memory is keyed on what the
+# answer depends on, and every verb starts in a fresh subshell, so no verb reuses another's answer.
+MICROSOFT365_ARCHIVE_PICK_KEY=""
+microsoft365_archive_pick() {
+  local key="$HOME|${BOOTSTRAP_STATE_DIR:-}|${BOOTSTRAP_MICROSOFT_SERVER:-}"
+  if [ "$MICROSOFT365_ARCHIVE_PICK_KEY" != "$key" ]; then
+    MICROSOFT365_ARCHIVE_PICKED="$(microsoft365_archive_pick_derive)"; MICROSOFT365_ARCHIVE_PICK_RC=$?
+    MICROSOFT365_ARCHIVE_PICK_KEY="$key"
+  fi
+  printf '%s' "$MICROSOFT365_ARCHIVE_PICKED"
+  return "$MICROSOFT365_ARCHIVE_PICK_RC"
+}
+
+# One field of a USABLE pick (rc 0), or rc 1 and nothing.
+microsoft365_archive_pick_field() {
+  local p rest
+  p="$(microsoft365_archive_pick)" || return 1
+  rest="${p#*|}"
+  case "$1" in
+    source) printf '%s' "${p%%|*}" ;;
+    node)   printf '%s' "${rest%%|*}" ;;
+    server) printf '%s' "${rest#*|}" ;;
+  esac
+}
+microsoft365_archive_server()        { microsoft365_archive_pick_field server; }
+microsoft365_archive_server_source() { microsoft365_archive_pick_field source; }
+# The node that runs the archive: the pick's, else the probe (so the node gate still has an answer).
+microsoft365_archive_run_node()      { microsoft365_archive_pick_field node || microsoft365_archive_node; }
+# The named server that does not run as one (pick rc 2), or rc 1.
+microsoft365_archive_server_named() {
+  local p rc
+  p="$(microsoft365_archive_pick)"; rc=$?
+  [ "$rc" = 2 ] || return 1
+  p="${p#*|}"; printf '%s' "${p#*|}"
+}
+
 # ── the account ──────────────────────────────────────────────────────────────────────────────
 # microsoft365_archive_account_candidates <node> — the signed-in accounts in the configured tenant,
 # one username per line. `--list-accounts` is local (MSAL's cache, read by the server itself, never
 # by us); each id is "<object id>.<tenant id>", so the tenant test is the one microsoft365 applies.
 microsoft365_archive_account_candidates() {
-  local node="$1" tmp logs n i id tenant_of_account user want client_id keep
-  [ -f "$(microsoft365_archive_server)" ] || return 1
+  local node="$1" tmp logs n i id tenant_of_account user want client_id keep server
+  server="$(microsoft365_archive_server)" || return 1
   tmp="$(mktemp -t microsoft365archiveaccounts)" || return 1
   logs="$(mktemp -d -t microsoft365archivelogs)" || { rm -f "$tmp"; return 1; }
   client_id="$(microsoft365_archive_client_id)"
   if [ -n "$client_id" ]; then
     MS365_MCP_LOG_DIR="$logs" MS365_MCP_TENANT_ID="$(microsoft365_archive_tenant)" MS365_MCP_CLIENT_ID="$client_id" \
-      "$node" "$(microsoft365_archive_server)" --list-accounts 2>/dev/null | grep '^{' | tail -n 1 > "$tmp"
+      "$node" "$server" --list-accounts 2>/dev/null | grep '^{' | tail -n 1 > "$tmp"
   else
     MS365_MCP_LOG_DIR="$logs" MS365_MCP_TENANT_ID="$(microsoft365_archive_tenant)" \
-      "$node" "$(microsoft365_archive_server)" --list-accounts 2>/dev/null | grep '^{' | tail -n 1 > "$tmp"
+      "$node" "$server" --list-accounts 2>/dev/null | grep '^{' | tail -n 1 > "$tmp"
   fi
   rm -rf "$logs" 2>/dev/null
   n="$(bootstrap_settings_get "$tmp" accounts raw 2>/dev/null)" || n=0
@@ -417,13 +596,17 @@ microsoft365_archive_wrapper_text() {           # <node>
   printf 'exec %q %q "$@"\n' "$node" "$(microsoft365_archive_dir)/archive.js"
 }
 
-# key=value, one per line, fixed order. account and client_id appear only when there is one.
+# key=value, one per line, fixed order. account and client_id appear only when there is one. Which
+# candidate the server came from is recorded as a COMMENT line: the engine refuses a key it does not
+# know and has no use for this one, while config_ok below still reads it back like any other line, so
+# a config written from one source never passes as current once the pick comes from another.
 microsoft365_archive_config_text() {            # <node> <account-or-empty>
   local node="$1" account="$2" id
   printf 'root=%s\n' "$(microsoft365_archive_root)"
   [ -n "$account" ] && printf 'account=%s\n' "$account"
   printf 'node=%s\n' "$node"
   printf 'server=%s\n' "$(microsoft365_archive_server)"
+  printf '# server_source=%s\n' "$(microsoft365_archive_server_source)"
   printf 'tenant=%s\n' "$(microsoft365_archive_tenant)"
   id="$(microsoft365_archive_client_id)"
   [ -n "$id" ] && printf 'client_id=%s\n' "$id"
@@ -623,9 +806,11 @@ microsoft365_archive_ready() {
 # microsoft365_archive_gate_reason — ONE token naming the step only a person can take, or nothing.
 # gate_, note_ and gesture_ all read this, so they can never disagree about which step it is.
 microsoft365_archive_gate_reason() {
-  local node n list account root
-  node="$(microsoft365_archive_node)" || { printf 'node'; return 0; }
-  [ -f "$(microsoft365_archive_server)" ] || { printf 'server'; return 0; }
+  local node n list account root rc
+  microsoft365_archive_node >/dev/null || { printf 'node'; return 0; }
+  microsoft365_archive_pick >/dev/null; rc=$?
+  case "$rc" in 0) : ;; 2) printf 'server-named'; return 0 ;; *) printf 'server'; return 0 ;; esac
+  node="$(microsoft365_archive_run_node)" || { printf 'node'; return 0; }
   root="$(microsoft365_archive_root)"
   microsoft365_archive_root_shape_ok "$root" || { printf 'relative-root'; return 0; }
   microsoft365_archive_under_cloud "$root" && { printf 'cloud'; return 0; }
@@ -652,21 +837,23 @@ needs_microsoft365_archive()   { printf '%s' 'microsoft365'; }
 
 verify_microsoft365_archive() {
   local node account list
-  node="$(microsoft365_archive_node)" || return 1
-  [ -f "$(microsoft365_archive_server)" ] || return 1
+  microsoft365_archive_pick >/dev/null || return 1
+  node="$(microsoft365_archive_run_node)" || return 1
+
+  # Installed bytes against the shipped bytes, the folder, and the plist parsing to what launchd must
+  # run — all local reads, so a Mac with nothing installed says no before any server is started.
+  microsoft365_archive_files_ok || return 1
+  microsoft365_archive_root_ok || return 1
+  microsoft365_archive_plist_ok || return 1
+
   # The account the job passes must be one the server has signed in — read from the server's own
   # --list-accounts, not from what we recorded — or every hourly run stops at sign-in.
   list="$(microsoft365_archive_account_candidates "$node" 2>/dev/null)" || return 1
   account="$(microsoft365_archive_account_from "$list")" || return 1
   microsoft365_archive_signed_in "$account" "$list" || return 1
 
-  # Installed bytes against the shipped bytes, and the generated config parsed back key by key.
-  microsoft365_archive_files_ok || return 1
+  # The generated config parsed back key by key — the server, and which candidate it came from, included.
   microsoft365_archive_config_ok "$node" "$account" || return 1
-  microsoft365_archive_root_ok || return 1
-
-  # The plist parses and says what launchd must run.
-  microsoft365_archive_plist_ok || return 1
 
   # launchd holds the job, from THIS plist — read out of launchd, the one reader that is not us.
   # Under a sandboxed HOME nothing was loaded, and a job the real home loaded must not count.
@@ -686,11 +873,13 @@ verify_microsoft365_archive() {
 }
 
 gate_microsoft365_archive() {
+  microsoft365_archive_pick >/dev/null 2>&1
   [ -n "$(microsoft365_archive_gate_reason)" ]
 }
 
 note_microsoft365_archive() {
   local r
+  microsoft365_archive_pick >/dev/null 2>&1
   r="$(microsoft365_archive_gate_reason)"
   # The account gate is reported before the sandboxed-HOME one, but when both hold the line says so,
   # or the reader signs in, re-runs, and only then learns the job still will not load from here.
@@ -703,17 +892,19 @@ microsoft365_archive_note_text() {
   local r="$1"
   case "$r" in
     node)          printf 'the meeting archive runs on node 18 or later, and this Mac has none.' ;;
-    server)        printf 'the meeting archive reads through the Microsoft 365 server, and the microsoft365 module has not installed it yet.' ;;
+    server)        printf 'the meeting archive reads through Softeria'\''s Microsoft 365 server, and there is none here it can run: the microsoft365 module has not installed it, and no ms365 server registered in $HOME/.claude.json runs as one.' ;;
+    server-named)  printf 'the meeting archive was pointed at %s (BOOTSTRAP_MICROSOFT_SERVER, now or at an earlier install), and that does not run as Softeria'\''s Microsoft 365 server; re-run the bootstrap with BOOTSTRAP_MICROSOFT_SERVER set to its dist/index.js or its bin link.' \
+                     "$(microsoft365_archive_short_path "$(microsoft365_archive_server_named)")" ;;
     relative-root) printf 'BOOTSTRAP_ARCHIVE_DIR must be an absolute path with no "." or ".." in it; "%s" is not.' "$(microsoft365_archive_root)" ;;
     cloud)         printf 'the archive folder %s is inside a folder a sync client uploads, and client meeting content must not be re-uploaded; choose a folder outside it.' "$(microsoft365_archive_short_path "$(microsoft365_archive_root)")" ;;
     root-in-engine) printf 'the archive folder %s is inside %s, which is this module'\''s own and is deleted by an uninstall; choose a folder outside it.' \
                      "$(microsoft365_archive_short_path "$(microsoft365_archive_root)")" "$(microsoft365_archive_short_path "$(microsoft365_archive_state_dir)")" ;;
     account-none)  printf 'no Microsoft account in tenant %s is signed in on this Mac, so the archive has no account to read as; sign in once, as the microsoft365 module asks.' "$(microsoft365_archive_tenant)" ;;
     account-many)  printf 'several Microsoft accounts in tenant %s are signed in (%s), and which one to archive is your call: re-run the bootstrap with BOOTSTRAP_MICROSOFT_ACCOUNT set to it.' \
-                     "$(microsoft365_archive_tenant)" "$(microsoft365_archive_account_candidates "$(microsoft365_archive_node)" 2>/dev/null | awk 'NF' | paste -sd, - | sed 's/,/, /g')" ;;
+                     "$(microsoft365_archive_tenant)" "$(microsoft365_archive_account_candidates "$(microsoft365_archive_run_node)" 2>/dev/null | awk 'NF' | paste -sd, - | sed 's/,/, /g')" ;;
     account-signed-out)
                    printf 'the archive reads as %s, and that account is not signed in on this Mac, so every hourly run would stop at sign-in; sign it in once (or name a signed-in account in BOOTSTRAP_MICROSOFT_ACCOUNT).' \
-                     "$(microsoft365_archive_account "$(microsoft365_archive_node)" 2>/dev/null)" ;;
+                     "$(microsoft365_archive_account "$(microsoft365_archive_run_node)" 2>/dev/null)" ;;
     foreign-home)  printf 'everything is installed, but this run has a sandboxed HOME ($HOME is not your real home) and launchctl ignores $HOME, so loading the hourly job would put it in your REAL launchd domain; nothing was loaded.' ;;
     label-taken)   printf 'launchd already runs a job named %s from another plist (%s), and replacing it is your call, not mine.' \
                      "$MICROSOFT365_ARCHIVE_LABEL" "$(microsoft365_archive_short_path "$(microsoft365_archive_loaded_path)")" ;;
@@ -723,15 +914,17 @@ microsoft365_archive_note_text() {
 
 gesture_microsoft365_archive() {
   local node id pre
+  microsoft365_archive_pick >/dev/null 2>&1
   case "$(microsoft365_archive_gate_reason)" in
     node)          printf 'brew install node' ;;
     server)        microsoft365_archive_rerun microsoft365 ;;
+    server-named)  : ;;   # the right path is the person's to name; a command with one filled in would guess it
     relative-root|cloud|root-in-engine)
                    # shellcheck disable=SC2016   # $HOME is for the person's shell to expand
                    microsoft365_archive_rerun microsoft365_archive 'BOOTSTRAP_ARCHIVE_DIR="$HOME/Microsoft365Archive"' ;;
     account-none|account-signed-out)
-      # microsoft365's own sign-in command, re-derived the way that module prints it.
-      node="$(microsoft365_archive_node)" || return 0
+      # The sign-in command for the server in use, spelled the way microsoft365 prints its own.
+      node="$(microsoft365_archive_run_node)" || return 0
       id="$(microsoft365_archive_client_id)"
       pre="MS365_MCP_TENANT_ID=$(microsoft365_archive_tenant)"
       [ -n "$id" ] && pre="$pre MS365_MCP_CLIENT_ID=$id"
@@ -746,8 +939,10 @@ gesture_microsoft365_archive() {
 
 install_microsoft365_archive() {
   local node dir root account written list src parts rel stage out rc tmp f lp i
-  node="$(microsoft365_archive_node)" || { bootstrap_warn "microsoft365_archive: no node 18+ on this Mac"; return 1; }
-  [ -f "$(microsoft365_archive_server)" ] || { bootstrap_warn "microsoft365_archive: the microsoft365 server is not installed"; return 1; }
+  microsoft365_archive_node >/dev/null || { bootstrap_warn "microsoft365_archive: no node 18+ on this Mac"; return 1; }
+  microsoft365_archive_pick >/dev/null 2>&1
+  microsoft365_archive_server >/dev/null || { bootstrap_warn "microsoft365_archive: no Softeria server here runs as one (BOOTSTRAP_MICROSOFT_SERVER, the microsoft365 module's, the ms365 one in \$HOME/.claude.json)"; return 1; }
+  node="$(microsoft365_archive_run_node)" || return 1
   root="$(microsoft365_archive_root)"
   microsoft365_archive_root_shape_ok "$root" || { bootstrap_warn "microsoft365_archive: BOOTSTRAP_ARCHIVE_DIR must be an absolute path with no . or .. segment: $root"; return 1; }
   microsoft365_archive_under_cloud "$root" && { bootstrap_warn "microsoft365_archive: refusing an archive folder inside a synced folder: $root"; return 1; }
@@ -761,6 +956,10 @@ install_microsoft365_archive() {
   fi
   if [ -n "${BOOTSTRAP_MICROSOFT_ACCOUNT:-}" ]; then
     printf '%s\n' "$BOOTSTRAP_MICROSOFT_ACCOUNT" > "$tmp"; microsoft365_archive_land "$tmp" "$(microsoft365_archive_chosen_account_file)" 644
+  fi
+  # Reached only once the named server has RUN as one (the pick above), so a mistyped path is never kept.
+  if [ -n "${BOOTSTRAP_MICROSOFT_SERVER:-}" ]; then
+    printf '%s\n' "$BOOTSTRAP_MICROSOFT_SERVER" > "$tmp"; microsoft365_archive_land "$tmp" "$(microsoft365_archive_chosen_server_file)" 644
   fi
   rm -f "$tmp" 2>/dev/null
 
@@ -889,7 +1088,7 @@ uninstall_microsoft365_archive() {
     # not). The folder cannot go without the archive going with it, so only this module's own files
     # are removed, by name, and the folder is left holding the archive.
     for f in $MICROSOFT365_ARCHIVE_ENGINE_FILES package.json MANIFEST markdown-convert.sh config chosen-account \
-             chosen-archive-dir launchd.log loaded-plist.sha256; do
+             chosen-archive-dir chosen-server launchd.log loaded-plist.sha256; do
       rm -f "$dir/$f" 2>/dev/null
     done
     rm -rf "$dir/fixtures" "$dir/.fetched" 2>/dev/null
