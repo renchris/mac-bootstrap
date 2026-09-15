@@ -344,3 +344,32 @@ case "$RM_OUT" in *"still running"*"brew services stop ollama"*) pass "uninstall
 same "uninstall-stop-command-on-its-own-line" "$(printf '%s\n' "$RM_OUT" | grep -c '^brew services stop ollama$')" 1
 RM_OUT="$(BOOTSTRAP_REWRITE_MODEL_BREW="$RM_DIR/brew-none/bin/brew" rm_call "$h" uninstall_rewrite_model 2>&1)"
 case "$RM_OUT" in *"brew services stop"*) fail "uninstall-silent-when-no-homebrew-service" "$RM_OUT" ;; *) pass "uninstall-silent-when-no-homebrew-service" ;; esac
+
+# 14. A verified ollama this Mac refuses to EXECUTE (Santa) is NEEDS_HUMAN naming IT, never FAILED. ─
+# The fixture is a malformed Mach-O the kernel really refuses (measured rc 137) — not a script that
+# pretends to, so the classification is tested against the kernel's own answer.
+mkdir -p "$RM_DIR/refused"
+printf '\317\372\355\376\007\000\000\001\003\000\000\000\002\000\000\000' > "$RM_DIR/refused/ollama"; chmod +x "$RM_DIR/refused/ollama"
+tar -czf "$RM_DIR/refused-ollama.tgz" -C "$RM_DIR/refused" ollama
+h="$(fresh_home rm-refused)"
+( RM_PIN_SHA="$(shasum -a 256 "$RM_DIR/refused-ollama.tgz" | cut -d' ' -f1)"; RM_OLLAMA="$RM_DIR/no-ollama"; export RM_PIN_SHA RM_OLLAMA
+  rm_refused_pin() { REWRITE_MODEL_OLLAMA_TARBALL="file://$RM_DIR/refused-ollama.tgz"; REWRITE_MODEL_OLLAMA_SHA256="$RM_PIN_SHA"; "$@"; }
+  rm_call "$h" rm_refused_pin rewrite_model_fetch_ollama ) >/dev/null 2>&1
+same "refused-exec-fetch-rc" "$?" 4
+if [ -x "$h/.mac-bootstrap/tools/ollama-0.34.0/ollama" ]; then pass "refused-exec-keeps-the-verified-copy"; else fail "refused-exec-keeps-the-verified-copy"; fi
+same "refused-exec-gates-as-refused" "$(rm_call "$h" rm_std rewrite_model_pending 2>/dev/null)" REFUSED
+rm_call "$h" rm_std gate_rewrite_model; same "refused-exec-is-needs-human" "$?" 0
+case "$(rm_call "$h" rm_std note_rewrite_model 2>/dev/null)" in
+  *"refused to execute"*"sha256 checked"*"Ask IT to allow"*) pass "refused-exec-note-asks-it" ;;
+  *) fail "refused-exec-note-asks-it" "$(rm_call "$h" rm_std note_rewrite_model 2>/dev/null)" ;; esac
+same "refused-exec-no-gesture" "$(rm_call "$h" rm_std gesture_rewrite_model 2>/dev/null)" ""
+# the same on an ollama that was already on disk, through install_'s own execute-to-verify
+h="$(fresh_home rm-refused-present)"
+( BOOTSTRAP_MODEL=qwen3:8b; RM_OLLAMA="$RM_DIR/refused/ollama"; export BOOTSTRAP_MODEL RM_OLLAMA; rm_call "$h" install_rewrite_model ) >/dev/null 2>&1
+same "refused-exec-present-gates-as-refused" "$(RM_OLLAMA="$RM_DIR/refused/ollama" rm_call "$h" rewrite_model_pending 2>/dev/null)" REFUSED
+case "$(RM_OLLAMA="$RM_DIR/refused/ollama" rm_call "$h" note_rewrite_model 2>/dev/null)" in
+  *"already on this Mac"*"Ask IT to allow"*) pass "refused-exec-present-note-asks-it" ;; *) fail "refused-exec-present-note-asks-it" ;; esac
+# control: a binary that RUNS and fails is not a refusal
+h="$(fresh_home rm-broken-not-refused)"
+( BOOTSTRAP_MODEL=qwen3:8b; RM_OLLAMA="$RM_DIR/bin/ollama-broken"; export BOOTSTRAP_MODEL RM_OLLAMA; rm_call "$h" install_rewrite_model ) >/dev/null 2>&1
+case "$(RM_OLLAMA="$RM_DIR/bin/ollama-broken" rm_call "$h" rewrite_model_pending 2>/dev/null)" in REFUSED) fail "broken-ollama-is-not-a-refusal" ;; *) pass "broken-ollama-is-not-a-refusal" ;; esac

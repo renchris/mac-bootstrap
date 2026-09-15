@@ -197,3 +197,53 @@ if [ -n "$out" ] && [ -z "$(terminal_clearance_bad "$out")" ]; then pass "cleara
 else fail "clearance-pane-equalize-well-formed" "${out:-no lines}"; fi
 case "$(terminal_unit screenshot 'cost_screenshot')" in *"every keystroke"*hs.ipc*"borrow that Accessibility grant"*) pass "cost-screenshot-names-hook-and-proxy" ;;
   *) fail "cost-screenshot-names-hook-and-proxy" "$(terminal_unit screenshot 'cost_screenshot')" ;; esac
+
+# ── 10. A verified app this Mac refuses to EXECUTE (Santa) is NEEDS_HUMAN naming IT, never FAILED ──
+# The fixture is a malformed Mach-O the kernel really refuses (measured rc 137), not a script faking it.
+terminal_refused_bin() { printf '\317\372\355\376\007\000\000\001\003\000\000\000\002\000\000\000' > "$1"; chmod +x "$1"; }
+rm -rf "$TERM_H/Applications"; mkdir -p "$TERM_H/Applications"
+fake_app "$TERM_H/Applications" Hammerspoon.app Hammerspoon org.hammerspoon.Hammerspoon
+mkdir -p "$TERM_H/Applications/Hammerspoon.app/Contents/Frameworks/hs"
+printf '#!/bin/sh\nexit 0\n' > "$TERM_H/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs"; chmod +x "$TERM_H/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs"
+out="$(shot_unit 'screenshot_runs_here; echo "rc=$?"')"
+same "hammerspoon-runs-here-control" "$out" "rc=0"
+terminal_refused_bin "$TERM_H/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs"
+out="$(shot_unit 'screenshot_runs_here; echo "rc=$?"')"
+same "hammerspoon-refused-exec-detected" "$out" "rc=1"
+# install_ itself, stopped at the new step before it writes anything; the defaults writer and the
+# Hammerspoon domain are pointed at nothing real anyway, in case that step ever fails to stop it.
+out="$(shot_unit 'SCREENSHOT_DEFAULTS=/usr/bin/false; SCREENSHOT_HAMMERSPOON_DOMAIN="$HOME/no-such-domain.plist"
+  install_screenshot >/dev/null 2>&1; echo "rc=$?"; echo "R=$(screenshot_gate_reason)"; gate_screenshot && echo GATE
+  echo "G=[$(gesture_screenshot)]"; note_screenshot')"
+case "$out" in
+  "rc=1"*"R=binary-authorization"*GATE*"G=[]"*"refuses to execute Hammerspoon"*"Ask IT to allow"*) pass "hammerspoon-refused-exec-is-needs-human-asking-it" ;;
+  *) fail "hammerspoon-refused-exec-is-needs-human-asking-it" "$out" ;;
+esac
+if [ -d "$TERM_H/Applications/Hammerspoon.app" ]; then pass "hammerspoon-refused-exec-keeps-the-app"; else fail "hammerspoon-refused-exec-keeps-the-app"; fi
+rm -rf "$TERM_H/Applications"
+
+# kitty: a refused `kitty --version` is not "too old"
+mkdir -p "$TERM_H/Applications"
+fake_app "$TERM_H/Applications" kitty.app kitty net.kovidgoyal.kitty
+terminal_refused_bin "$TERM_H/Applications/kitty.app/Contents/MacOS/kitty"
+out="$(terminal_unit pane_equalize 'echo "R=$(pane_equalize_gate_reason)"; echo "G=[$(gesture_pane_equalize)]"; note_pane_equalize')"
+case "$out" in
+  "R=KITTY_REFUSED"*"G=[]"*"refuses to execute kitty"*"Ask IT to allow"*) pass "kitty-refused-exec-asks-it" ;;
+  *) fail "kitty-refused-exec-asks-it" "$out" ;;
+esac
+printf '#!/bin/sh\necho "kitty 0.40.0 created by Kovid Goyal"\n' > "$TERM_H/Applications/kitty.app/Contents/MacOS/kitty"
+same "kitty-old-is-still-old" "$(terminal_unit pane_equalize 'pane_equalize_gate_reason')" KITTY_OLD
+rm -rf "$TERM_H/Applications"
+
+# ── 11. The PPPC remedy is offered only where Apple still honours it (below macOS 26.2) ─────────
+shot_acc() { BOOTSTRAP_SCREENSHOT_MACOS_VERSION="$1" shot_unit 'screenshot_struct_ok() { return 0; }; screenshot_running() { return 0; }; screenshot_accessibility() { return 1; }; note_screenshot'; }
+for v in 26.2 26.3.1 27.0; do
+  case "$(shot_acc "$v")" in
+    *PPPC*|*"IT pushes"*)                          fail "pppc-dropped-on-$v" "$(shot_acc "$v")" ;;
+    *"administrator"*"at this Mac"*"no longer"*)  pass "pppc-dropped-on-$v" ;;
+    *)                                             fail "pppc-dropped-on-$v" "$(shot_acc "$v")" ;;
+  esac
+done
+for v in 15.7 26.1 26; do
+  case "$(shot_acc "$v")" in *PPPC*) pass "pppc-offered-on-$v" ;; *) fail "pppc-offered-on-$v" "$(shot_acc "$v")" ;; esac
+done

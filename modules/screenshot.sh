@@ -165,6 +165,57 @@ screenshot_run_bounded() {
   return "$i"
 }
 
+# ── can this Mac execute it at all ───────────────────────────────────────────────────────────
+# screenshot_exec_refused <rc> — the exit status of a binary this Mac REFUSED TO EXECUTE, as opposed to
+# one that ran and failed: 126 is execve refused (Santa and other binary-authorization tools answer
+# EPERM), 137 is SIGKILL at exec, how the kernel's code-signing enforcement answers (measured: a
+# malformed Mach-O comes back 137 with no output).
+screenshot_exec_refused() { [ "${1:-}" = 126 ] || [ "${1:-}" = 137 ]; }
+
+# screenshot_runs_here — rc 0 this Mac executes Hammerspoon's code · 1 it refuses to · 2 cannot tell.
+# The probe is the in-bundle `hs -h`: signed by the same Developer ID team as the app, documented as
+# "Displays this help and exits", so it starts nothing and opens no port, and it answers the same
+# whether or not Hammerspoon is running (measured).
+screenshot_runs_here() {
+  local app rc
+  app="$(screenshot_app)" || return 2
+  [ -x "$app/Contents/Frameworks/hs/hs" ] || return 2
+  screenshot_run_bounded 5 "$app/Contents/Frameworks/hs/hs" -h >/dev/null 2>&1; rc=$?
+  screenshot_exec_refused "$rc" && return 1
+  return 0
+}
+
+# screenshot_signer <path> — who signed it, in the terms an allowlist rule is written in (Santa's rules
+# are TEAMID, SIGNINGID, CERTIFICATE, BINARY and CDHASH). codesign reads, never executes, so a refused
+# app still answers; CDHash is printed only at -dvvv.
+screenshot_signer() {
+  local out v
+  out="$(/usr/bin/codesign -dvvv "${1:-}" 2>&1)" || out=""
+  v="$(printf '%s\n' "$out" | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -1)"
+  case "$v" in ''|'not set') : ;; *) printf 'Developer ID team %s' "$v"; return 0 ;; esac
+  v="$(printf '%s\n' "$out" | /usr/bin/sed -n 's/^CDHash=//p' | /usr/bin/head -1)"
+  [ -n "$v" ] && { printf 'the code with cdhash %s (it has no Team ID)' "$v"; return 0; }
+  printf 'nothing by signer: %s is not signed' "${1:-}"
+}
+
+# screenshot_macos_version — BOOTSTRAP_SCREENSHOT_MACOS_VERSION is the seam a test sets instead of sw_vers.
+screenshot_macos_version() {
+  if [ -n "${BOOTSTRAP_SCREENSHOT_MACOS_VERSION:-}" ]; then printf '%s' "$BOOTSTRAP_SCREENSHOT_MACOS_VERSION"; return 0; fi
+  /usr/bin/sw_vers -productVersion 2>/dev/null
+}
+
+# screenshot_pppc_grants_accessibility — can IT still pre-grant Accessibility with a Privacy Preferences
+# (PPPC) profile here? Apple's schema: "The ability to grant access by this profile is deprecated as of
+# macOS 26.2, and will be removed in macOS 27.0" — so below 26.2 only.
+screenshot_pppc_grants_accessibility() {
+  local v maj mnr
+  v="$(screenshot_macos_version)" || v=""
+  maj="${v%%.*}"; mnr="${v#*.}"; [ "$mnr" = "$v" ] && mnr=0; mnr="${mnr%%.*}"
+  case "$maj" in ''|*[!0-9]*) return 0 ;; esac
+  case "$mnr" in ''|*[!0-9]*) mnr=0 ;; esac
+  [ "$maj" -lt 26 ] || { [ "$maj" -eq 26 ] && [ "$mnr" -lt 2 ]; }
+}
+
 # ── tool resolution ──────────────────────────────────────────────────────────────────────────
 screenshot_brew() { bootstrap_find_tool brew; }
 
@@ -419,6 +470,7 @@ screenshot_homebrew_installable() {
 # could not get it: the download failed, its sha256 was wrong, or Gatekeeper refuses it.
 screenshot_gate_reason() {
   local mark
+  mark="$(screenshot_marked_this_run)" && [ "$mark" = binary-authorization ] && { printf '%s' "$mark"; return 0; }
   if ! screenshot_app_ok; then
     mark="$(screenshot_marked_this_run)" && { printf '%s' "$mark"; return 0; }
   fi
@@ -456,6 +508,9 @@ note_screenshot() {
         printf 'Hammerspoon could not be downloaded from github.com, so nothing was installed. Run the bootstrap again once github.com is reachable; if a company proxy blocks it, ask IT for Hammerspoon (https://www.hammerspoon.org).'
       fi ;;
     refused)         printf 'the Hammerspoon download did not have the sha256 this release pins, so it was deleted and nothing was installed. Do not install it by hand from the same source; report it to the maintainers of this bootstrap.' ;;
+    binary-authorization)
+      printf 'this Mac refuses to execute Hammerspoon (%s), so it was left in place but not started — binary authorization such as Santa blocks software IT has not allowed. Ask IT to allow %s, then run this again.' \
+        "$(screenshot_app 2>/dev/null)" "$(screenshot_signer "$(screenshot_app 2>/dev/null)")" ;;
     gatekeeper-policy) printf 'this Mac'"'"'s Gatekeeper policy rejects Hammerspoon (a notarized Developer ID app, team VQCYSNZB89), so it was deleted rather than run around the policy. Ask IT to allow Hammerspoon.' ;;
     clt)
       if bootstrap_is_admin; then printf 'The Xcode Command Line Tools are absent, so git cannot clone BOOTSTRAP_SCREENSHOT_REPO_URL; the installer is a GUI dialog you must approve.'
@@ -465,8 +520,15 @@ note_screenshot() {
       if bootstrap_is_admin; then printf 'screencapture could not produce a capture from this terminal; on macOS 15 the app that runs it needs Screen Recording.'
       else printf 'screencapture could not produce a capture from this terminal; on macOS 15 the app that runs it needs Screen Recording, and on a standard account an administrator must approve it — unless IT'"'"'s Privacy Preferences profile lets standard users allow it.'; fi ;;
     accessibility)
-      if bootstrap_is_admin; then printf 'Hammerspoon needs Accessibility, and on an unmanaged Mac that toggle cannot be set by any script: tccutil only resets, TCC writes are SIP-protected, and a PPPC profile needs an MDM-enrolled and supervised device.'
-      else printf 'Hammerspoon needs Accessibility, and on a standard account only an administrator can turn it on: they type their name and password in the pane below, or IT pushes a Privacy Preferences (PPPC) profile allowing org.hammerspoon.Hammerspoon. Apple lets IT hand Screen Recording to standard users, but never Accessibility.'; fi ;;
+      # From macOS 26.2 Apple no longer honours a PPPC profile's Accessibility grant, so the profile
+      # is offered as a remedy only below it: an administrator at this Mac is then the one way.
+      if screenshot_pppc_grants_accessibility; then
+        if bootstrap_is_admin; then printf 'Hammerspoon needs Accessibility, and on an unmanaged Mac that toggle cannot be set by any script: tccutil only resets, TCC writes are SIP-protected, and a PPPC profile needs an MDM-enrolled and supervised device.'
+        else printf 'Hammerspoon needs Accessibility, and on a standard account only an administrator can turn it on: they type their name and password in the pane below, or IT pushes a Privacy Preferences (PPPC) profile allowing org.hammerspoon.Hammerspoon. Apple lets IT hand Screen Recording to standard users, but never Accessibility.'; fi
+      else
+        if bootstrap_is_admin; then printf 'Hammerspoon needs Accessibility, and that toggle cannot be set by any script: tccutil only resets and TCC writes are SIP-protected. Turn it on in the pane below.'
+        else printf 'Hammerspoon needs Accessibility, and on a standard account only an administrator can turn it on, at this Mac: they type their name and password in the pane below. From macOS 26.2 on, IT can no longer grant it for you with a device-management profile.'; fi
+      fi ;;
     *)               printf 'Hammerspoon, the config checkout, the symlink, the screenshot directory and the screencapture defaults are not all in place yet.' ;;
   esac
 }
@@ -615,6 +677,16 @@ install_screenshot() {
         *) printf '   x    could not unpack Hammerspoon into %s\n' "$(dirname "$(screenshot_app_home_target)")"; return 1 ;;
       esac
     fi
+  fi
+
+  # 1a. Can this Mac execute it at all? Verified bytes that a binary-authorization tool (Santa) will
+  #     not run are an environment, not a defect: recorded for gate_, which reports NEEDS_HUMAN naming
+  #     the signer IT must allow. The app is kept, so the next run after IT allows it just starts it.
+  screenshot_runs_here
+  if [ "$?" = 1 ]; then
+    screenshot_mark_this_run binary-authorization
+    printf '   x    this Mac refuses to execute Hammerspoon; ask IT to allow %s\n' "$(screenshot_signer "$(screenshot_app)")"
+    return 1
   fi
 
   # 1b. Hammerspoon's two phone-home switches, BEFORE it first launches (see the header).

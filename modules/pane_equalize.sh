@@ -293,6 +293,29 @@ pane_equalize_kitty_ver() {                                 # prints "0.48.2", r
   printf '%s' "$v"
 }
 
+# pane_equalize_kitty_refused <kitty> — rc 0 when this Mac REFUSES TO EXECUTE kitty, as opposed to a kitty
+# that ran and printed no version: 126 is execve refused (Santa and other binary-authorization tools
+# answer EPERM), 137 is SIGKILL at exec, how the kernel's code-signing enforcement answers (measured:
+# a malformed Mach-O comes back 137 with no output). Asked only after the version read failed.
+pane_equalize_kitty_refused() {
+  local rc
+  "${1:-kitty}" --version >/dev/null 2>&1; rc=$?
+  [ "$rc" = 126 ] || [ "$rc" = 137 ]
+}
+
+# pane_equalize_signer <path> — who signed it, in the terms an allowlist rule is written in (Santa's
+# rules are TEAMID, SIGNINGID, CERTIFICATE, BINARY and CDHASH). codesign reads, never executes, so a
+# refused binary still answers; CDHash is printed only at -dvvv.
+pane_equalize_signer() {
+  local out v
+  out="$(/usr/bin/codesign -dvvv "${1:-}" 2>&1)" || out=""
+  v="$(printf '%s\n' "$out" | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -1)"
+  case "$v" in ''|'not set') : ;; *) printf 'Developer ID team %s' "$v"; return 0 ;; esac
+  v="$(printf '%s\n' "$out" | /usr/bin/sed -n 's/^CDHash=//p' | /usr/bin/head -1)"
+  [ -n "$v" ] && { printf 'the code with cdhash %s (it has no Team ID)' "$v"; return 0; }
+  printf 'nothing by signer: %s is not signed' "${1:-}"
+}
+
 pane_equalize_kitty_ver_ok() {
   local v
   v="$(pane_equalize_kitty_ver "${1:-}")" || return 1
@@ -582,7 +605,10 @@ pane_equalize_gate_reason() {
     pane_equalize_iterm_capable "$app" || { printf 'ITERM_OLD'; return 0; }
   fi
   if kb="$(pane_equalize_kitty_bin)"; then
-    pane_equalize_kitty_ver_ok "$kb" || { printf 'KITTY_OLD'; return 0; }
+    if ! pane_equalize_kitty_ver_ok "$kb"; then
+      if pane_equalize_kitty_refused "$kb"; then printf 'KITTY_REFUSED'; else printf 'KITTY_OLD'; fi
+      return 0
+    fi
   fi
   [ -n "$app" ] || [ -n "$kb" ] || { printf 'NOTERM'; return 0; }
   if [ -n "$app" ]; then
@@ -656,6 +682,9 @@ note_pane_equalize() {
       pane_equalize_upgrade_note "this iTerm2 build has no 'Arrange Split Panes Evenly' menu item, so Cmd+Shift+E would have nothing to invoke" iterm2 iTerm2 ;;
     KITTY_OLD)
       pane_equalize_upgrade_note "kitty is older than $PANE_EQUALIZE_KITTY_FLOOR, the first release with the 'equalize' layout action" kitty kitty ;;
+    KITTY_REFUSED)
+      printf 'this Mac refuses to execute kitty (%s) — binary authorization such as Santa blocks software IT has not allowed. Ask IT to allow %s, then run this again' \
+        "$(pane_equalize_kitty_bin)" "$(pane_equalize_signer "$(pane_equalize_kitty_bin)")" ;;
     CONFLICT_DYN)
       printf '%s' "an iTerm2 DynamicProfile already binds Cmd+Shift+E and is re-read at every launch; a profile binding beats the menu shortcut, so the key would look bound and do nothing — decide which meaning keeps it" ;;
     CONFLICT_PLIST)

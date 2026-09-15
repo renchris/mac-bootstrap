@@ -668,10 +668,41 @@ rewrite_model_fetch_failed_now() {
   [ -f "$f" ] || return 1
   [ "$(/usr/bin/sed -n 's/^pid=//p' "$f" 2>/dev/null | /usr/bin/head -1)" = "$$" ]
 }
+rewrite_model_fetch_field() { /usr/bin/sed -n "s/^$1=//p" "$(rewrite_model_fetch_marker)" 2>/dev/null | /usr/bin/head -1; }
+
+# rewrite_model_exec_refused <rc> — the exit status of running a binary that this Mac REFUSED TO EXECUTE,
+# as opposed to one that ran and failed: 126 is execve refused (Santa and other binary-authorization
+# tools answer EPERM), 137 is SIGKILL at exec, which is how the kernel's code-signing enforcement
+# answers (measured: a malformed Mach-O comes back 137 with no output). Anything else ran.
+rewrite_model_exec_refused() { [ "${1:-}" = 126 ] || [ "${1:-}" = 137 ]; }
+
+# rewrite_model_signer <file> — who signed it, in the terms an allowlist rule is written in (Santa's
+# rules are TEAMID, SIGNINGID, CERTIFICATE, BINARY and CDHASH): its Team ID when it has one, else its
+# cdhash, else its SHA-256. codesign reads the file — through a symlink, measured on Homebrew's link —
+# and never executes it, so a refused binary still answers. CDHash is printed only at -dvvv.
+rewrite_model_signer() {
+  local out v
+  out="$(/usr/bin/codesign -dvvv "${1:-}" 2>&1)" || out=""
+  v="$(printf '%s\n' "$out" | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -1)"
+  case "$v" in ''|'not set') : ;; *) printf 'Developer ID team %s' "$v"; return 0 ;; esac
+  v="$(printf '%s\n' "$out" | /usr/bin/sed -n 's/^CDHash=//p' | /usr/bin/head -1)"
+  [ -n "$v" ] && { printf 'the binary with cdhash %s (it has no Team ID)' "$v"; return 0; }
+  v="$(/usr/bin/shasum -a 256 "${1:-}" 2>/dev/null)" || v=""
+  printf 'the binary with SHA-256 %s (it is not signed)' "${v%% *}"
+}
+
+# rewrite_model_mark_refused <ollama> <how it got here> — record, for the rest of this run, that this Mac
+# will not execute that ollama, so gate_ reports REFUSED — NEEDS_HUMAN naming what IT must allow — and
+# never FAILED. The file is kept: once IT allows it, the next run uses it without a download.
+rewrite_model_mark_refused() {
+  printf 'pid=%s\nrc=4\nhow=%s\npath=%s\nsigner=%s\n' "$$" "$2" "$1" "$(rewrite_model_signer "$1")" \
+    >"$(rewrite_model_fetch_marker)" 2>/dev/null
+}
 
 # rewrite_model_fetch_ollama — the tarball, hash-checked BEFORE extraction by bootstrap_fetch_pinned,
 # unpacked beside a temp name and moved into place whole, then linked into $(bootstrap_tools_dir)/bin.
-# rc 0 the pinned ollama runs · 1 not fetched · 2 hash refused · 3 fetched but will not unpack or run.
+# rc 0 the pinned ollama runs · 1 not fetched · 2 hash refused · 3 fetched but will not unpack or run
+# · 4 fetched and hash-checked, but this Mac refuses to execute it (binary authorization).
 rewrite_model_fetch_ollama() {
   local dir tgz rc out
   dir="$(rewrite_model_pinned_dir)"
@@ -700,10 +731,14 @@ rewrite_model_fetch_ollama() {
   /bin/ln -sfn "../ollama-$REWRITE_MODEL_OLLAMA_VERSION/ollama" "$(bootstrap_tools_dir)/bin/ollama" || return 3
   # Executed, not assumed. OLLAMA_HOST at a dead loopback port: the version line must come from THIS
   # binary, not from whatever server happens to be answering on 11434.
-  out="$(OLLAMA_HOST=127.0.0.1:9 "$(bootstrap_tools_dir)/bin/ollama" --version 2>&1)" || out=""
+  out="$(OLLAMA_HOST=127.0.0.1:9 "$(bootstrap_tools_dir)/bin/ollama" --version 2>&1)"; rc=$?
   case "$out" in
     *"$REWRITE_MODEL_OLLAMA_VERSION"*) return 0 ;;
   esac
+  if rewrite_model_exec_refused "$rc"; then
+    rewrite_model_mark_refused "$(bootstrap_tools_dir)/bin/ollama" "downloaded from its GitHub release and its sha256 checked"
+    return 4
+  fi
   printf 'pid=%s\nrc=3\n' "$$" >"$(rewrite_model_fetch_marker)" 2>/dev/null
   return 3
 }
@@ -883,6 +918,7 @@ verify_rewrite_model() {
 # the restart itself.
 rewrite_model_pending() {
   local t
+  if rewrite_model_fetch_failed_now && [ "$(rewrite_model_fetch_field rc)" = 4 ]; then printf 'REFUSED'; return 0; fi
   if ! rewrite_model_ollama >/dev/null 2>&1; then
     rewrite_model_fetch_failed_now && { printf 'FETCH'; return 0; }
     [ "$(rewrite_model_route)" = oldmac ] && { printf 'OLDMAC'; return 0; }
@@ -908,6 +944,8 @@ rewrite_model_fetch_why() {
   case "$(/usr/bin/sed -n 's/^rc=//p' "$(rewrite_model_fetch_marker)" 2>/dev/null | /usr/bin/head -1)" in
     2) printf 'it did not match the sha256 this release pins, so it was deleted unrun — a proxy that rewrites downloads does this' ;;
     3) printf 'it downloaded but would not unpack or run' ;;
+    4) printf 'it was %s, but this Mac refused to execute it — binary authorization such as Santa blocks software IT has not allowed; the one to allow is %s' \
+         "$(rewrite_model_fetch_field how)" "$(rewrite_model_fetch_field signer)" ;;
     *) printf 'it could not be downloaded — no network, or a proxy that blocks github.com' ;;
   esac
 }
@@ -934,6 +972,9 @@ note_rewrite_model() {
       else
         printf 'The pinned ollama download from github.com failed (%s). This account cannot install Homebrew, so ask IT to allow downloads from github.com and release-assets.githubusercontent.com (or to install ollama), then run this again.\n' "$(rewrite_model_fetch_why)"
       fi ;;
+    REFUSED)
+      printf 'This Mac refused to execute ollama (%s), which was %s — binary authorization such as Santa blocks software IT has not allowed. Ask IT to allow %s, then run this again.\n' \
+        "$(rewrite_model_fetch_field path)" "$(rewrite_model_fetch_field how)" "$(rewrite_model_fetch_field signer)" ;;
     OLDMAC)
       printf 'This Mac runs macOS %s, and the ollama build this installs needs macOS %s or later; Homebrew, the other route, is not available to this account. Update macOS (or ask IT to), then run this again.\n' "$(/usr/bin/sw_vers -productVersion 2>/dev/null)" "$REWRITE_MODEL_OLLAMA_MACOS_FLOOR" ;;
     DECIDE)
@@ -996,7 +1037,7 @@ install_rewrite_model() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)
   bootstrap_defaults_home_ok || return 1
-  local base ollama brew mf rendered show dg g rc t prev label why
+  local base ollama brew mf rendered show dg g rc t prev label why how
 
   # Nothing below may send a request anywhere but this Mac.
   if ! rewrite_model_url_ok; then
@@ -1027,9 +1068,11 @@ install_rewrite_model() {
   fi
 
   # 1. ollama ─────────────────────────────────────────────────────────────────────────────────
+  how='already on this Mac'
   case "$(rewrite_model_route)" in
     present) : ;;
     brew)
+      how='installed by Homebrew'
       brew="$(rewrite_model_brew)"
       printf 'rewrite_model: installing ollama via Homebrew\n'
       bootstrap_brew "$brew" install ollama || bootstrap_warn "rewrite_model: brew install ollama exited non-zero; checking anyway" ;;
@@ -1046,8 +1089,19 @@ install_rewrite_model() {
       return 2 ;;
   esac
   ollama="$(rewrite_model_ollama)" || { bootstrap_warn "rewrite_model: ollama is still not on disk after installing it"; return 2; }
-  # Executed, not assumed: an installer's exit code is never the verdict.
-  "$ollama" --version >/dev/null 2>&1 || { bootstrap_warn "rewrite_model: $ollama will not run"; return 2; }
+  # Executed, not assumed: an installer's exit code is never the verdict. A Mac that refuses to
+  # EXECUTE it (Santa, or another binary-authorization tool) is recorded for gate_, which reports
+  # NEEDS_HUMAN naming what IT must allow — not FAILED, which would blame a defect that is not there.
+  "$ollama" --version >/dev/null 2>&1; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if rewrite_model_exec_refused "$rc"; then
+      rewrite_model_mark_refused "$ollama" "$how"
+      bootstrap_warn "rewrite_model: this Mac refuses to execute $ollama ($(rewrite_model_fetch_why))"
+    else
+      bootstrap_warn "rewrite_model: $ollama will not run"
+    fi
+    return 2
+  fi
 
   # 2. cloud off, BEFORE any server starts — a server reads server.json only when it starts, so a
   #    first start after this line never needs a restart.
