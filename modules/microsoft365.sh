@@ -30,8 +30,10 @@
 # the server and wired on both agents (PreToolUse + UserPromptSubmit) BEFORE the server is
 # registered, so the send tools are never reachable unguarded: compose-and-send is denied outright,
 # a draft may be sent only in a later turn than the one that wrote it, graph-batch may only batch
-# GETs, and the tools that delete or switch the sign-in are refused. The guard's header
-# carries the measurements. Without it this module is not satisfied.
+# GETs, the tools that delete or switch the sign-in are refused, and so is every other call that
+# puts data in front of another person at once — a share, a public link, a forwarding rule, an
+# invitation with attendees, a reply to an organizer. The guard's header carries the measurements.
+# Without it this module is not satisfied.
 #
 # No permission, no credential, no allow-list keypath is written here or anywhere below.
 

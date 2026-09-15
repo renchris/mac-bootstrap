@@ -22,6 +22,33 @@
 #   4. THE SIGN-IN IS THE PERSON'S. logout and remove-account delete it and select-account switches
 #      it for every session sharing the server's cache; only a person can put either back. The tools
 #      take an account parameter per call, so nothing an agent legitimately does needs them.
+#   5. NOTHING ELSE LEAVES IN ONE CALL EITHER. Mail is not the only way a tool puts data in front of
+#      someone else. Each of these acts on another person the moment it runs, and each is refused,
+#      with a way to prepare the same thing for the person to finish instead:
+#        share-drive-item                        grants access, and can email an invitation
+#        create-drive-item-share-link            any link but a "users" link naming nobody: an
+#                                                anonymous or organization link is readable by
+#                                                whoever gets the URL; a missing scope is the tenant
+#                                                default, which may be anonymous
+#        create-/update-mail-rule                a forwardTo, forwardAsAttachmentTo or redirectTo
+#                                                action sends every matching message on, for good
+#        create-(specific-)calendar-event        attendees: Exchange sends the invitation, body included
+#        update-(specific-)calendar-event        any attendee list: adding sends invitations, and
+#                                                removing sends cancellations
+#        accept-/decline-/tentatively-accept-…   unless sendResponse is false: the reply and its
+#                                                comment go to the organizer
+#        cancel-calendar-event                   sends the cancellation, comment included, to everyone
+#        create-/update-my-calendar-permission   shares the calendar with an address
+#        create-/update-subscription             Graph pushes change notifications to any https URL
+#        update-mailbox-settings                 automaticRepliesSetting answers every sender
+#      Graph reads property names in any letter case (this server's own schema spells accept's
+#      SendResponse and Comment in PascalCase), so a key is matched in any case, anywhere in the
+#      payload, both as sent and as plutil decodes it — "Attendees", "attendees" and a key
+#      sent twice all count. (Measured: plutil decodes an escaped key and keeps null.)
+#
+# KNOWN GAP of rule 5: changing the body or time of a meeting that already HAS attendees makes
+# Exchange send them the update. The guard cannot see an event's attendees without asking Graph,
+# and refusing every calendar edit would refuse editing the person's own appointments.
 #
 # ── HOW A TURN IS SEEN, AND WHY NOT FROM THE TRANSCRIPT ─────────────────────────────────────
 # The obvious design reads the transcript back to the last human prompt. Copilot CLI 1.0.83 sends
@@ -113,6 +140,70 @@ mail_batch_reads_only() {
   return 1
 }
 
+# The payload as sent AND as plutil decodes it, each collapsed onto one line, for the any-case key
+# scan of rule 5. Keys inside a JSON string are escaped (\"name\"), so they never match "name":.
+MAIL_SCAN=""
+mail_scan_load() {
+  MAIL_SCAN="$(printf '%s' "$1" | LC_ALL=C tr '\n\r\t' '   ')
+$(/usr/bin/plutil -convert json -o - "$MAIL_PAYLOAD" 2>/dev/null | LC_ALL=C tr '\n\r\t' '   ')"
+}
+# mail_key_count <name> [<value-regex>] — how many times a key named <name>, in any letter case, occurs
+# in the scan; with a value regex, only the occurrences whose value matches it whole.
+mail_key_count() {
+  local re="\"$1\"[[:space:]]*:"
+  [ -n "${2:-}" ] && re="${re}[[:space:]]*($2)[[:space:]]*[],}]"
+  printf '%s\n' "$MAIL_SCAN" | LC_ALL=C grep -o -i -E "$re" 2>/dev/null | bootstrap_count
+}
+MAIL_EMPTY='null|false|""|\[[[:space:]]*\]|\{[[:space:]]*\}'
+# mail_carries <name> — rc 0 iff some key named <name> holds a value that is not empty.
+mail_carries() { [ "$(mail_key_count "$1")" -gt "$(mail_key_count "$1" "$MAIL_EMPTY")" ]; }
+# mail_all <name> <value-regex> — rc 0 iff <name> occurs, and every occurrence's value matches.
+mail_all() {
+  local n
+  n="$(mail_key_count "$1")"
+  [ "$n" -gt 0 ] && [ "$n" = "$(mail_key_count "$1" "$2")" ]
+}
+
+# mail_reaches_others <tool> — rule 5. Prints why the call reaches another person and what to do
+# instead (rc 0), or rc 1 when it reaches no one.
+mail_reaches_others() {
+  local k
+  case "$1" in
+    share-drive-item)
+      printf 'share-drive-item gives another person access to a file, and can email them an invitation. Tell the person which file and with whom; they share it from OneDrive.' ;;
+    create-drive-item-share-link)
+      if mail_all scope '"users"' && ! mail_carries recipients && ! mail_carries sendNotification; then return 1; fi
+      printf 'create-drive-item-share-link was refused: an anonymous or organization link, a link with no scope (the tenant default may be anonymous), or one that names recipients hands the file to people the person did not pick. A link with scope "users" and no recipients works only for people who can already open it; to share with anyone else, the person shares it from OneDrive.' ;;
+    create-mail-rule|update-mail-rule)
+      for k in forwardTo forwardAsAttachmentTo redirectTo; do
+        mail_carries "$k" && {
+          printf '%s was refused because it carries a %s action, which sends every matching message on to another address, for good. A rule that moves, flags or categorises is fine; forwarding is set up by the person in Outlook.' "$1" "$k"
+          return 0; }
+      done
+      return 1 ;;
+    create-calendar-event|create-specific-calendar-event)
+      mail_carries attendees || return 1
+      printf '%s was refused because it has attendees, and Exchange emails each of them the invitation, body included, the moment it is created. Create it with no attendees and tell the person whom to invite; they send the invitation from Outlook.' "$1" ;;
+    update-calendar-event|update-specific-calendar-event)
+      [ "$(mail_key_count attendees)" -gt 0 ] || return 1
+      printf '%s was refused because it changes the attendee list: Exchange emails an invitation to everyone added and a cancellation to everyone removed. Change the other fields, and tell the person whom to add or remove; they do it in Outlook.' "$1" ;;
+    accept-calendar-event|decline-calendar-event|tentatively-accept-calendar-event)
+      mail_all sendResponse false && return 1
+      printf '%s was refused because it would send a reply, and any comment, to the organizer. Pass sendResponse false to record the answer silently, or tell the person what to answer; they reply from Outlook.' "$1" ;;
+    cancel-calendar-event)
+      printf 'cancel-calendar-event emails the cancellation, and its comment, to every attendee. Tell the person which meeting to cancel; they cancel it from Outlook.' ;;
+    create-my-calendar-permission|update-my-calendar-permission)
+      printf '%s shares the calendar with another address. Tell the person whom to share it with and at what level; they share it from Outlook.' "$1" ;;
+    create-subscription|update-subscription)
+      printf '%s sends change notifications to a URL outside Microsoft. Read changes with the list and delta tools instead.' "$1" ;;
+    update-mailbox-settings)
+      mail_carries automaticRepliesSetting || return 1
+      printf 'update-mailbox-settings was refused because an automatic reply answers everyone who writes, with text the person has not read. Tell the person what the reply should say; they turn it on in Outlook.' ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
 mail_deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' \
     "$(printf '%s' "$1" | LC_ALL=C tr -d '"\\' | LC_ALL=C tr '\n\r\t' '   ')"
@@ -149,6 +240,12 @@ mail_main() {
 
   if k="$(mail_draft_instead "$name")"; then
     mail_deny "$name sends email the moment it runs, and this Mac never lets an agent do that. Write it as a draft with $k instead; the person reads it in Outlook and sends it, or tells you to send it in their next message."
+    return 0
+  fi
+
+  mail_scan_load "$raw"
+  if k="$(mail_reaches_others "$name")"; then
+    mail_deny "$k"
     return 0
   fi
 
@@ -246,6 +343,42 @@ mail_selftest() {
     expect "[$arm] remove-account is denied"                 deny  "$(pre s3 ms365-remove-account)"
     expect "[$arm] select-account is denied"                 deny  "$(pre s3 mcp__ms365__select-account)"
     expect "[$arm] list-accounts is untouched"               quiet "$(pre s3 mcp__ms365__list-accounts)"
+    # rule 5 — one call that puts data in front of someone else, on both spellings
+    expect "[$arm] share-drive-item is denied"               deny  "$(pre s4 mcp__ms365__share-drive-item '{"body":{"recipients":[{"email":"a@example.com"}],"roles":["read"]}}')"
+    expect "[$arm] Copilot share-drive-item is denied"       deny  "$(pre s4 ms365-share-drive-item)"
+    expect "[$arm] an anonymous share link is denied"        deny  "$(pre s4 mcp__ms365__create-drive-item-share-link '{"body":{"type":"view","scope":"anonymous"}}')"
+    expect "[$arm] an organization share link is denied"     deny  "$(pre s4 ms365-create-drive-item-share-link '{"body":{"type":"edit","scope":"organization"}}')"
+    expect "[$arm] a share link with no scope is denied"     deny  "$(pre s4 mcp__ms365__create-drive-item-share-link '{"body":{"type":"view"}}')"
+    expect "[$arm] a users link naming someone is denied"    deny  "$(pre s4 ms365-create-drive-item-share-link '{"body":{"scope":"users","recipients":[{"email":"a@example.com"}]}}')"
+    expect "[$arm] a users link naming nobody passes"        quiet "$(pre s4 mcp__ms365__create-drive-item-share-link '{"body":{"type":"view","scope":"users"}}')"
+    expect "[$arm] a forwarding rule is denied"              deny  "$(pre s4 mcp__ms365__create-mail-rule '{"mailFolderId":"inbox","body":{"displayName":"x","actions":{"forwardTo":[{"emailAddress":{"address":"a@example.com"}}]}}}')"
+    expect "[$arm] Copilot redirecting rule update is denied" deny "$(pre s4 ms365-update-mail-rule '{"body":{"actions":{"redirectTo":[{"emailAddress":{"address":"a@example.com"}}]}}}')"
+    expect "[$arm] a PascalCase forward-as-attachment is denied" deny "$(pre s4 mcp__ms365__create-mail-rule '{"body":{"Actions":{"ForwardAsAttachmentTo":[{"emailAddress":{"address":"a@example.com"}}]}}}')"
+    expect "[$arm] a rule that only moves passes"            quiet "$(pre s4 ms365-create-mail-rule '{"body":{"displayName":"x","actions":{"moveToFolder":"f1"}}}')"
+    expect "[$arm] clearing a rule's forward passes"         quiet "$(pre s4 mcp__ms365__update-mail-rule '{"body":{"actions":{"forwardTo":[]}}}')"
+    expect "[$arm] an event with attendees is denied"        deny  "$(pre s4 mcp__ms365__create-calendar-event '{"body":{"subject":"x","attendees":[{"emailAddress":{"address":"a@example.com"}}]}}')"
+    expect "[$arm] Copilot specific event with Attendees is denied" deny "$(pre s4 ms365-create-specific-calendar-event '{"calendarId":"c","body":{"Attendees":[{"emailAddress":{"address":"a@example.com"}}]}}')"
+    expect "[$arm] an escaped attendees key is denied"       deny  "$(pre s4 mcp__ms365__create-calendar-event '{"body":{"\u0061ttendees":[{"emailAddress":{"address":"a@example.com"}}]}}')"
+    expect "[$arm] attendees sent twice, last empty, is denied" deny "$(pre s4 ms365-create-calendar-event '{"body":{"attendees":[{"emailAddress":{"address":"a@example.com"}}],"attendees":[]}}')"
+    expect "[$arm] an event with no attendees passes"        quiet "$(pre s4 mcp__ms365__create-calendar-event '{"body":{"subject":"focus","start":{"dateTime":"2026-09-16T09:00:00","timeZone":"UTC"}}}')"
+    expect "[$arm] an empty attendee list passes"            quiet "$(pre s4 ms365-create-calendar-event '{"body":{"subject":"x","attendees":[]}}')"
+    expect "[$arm] a null attendee list passes"              quiet "$(pre s4 mcp__ms365__create-calendar-event '{"body":{"subject":"x","attendees":null}}')"
+    expect "[$arm] attendees quoted in the body text pass"   quiet "$(pre s4 mcp__ms365__create-calendar-event '{"body":{"body":{"content":"{\"attendees\": [\"a@example.com\"]}"}}}')"
+    expect "[$arm] removing every attendee is denied"        deny  "$(pre s4 mcp__ms365__update-calendar-event '{"eventId":"e","body":{"attendees":[]}}')"
+    expect "[$arm] Copilot specific event attendee update is denied" deny "$(pre s4 ms365-update-specific-calendar-event '{"body":{"attendees":[{"emailAddress":{"address":"a@example.com"}}]}}')"
+    expect "[$arm] moving an event passes"                   quiet "$(pre s4 ms365-update-calendar-event '{"eventId":"e","body":{"start":{"dateTime":"2026-09-16T10:00:00","timeZone":"UTC"}}}')"
+    expect "[$arm] accept with no sendResponse is denied"    deny  "$(pre s4 mcp__ms365__accept-calendar-event '{"eventId":"e","body":{}}')"
+    expect "[$arm] Copilot decline with a comment is denied" deny  "$(pre s4 ms365-decline-calendar-event '{"body":{"SendResponse":true,"Comment":"x"}}')"
+    expect "[$arm] a false and a true sendResponse is denied" deny "$(pre s4 mcp__ms365__tentatively-accept-calendar-event '{"body":{"sendResponse":false,"SendResponse":true}}')"
+    expect "[$arm] a silent accept passes"                   quiet "$(pre s4 mcp__ms365__accept-calendar-event '{"body":{"SendResponse":false}}')"
+    expect "[$arm] a silent decline with a comment passes"   quiet "$(pre s4 ms365-decline-calendar-event '{"body":{"sendResponse":false,"comment":"x"}}')"
+    expect "[$arm] cancel-calendar-event is denied"          deny  "$(pre s4 mcp__ms365__cancel-calendar-event '{"eventId":"e","body":{}}')"
+    expect "[$arm] sharing the calendar is denied"           deny  "$(pre s4 ms365-create-my-calendar-permission '{"body":{"emailAddress":{"address":"a@example.com"},"role":"read"}}')"
+    expect "[$arm] a change-notification webhook is denied"  deny  "$(pre s4 mcp__ms365__create-subscription '{"body":{"notificationUrl":"https://example.com/x","resource":"me/messages"}}')"
+    expect "[$arm] an automatic reply is denied"             deny  "$(pre s4 ms365-update-mailbox-settings '{"body":{"automaticRepliesSetting":{"status":"alwaysEnabled","externalReplyMessage":"x"}}}')"
+    expect "[$arm] a time-zone change passes"                quiet "$(pre s4 mcp__ms365__update-mailbox-settings '{"body":{"timeZone":"UTC"}}')"
+    expect "[$arm] listing events is untouched"              quiet "$(pre s4 ms365-list-calendar-events)"
+    expect "[$arm] ANOTHER server's share-drive-item is untouched" quiet "$(pre s4 mcp__other__share-drive-item)"
   done
   rm -rf "$T"
   printf '%s/%s cases passed.\n' "$((n - f))" "$n"
