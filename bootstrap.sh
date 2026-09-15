@@ -42,7 +42,7 @@ set -u
 
 BOOTSTRAP_VERSION=1
 BOOTSTRAP_REPO="renchris/mac-bootstrap"
-BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-3a0157554c8cfe9ca958650a6f187b591655f76b}"          # replaced at release time. NEVER "main": a main-pinned
+BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-a99f725c8ca12c0337dbc8960b48dbdb9d8b7f70}"          # replaced at release time. NEVER "main": a main-pinned
                                          # raw URL serves up to 5 minutes of stale Fastly bytes.
 BOOTSTRAP_RAW="https://raw.githubusercontent.com/$BOOTSTRAP_REPO/$BOOTSTRAP_PIN"
 
