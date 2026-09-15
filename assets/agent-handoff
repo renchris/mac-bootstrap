@@ -550,11 +550,47 @@ ah_write_prompt() {
 #   read -d ''  the prompt is read from a FILE, byte-exact including any trailing newline.
 #               `"$(cat f)"` is one byte shorter — command substitution strips the trailing
 #               newline — which is harmless for a brief and wrong for a byte-fidelity claim.
+#   allowlist   …but the scrub must not change WHERE the successor sends its context. A shell that
+#               points Copilot at local Ollama (COPILOT_PROVIDER_BASE_URL) or Claude Code at Bedrock,
+#               Vertex or a company gateway, and lets it out through a proxy with a company CA, is
+#               described by variables `env -i` drops — and a successor that also holds a default
+#               login (GitHub, or a Claude Keychain login) then comes back on a CLOUD provider the
+#               person did not choose. So AH_ROUTE_ENV names the routing, proxy, CA and privacy
+#               variables, and each one SET in the firing shell is carried across in the mode-600 env
+#               file (never on the command line, where `ps` would show a proxy URL's password).
+#               MEASURED 2026-09-15, names only: the CLAUDE_* variables a live Claude Code session
+#               hands its tools are its SESSION identity — CLAUDECODE, CLAUDE_PID,
+#               CLAUDE_CODE_{CHILD_SESSION,SESSION_ID,BRIDGE_SESSION_ID,ENTRYPOINT,EXECPATH,
+#               MESSAGING_SOCKET,MESSAGING_TOKEN} and tuning flags — and not one of them is on this
+#               list, so the scrub's reason (CLAUDE_CODE_CHILD_SESSION) is untouched by it.
+#               NEVER a credential: no *_API_KEY, no *_TOKEN, no header block (COPILOT_PROVIDER_HEADERS
+#               carries Authorization). Without its key a successor on a keyed provider fails CLOSED —
+#               it cannot reach a different one — which is the direction a failure is allowed to go.
+#               The selftest asserts the list names no credential shape.
+AH_ROUTE_ENV="COPILOT_PROVIDER_BASE_URL COPILOT_PROVIDER_TYPE COPILOT_PROVIDER_WIRE_API
+  COPILOT_PROVIDER_TRANSPORT COPILOT_PROVIDER_AZURE_API_VERSION COPILOT_PROVIDER_MODEL_ID
+  COPILOT_PROVIDER_WIRE_MODEL COPILOT_PROVIDER_MAX_PROMPT_TOKENS COPILOT_PROVIDER_MAX_OUTPUT_TOKENS
+  COPILOT_MODEL COPILOT_OFFLINE
+  CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_MANTLE
+  CLAUDE_CODE_USE_ANTHROPIC_AWS ANTHROPIC_BASE_URL ANTHROPIC_BEDROCK_BASE_URL
+  ANTHROPIC_BEDROCK_MANTLE_BASE_URL ANTHROPIC_VERTEX_BASE_URL ANTHROPIC_VERTEX_PROJECT_ID
+  ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_FOUNDRY_RESOURCE ANTHROPIC_AWS_BASE_URL
+  CLOUD_ML_REGION AWS_REGION AWS_PROFILE
+  HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy
+  NODE_EXTRA_CA_CERTS NODE_USE_SYSTEM_CA SSL_CERT_FILE
+  DISABLE_TELEMETRY DISABLE_ERROR_REPORTING CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DO_NOT_TRACK"
+ah_route_listed() { case " $(printf '%s' "$AH_ROUTE_ENV" | tr '\n' ' ') " in *" ${1:-} "*) return 0 ;; esac; return 1; }
+
 ah_write_launcher() {
   local d="${1:-}" cfg="${2:-}" cwd="${3:-}" bin="${4:-}" agent="${5:-}" sid="${6:-}" resume="${7:-}"
   local f="$d/launch.sh" envf="$d/env" v
   : > "$envf" 2>/dev/null; chmod 600 "$envf" 2>/dev/null
+  for v in $AH_ROUTE_ENV; do
+    eval "[ -n \"\${$v+set}\" ]" || continue           # unset stays unset; an empty value is a value
+    eval "printf 'export %s=%s\n' \"\$v\" \"\$(printf %q \"\${$v}\")\"" >> "$envf" 2>/dev/null
+  done
   for v in ${AH_PASS_ENV:-}; do
+    ah_route_listed "$v" && continue                    # already carried across, above
     case "$v" in
       CLAUDE_CODE_*|ANTHROPIC_*|CLAUDE_CONFIG_DIR)
         ah_err "!! AH_PASS_ENV refuses $v — forwarding it is the poisoning vector this scrub exists to stop"
@@ -1306,6 +1342,41 @@ cmd_selftest() {
                                   || ah_bad "launcher: a seeded goal did not use --resume"
   out="$( AH_PASS_ENV=CLAUDE_CODE_SESSION_ID ah_write_launcher "$T" "$T/cfg" "$T" /bin/echo claude SIDX 0 2>&1 )"; rc=$?
   ah_is "NEG: AH_PASS_ENV refuses to forward a CLAUDE_CODE_* variable" "$rc" "2"
+
+  # the routing allowlist: RUN the launcher with an agent that prints its environment, and read
+  # back what the successor actually receives — every listed variable, and none of the controls.
+  out=""
+  for b in $AH_ROUTE_ENV; do
+    case "$b" in *_KEY|*_KEY_*|*_TOKEN|*_TOKEN_*|*SECRET*|*PASSWORD*|*HEADERS*|*CREDENTIAL*) out="$out $b" ;; esac
+  done
+  ah_is "the routing allowlist names no credential" "$out" ""
+  printf '#!/bin/bash\nexec /usr/bin/env\n' > "$T/envstub"; chmod 755 "$T/envstub"
+  (
+    for b in $AH_ROUTE_ENV; do eval "export $b=route-$b"; done
+    export NO_PROXY='localhost,127.0.0.1 "quoted" $x'
+    export ANTHROPIC_API_KEY=selftest-secret COPILOT_PROVIDER_API_KEY=selftest-secret
+    export COPILOT_PROVIDER_BEARER_TOKEN=selftest-secret CLAUDE_CODE_CHILD_SESSION=1 CLAUDE_CODE_SESSION_ID=selftest
+    unset DO_NOT_TRACK
+    ah_write_launcher "$T" "$T/cfg" "$T" "$T/envstub" copilot SIDX 0 && "$T/launch.sh" > "$T/envout" 2>/dev/null
+  )
+  n1=0; n2=0; out=""
+  for b in $AH_ROUTE_ENV; do
+    case "$b" in NO_PROXY|DO_NOT_TRACK) continue ;; esac
+    n1=$((n1 + 1))
+    if grep -qx "$b=route-$b" "$T/envout" 2>/dev/null; then n2=$((n2 + 1)); else out="$out $b"; fi
+  done
+  ah_is "launcher: every routing/proxy/CA/privacy variable reaches the successor ($n2/$n1)" "${out:-none missing}" "none missing"
+  grep -qxF 'NO_PROXY=localhost,127.0.0.1 "quoted" $x' "$T/envout" 2>/dev/null \
+    && ah_ok "launcher: a value with spaces, quotes and a \$ arrives byte-exact" \
+    || ah_bad "launcher: a quoted value was mangled on the way across"
+  grep -q '^DO_NOT_TRACK=' "$T/envout" 2>/dev/null \
+    && ah_bad "NEG: an UNSET listed variable was invented in the successor" \
+    || ah_ok "NEG: an unset listed variable stays unset"
+  out="$(grep -oE '^(ANTHROPIC_API_KEY|COPILOT_PROVIDER_API_KEY|COPILOT_PROVIDER_BEARER_TOKEN|CLAUDE_CODE_CHILD_SESSION|CLAUDE_CODE_SESSION_ID)=' "$T/envout" 2>/dev/null | tr '\n' ' ')"
+  ah_is "NEG: no API key, no token and no CLAUDE_CODE_* session marker reaches the successor" "$out" ""
+  grep -q 'route-' "$T/launch.sh" && ah_bad "launcher: a routing value is on the command line, where ps shows it" \
+                                  || ah_ok "launcher: routing values ride the env file, never the command line"
+  ah_is "launcher: the env file is readable by its owner only" "$(stat -f %Lp "$T/env" 2>/dev/null)" "600"
 
   # the launcher actually RUNS and delivers the prompt — the whole reason the brief never travels
   # as keystrokes. /bin/echo stands in for the agent.
