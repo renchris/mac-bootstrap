@@ -5,7 +5,8 @@
 # The menu has three audiences and each one is checked here: a person answering (through the answer
 # file seam, and through a real pseudo-terminal under `cat | bash`, which is what `curl | bash` is), a
 # person who walks away or quits (nothing may be installed), and a shell with no person at all (it
-# must never wait, and never show the menu uninvited). `perl -e setsid` gives a process with NO
+# must never wait, and never show the menu uninvited). The real `curl | bash` run, in a pseudo-terminal,
+# is in release-tree.sh, which builds the released script it needs. `perl -e setsid` gives a process with NO
 # controlling terminal even when this suite is run from one — without it, a check meant to prove
 # "no terminal" would find the developer's terminal and sit on it.
 
@@ -66,21 +67,3 @@ case "$CHECK_OUT" in
   *) fail "no-terminal-takes-the-default" "$(printf '%s' "$CHECK_OUT" | sed -n 2p)" ;;
 esac
 case "$CHECK_OUT" in *"Pick what to install"*) fail "no-terminal-shows-no-menu" ;; *) pass "no-terminal-shows-no-menu" ;; esac
-
-# 5. `curl | bash`: stdin is the SCRIPT, so the answer must come from the terminal. script(1) gives
-#    the run a real pseudo-terminal; the answers are typed into it while stdin stays open, as a
-#    person's would be — closing it early sends end-of-input, which check 3 covers.
-if [ -x /usr/bin/script ]; then
-  h="$(fresh_home pick-pty)"
-  ( printf 'none 1\n\ny\n'
-    w=0; while [ ! -e "$h/.mac-bootstrap/receipt.json" ] && [ "$w" -lt 60 ]; do sleep 1; w=$((w + 1)); done
-  ) | ( cd "$CHECK_ROOT" && env -u CLAUDECODE -u CI HOME="$h" TMPDIR="$CHECK_WORK" BOOTSTRAP_PICK_TIMEOUT=30 \
-          /usr/bin/script -q "$CHECK_WORK/pick-pty.log" /bin/bash -c 'cat ./bootstrap.sh | /bin/bash' ) >/dev/null 2>&1
-  case "$(tr -d '\r' < "$CHECK_WORK/pick-pty.log" 2>/dev/null)" in
-    *"Pick what to install"*) pass "pipe-to-bash-shows-the-menu" ;;
-    *) fail "pipe-to-bash-shows-the-menu" "no menu in the pty transcript" ;;
-  esac
-  same "pipe-to-bash-installs-the-choice" "$(receipt_states "$h/.mac-bootstrap/receipt.json" | tr '\n' ' ')" "$PICK_FIRST SATISFIED "
-else
-  pass "pipe-to-bash-shows-the-menu" "n/a: no /usr/bin/script"
-fi

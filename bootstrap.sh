@@ -47,12 +47,26 @@ BOOTSTRAP_VERSION=1
 BOOTSTRAP_REPO="renchris/mac-bootstrap"
 BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-e72735464824aad403f6e72d5ff2340413e74b12}"          # replaced at release time. NEVER "main": a main-pinned
                                          # raw URL serves up to 5 minutes of stale Fastly bytes.
-BOOTSTRAP_RAW="https://raw.githubusercontent.com/$BOOTSTRAP_REPO/$BOOTSTRAP_PIN"
+# A company whose proxy blocks raw.githubusercontent.com points BOOTSTRAP_RAW at its own mirror of the
+# same tree. That is safe to allow because nothing fetched is trusted by where it came from — see the
+# manifest below.
+BOOTSTRAP_RAW="${BOOTSTRAP_RAW:-https://raw.githubusercontent.com/$BOOTSTRAP_REPO/$BOOTSTRAP_PIN}"
+
+# ── THE RELEASE MANIFEST ─────────────────────────────────────────────────────────────────────
+# The sha256 of every module and asset at the pin, written by scripts/release.sh in the same commit
+# as the pin — never by hand. A curl'd run checks every byte it fetches against this list BEFORE it
+# sources or installs any of it, so where the bytes came from stops mattering: GitHub's raw host,
+# its tarball host, or a company mirror. The one hash a person checks — bootstrap.sh's own, printed
+# in the README — therefore covers the whole release. Its first line names the tree it describes; a
+# BOOTSTRAP_PIN that names another tree is refused, because this list cannot vouch for that one.
+driver_release_manifest() {
+  cat <<'BOOTSTRAP_RELEASE_MANIFEST'
+BOOTSTRAP_RELEASE_MANIFEST
+}
 
 BOOTSTRAP_STATE_DIR="$HOME/.mac-bootstrap"
 BOOTSTRAP_LOG="$BOOTSTRAP_STATE_DIR/bootstrap.log"
 BOOTSTRAP_ROWS="$BOOTSTRAP_STATE_DIR/rows"
-BOOTSTRAP_CACHE="$BOOTSTRAP_STATE_DIR/modules"
 BOOTSTRAP_RECEIPT="$BOOTSTRAP_STATE_DIR/receipt.json"
 BOOTSTRAP_VERIFY_RECEIPT="$BOOTSTRAP_STATE_DIR/receipt.verify.json"
 
@@ -129,7 +143,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ── state ────────────────────────────────────────────────────────────────────────────────────
-mkdir -p "$BOOTSTRAP_STATE_DIR" "$BOOTSTRAP_ROWS" "$BOOTSTRAP_CACHE" "$BOOTSTRAP_STATE_DIR/backups" 2>/dev/null || {
+mkdir -p "$BOOTSTRAP_STATE_DIR" "$BOOTSTRAP_ROWS" "$BOOTSTRAP_STATE_DIR/backups" 2>/dev/null || {
   printf 'bootstrap: cannot create %s\n' "$BOOTSTRAP_STATE_DIR" >&2; exit 30; }
 # fd 3 is the durable log; stdout stays human-readable and stderr stays STDERR.
 # NOT `exec 3>>"$BOOTSTRAP_LOG" 2>/dev/null`: that spelling is two redirections on one exec, and the
@@ -140,25 +154,103 @@ if : >>"$BOOTSTRAP_LOG" 2>/dev/null; then exec 3>>"$BOOTSTRAP_LOG"; else exec 3>
 export BOOTSTRAP_LOG="$BOOTSTRAP_LOG"
 export BOOTSTRAP_STATE_DIR="$BOOTSTRAP_STATE_DIR"
 
-# ── the shared library. One copy, sourced by the driver, the modules and the hooks. ──────────
-BOOTSTRAP_LIB=""
-for c in "$BOOTSTRAP_HERE/assets/hooks/bootstrap-lib.sh" "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh"; do
-  [ -r "$c" ] && { BOOTSTRAP_LIB="$c"; break; }
-done
-if [ -z "$BOOTSTRAP_LIB" ]; then
-  mkdir -p "$BOOTSTRAP_STATE_DIR/assets/hooks" 2>/dev/null
-  if driver_fetch_ok=$(curl -sS -L -o "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" -w '%{http_code}' \
-        "$BOOTSTRAP_RAW/assets/hooks/bootstrap-lib.sh" 2>/dev/null) && [ "$driver_fetch_ok" = "200" ] \
-        && [ -s "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" ]; then
-    mv -f "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh"
-    BOOTSTRAP_LIB="$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh"
-  else
-    rm -f "$BOOTSTRAP_STATE_DIR/assets/hooks/bootstrap-lib.sh.part" 2>/dev/null
-    printf 'bootstrap: cannot find or fetch assets/hooks/bootstrap-lib.sh (pin=%s).\n' "$BOOTSTRAP_PIN" >&2
-    printf '  Run this from a clone of the repo, or cut a release and set BOOTSTRAP_PIN.\n' >&2
-    exit 30
+# ── THE TREE — the modules/ and assets/ this run uses ────────────────────────────────────────
+# A clone has them beside this script. A curl'd bootstrap.sh has nothing beside it, so it fetches the
+# release ONCE into $BOOTSTRAP_STATE_DIR/release/<pin>/, checks every file against the manifest, and
+# only then uses it — the library included, which is why this runs before anything is sourced. After
+# this, no module fetches our own code over the network: every one of them reads $BOOTSTRAP_ASSETS.
+#
+# Two routes, in order: GitHub's tarball of the pinned commit (one request), then each file from
+# BOOTSTRAP_RAW. A corporate proxy commonly blocks one host and not the other; a mirror named in
+# BOOTSTRAP_RAW is used on its own. A route that fails, or serves one wrong byte, is simply not used.
+driver_sha_list() { driver_release_manifest | grep -v '^pin ' | grep .; }
+driver_manifest_pin() { driver_release_manifest | sed -n 's/^pin \([0-9a-f]*\)$/\1/p' | head -1; }
+
+# driver_tree_ok <dir> — 0 iff every file the manifest names is there with its sha256. One shasum
+# process for the whole tree, not one per file.
+driver_tree_ok() {
+  [ -d "$1" ] || return 1
+  ( cd "$1" 2>/dev/null && driver_sha_list | shasum -a 256 -c --status - 2>/dev/null )
+}
+
+driver_tree_from_tarball() {                        # driver_tree_from_tarball <dir> → rc 0 when it extracted
+  local d="$1" url="${BOOTSTRAP_TARBALL:-https://codeload.github.com/$BOOTSTRAP_REPO/tar.gz/$BOOTSTRAP_PIN}" rel want
+  [ -n "${BOOTSTRAP_RAW_MIRROR:-}" ] && [ -z "${BOOTSTRAP_TARBALL:-}" ] && return 1
+  curl -fsSL --retry 2 -o "$d.tgz" "$url" 2>/dev/null || { rm -f "$d.tgz"; driver_log "tree: tarball route unavailable ($url)"; return 1; }
+  mkdir -p "$d.x" && tar -xzf "$d.tgz" -C "$d.x" --strip-components 1 2>/dev/null || {
+    rm -rf "$d.tgz" "$d.x"; driver_log "tree: the tarball from $url did not extract"; return 1; }
+  # Only the files the manifest names are kept: the rest of the repo (README, scripts, this driver at
+  # another pin) is not vouched for, so it never lands in a tree a module reads from.
+  while read -r want rel; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$d/$(dirname "$rel")" && cp -f "$d.x/$rel" "$d/$rel" 2>/dev/null
+  done <<EOF
+$(driver_sha_list)
+EOF
+  rm -rf "$d.tgz" "$d.x"
+  return 0
+}
+
+driver_tree_from_files() {                          # driver_tree_from_files <dir> → rc 0 when every file arrived
+  local d="$1" rel want code
+  while read -r want rel; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$d/$(dirname "$rel")" || return 1
+    code="$(curl -sS -L --retry 2 -o "$d/$rel" -w '%{http_code}' "$BOOTSTRAP_RAW/$rel" 2>/dev/null)" || code="failed"
+    case "$code" in
+      200) : ;;
+      000) case "$BOOTSTRAP_RAW" in file://*) : ;; *) driver_log "tree: $rel — no answer from $BOOTSTRAP_RAW"; return 1 ;; esac ;;
+      *)   driver_log "tree: $rel — HTTP $code from $BOOTSTRAP_RAW"; return 1 ;;
+    esac
+  done <<EOF
+$(driver_sha_list)
+EOF
+}
+
+driver_materialize() {                              # sets BOOTSTRAP_TREE → rc 0, or says why not → rc 1
+  local dir part bad
+  case "$BOOTSTRAP_PIN" in
+    __PIN_SHA__|main|master|"")
+      printf 'bootstrap: no modules/ beside this script, and pin "%s" is not a release — nothing can be fetched.\n' "$BOOTSTRAP_PIN" >&2
+      printf '  Run it from a clone of the repo, or use the released bootstrap.sh the README links.\n' >&2
+      return 1 ;;
+  esac
+  if [ -z "$(driver_sha_list)" ]; then
+    printf 'bootstrap: this bootstrap.sh carries no release manifest, so it cannot verify anything it would fetch.\n' >&2
+    printf '  Use the released bootstrap.sh the README links, or run it from a clone.\n' >&2
+    return 1
   fi
+  if [ "$(driver_manifest_pin)" != "$BOOTSTRAP_PIN" ]; then
+    printf 'bootstrap: BOOTSTRAP_PIN=%s names a tree this script'\''s manifest (%s) cannot vouch for.\n' "$BOOTSTRAP_PIN" "$(driver_manifest_pin)" >&2
+    printf '  Fetch the bootstrap.sh released with that tree instead, and run it without BOOTSTRAP_PIN.\n' >&2
+    return 1
+  fi
+  dir="$BOOTSTRAP_STATE_DIR/release/$BOOTSTRAP_PIN"
+  if driver_tree_ok "$dir"; then BOOTSTRAP_TREE="$dir"; return 0; fi
+  part="$dir.part.$$"
+  rm -rf "$part" "$part.tgz" "$part.x"; mkdir -p "$part" || return 1
+  driver_say "fetching the release tree at $BOOTSTRAP_PIN — every file is checked against this script's manifest"
+  if { driver_tree_from_tarball "$part" && driver_tree_ok "$part"; } \
+     || { rm -rf "$part" && mkdir -p "$part" && driver_tree_from_files "$part" && driver_tree_ok "$part"; }; then
+    rm -rf "$dir"; mv -f "$part" "$dir" && { BOOTSTRAP_TREE="$dir"; return 0; }
+  fi
+  bad="$( (cd "$part" 2>/dev/null && driver_sha_list | shasum -a 256 -c - 2>/dev/null) | grep -v ': OK$' | head -3 | tr '\n' ' ')"
+  rm -rf "$part" "$part.tgz" "$part.x"
+  printf 'bootstrap: could not assemble a verified copy of the release at %s.\n' "$BOOTSTRAP_PIN" >&2
+  [ -n "$bad" ] && printf '  first mismatches: %s\n' "$bad" >&2
+  printf '  Tried the tarball (codeload.github.com) and each file from %s.\n' "$BOOTSTRAP_RAW" >&2
+  printf '  Behind a proxy that blocks both, point BOOTSTRAP_RAW at a mirror of this repo at that commit.\n' >&2
+  return 1
+}
+
+BOOTSTRAP_TREE=""
+[ "${BOOTSTRAP_RAW:-}" != "https://raw.githubusercontent.com/$BOOTSTRAP_REPO/$BOOTSTRAP_PIN" ] && BOOTSTRAP_RAW_MIRROR=1
+if [ -d "$BOOTSTRAP_HERE/modules" ] && [ -r "$BOOTSTRAP_HERE/assets/hooks/bootstrap-lib.sh" ]; then
+  BOOTSTRAP_TREE="$BOOTSTRAP_HERE"
+else
+  driver_materialize || exit 30
 fi
+BOOTSTRAP_LIB="$BOOTSTRAP_TREE/assets/hooks/bootstrap-lib.sh"
 # shellcheck source=assets/hooks/bootstrap-lib.sh
 . "$BOOTSTRAP_LIB" || { printf 'bootstrap: bootstrap-lib.sh did not load\n' >&2; exit 30; }
 export BOOTSTRAP_LIB="$BOOTSTRAP_LIB"
@@ -170,31 +262,25 @@ export BOOTSTRAP_MODEL="$BOOTSTRAP_MODEL"
 export BOOTSTRAP_BENCH="$BOOTSTRAP_BENCH"
 export BOOTSTRAP_PIN="$BOOTSTRAP_PIN"
 export BOOTSTRAP_RAW="$BOOTSTRAP_RAW"
-export BOOTSTRAP_ASSETS="$BOOTSTRAP_HERE/assets"
-
-# ── fetch ────────────────────────────────────────────────────────────────────────────────────
-driver_fetch() {                                    # driver_fetch <relpath> <dest>  → 0 on a real 200
-  local rel="$1" dest="$2" code
-  case "$BOOTSTRAP_PIN" in
-    __PIN_SHA__|main|master|"")
-      driver_log "fetch refused for $rel: pin is '$BOOTSTRAP_PIN' (unreleased, or a moving ref)"; return 1 ;;
-  esac
-  command -v curl >/dev/null 2>&1 || { driver_log "fetch: no curl"; return 1; }
-  code="$(curl -sS -L -o "$dest.part" -w '%{http_code}' "$BOOTSTRAP_RAW/$rel" 2>/dev/null)" || {
-    rm -f "$dest.part" 2>/dev/null; driver_log "fetch: curl failed for $rel"; return 1; }
-  [ "$code" = "200" ] || { rm -f "$dest.part" 2>/dev/null; driver_log "fetch: HTTP $code for $rel"; return 1; }
-  [ -s "$dest.part" ] || { rm -f "$dest.part" 2>/dev/null; driver_log "fetch: empty body for $rel"; return 1; }
-  mv -f "$dest.part" "$dest"
-}
+export BOOTSTRAP_ASSETS="$BOOTSTRAP_TREE/assets"
+# The entry script a module's hint can tell the person to re-run. A clone's own path; a file run from
+# elsewhere (the README's /tmp/mac-bootstrap.sh) is copied beside the verified tree, since /tmp is
+# wiped and the person already checked that file's hash; under `curl | bash` there is no file to name.
+BOOTSTRAP_ENTRY=""
+if [ "$BOOTSTRAP_TREE" = "$BOOTSTRAP_HERE" ]; then
+  [ -r "$BOOTSTRAP_HERE/bootstrap.sh" ] && BOOTSTRAP_ENTRY="$BOOTSTRAP_HERE/bootstrap.sh"
+elif [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
+  cp -f "${BASH_SOURCE[0]}" "$BOOTSTRAP_STATE_DIR/bootstrap.sh" 2>/dev/null && BOOTSTRAP_ENTRY="$BOOTSTRAP_STATE_DIR/bootstrap.sh"
+fi
+export BOOTSTRAP_ENTRY="$BOOTSTRAP_ENTRY"
 
 # ── the manifest ─────────────────────────────────────────────────────────────────────────────
-# 1. BOOTSTRAP_MODULES (explicit, used by the tests)  2. modules/ beside this script  3. the built-in
-# list, fetched. Order matters: a clone must never silently run a stale fetched copy.
+# 1. BOOTSTRAP_MODULES (explicit, used by the tests)  2. modules/ in the tree  3. the declared order.
 driver_manifest() {
   local f n out=""
   if [ -n "${BOOTSTRAP_MODULES:-}" ]; then printf '%s' "$BOOTSTRAP_MODULES"; return 0; fi
-  if [ -d "$BOOTSTRAP_HERE/modules" ]; then
-    for f in "$BOOTSTRAP_HERE/modules"/*.sh; do
+  if [ -d "$BOOTSTRAP_TREE/modules" ]; then
+    for f in "$BOOTSTRAP_TREE/modules"/*.sh; do
       [ -r "$f" ] || continue
       n="${f##*/}"; out="$out ${n%.sh}"
     done
@@ -213,13 +299,10 @@ driver_manifest() {
   printf '%s' "$BOOTSTRAP_MODULE_ORDER"
 }
 
+# The tree is complete or the run never got this far, so a module not in it is not in this release.
 driver_module_file() {                              # prints the readable path, or nothing
-  local m="$1"
-  [ -r "$BOOTSTRAP_HERE/modules/$m.sh" ] && { printf '%s' "$BOOTSTRAP_HERE/modules/$m.sh"; return 0; }
-  [ -r "$BOOTSTRAP_CACHE/$m.sh" ] && { printf '%s' "$BOOTSTRAP_CACHE/$m.sh"; return 0; }
-  driver_fetch "modules/$m.sh" "$BOOTSTRAP_CACHE/$m.sh" >/dev/null 2>&1 && {
-    printf '%s' "$BOOTSTRAP_CACHE/$m.sh"; return 0; }
-  return 1
+  [ -r "$BOOTSTRAP_TREE/modules/$1.sh" ] || return 1
+  printf '%s' "$BOOTSTRAP_TREE/modules/$1.sh"
 }
 
 # ── the CATALOG ───────────────────────────────────────────────────────────────────────────────
@@ -578,9 +661,9 @@ driver_cmd_manifest() {
   # (a Finder .DS_Store) are never in a release.
   while IFS= read -r f; do
     [ -r "$f" ] || continue
-    printf '    %s  %s\n' "$(shasum -a 256 "$f" 2>/dev/null | cut -c1-16)" "${f#"$BOOTSTRAP_HERE"/}"
+    printf '    %s  %s\n' "$(shasum -a 256 "$f" 2>/dev/null | cut -c1-16)" "${f#"$BOOTSTRAP_TREE"/}"
   done <<EOF
-$([ -d "$BOOTSTRAP_HERE/assets" ] && find "$BOOTSTRAP_HERE/assets" -type f ! -path "$BOOTSTRAP_HERE/assets/diagrams/*" ! -name '.*' 2>/dev/null | LC_ALL=C sort)
+$([ -d "$BOOTSTRAP_TREE/assets" ] && find "$BOOTSTRAP_TREE/assets" -type f ! -path "$BOOTSTRAP_TREE/assets/diagrams/*" ! -name '.*' 2>/dev/null | LC_ALL=C sort)
 EOF
   printf '\n  Nothing above has been written. Run --plan to see what would change.\n\n'
 }

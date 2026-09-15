@@ -19,8 +19,10 @@
 #   Y   release commit, one line of bootstrap.sh  the README's curl URL points here
 #   Z   docs commit, README only ............... what a reader sees at the head of main
 #
-# Y changes exactly one line, so every module and asset the driver fetches from X is
-# byte-identical to the one that sat beside it when it was tested. The alternative — inlining
+# Y changes the pin line and the release manifest block beneath it — the sha256 of every module and
+# asset at X, which the driver checks every fetched byte against — and nothing else, so every module
+# and asset the driver fetches from X is byte-identical to the one that sat beside it when it was
+# tested, and PROVABLY so from whichever host served it. The alternative — inlining
 # the modules into bootstrap.sh — removes the second hop entirely but turns the only entry point
 # into a ~200 KB generated artifact and gives this repo a build step it deliberately does not
 # have.
@@ -72,6 +74,19 @@ release_sha_blob() { git show "$1:$2" 2>/dev/null | shasum -a 256 | cut -d' ' -f
 # rendered diagrams, which only the README consumes.
 release_payload() { git ls-tree -r --name-only "$1" -- modules assets 2>/dev/null | grep -v '^assets/diagrams/'; }
 
+# release_manifest <ref> — the block the driver verifies against: the tree it describes, then one
+# `<sha256>  <path>` line per payload file, computed from git's own blobs, never from a working tree.
+release_manifest() {
+  local rel
+  printf 'pin %s\n' "$1"
+  for rel in $(release_payload "$1"); do printf '%s  %s\n' "$(release_sha_blob "$1" "$rel")" "$rel"; done
+}
+
+# release_embedded_manifest <bootstrap.sh> — the block as a published file carries it.
+release_embedded_manifest() {
+  awk '/^BOOTSTRAP_RELEASE_MANIFEST$/ { on = 0 } on { print } /<<'\''BOOTSTRAP_RELEASE_MANIFEST'\''$/ { on = 1 }' "$1"
+}
+
 # release_verify <readme_ref> — the whole claim, from outside, with no local file trusted.
 release_verify() {
   local ref="$1" tmp boot pin rel got want n=0 bad=0
@@ -102,6 +117,20 @@ release_verify() {
     *) release_fail "hop 2 REFUSED: pin '$pin' is not a commit sha"; rm -rf "$tmp"; return 1 ;;
   esac
   release_say "  hop 2: payload @ ${pin}"
+
+  # The manifest inside the PUBLISHED bytes must describe the pinned tree exactly — every payload
+  # file, each with git's own sha256, nothing extra — or the driver will refuse every fetch. A
+  # release cut before the manifest existed carries none, and says so rather than failing.
+  if grep -q "<<'BOOTSTRAP_RELEASE_MANIFEST'" "$boot"; then
+    if [ "$(release_embedded_manifest "$boot")" = "$(release_manifest "$pin")" ]; then
+      release_say "         manifest: $(release_embedded_manifest "$boot" | grep -vc '^pin ' | tr -d ' ') files, matching the pinned tree"
+    else
+      release_fail "hop 2 REFUSED: the published manifest does not describe the tree at $pin"
+      rm -rf "$tmp"; return 1
+    fi
+  else
+    release_say "         (a release from before the manifest: no embedded manifest to check)"
+  fi
 
   for rel in $(release_payload "$pin"); do
     n=$((n + 1))
@@ -162,7 +191,7 @@ fi
 
 if [ "$RELEASE_MODE" = dry ]; then
   release_say ""
-  release_say "would commit Y: bootstrap.sh BOOTSTRAP_PIN -> $RELEASE_CONTENT_COMMIT"
+  release_say "would commit Y: bootstrap.sh BOOTSTRAP_PIN -> $RELEASE_CONTENT_COMMIT, and its manifest ($(release_payload "$RELEASE_CONTENT_COMMIT" | grep -c . | tr -d ' ') files)"
   release_say "would commit Z: README curl sha -> <Y>, plus its line count and sha256"
   release_say "would then verify both hops anonymously against the published bytes"
   exit 0
@@ -175,6 +204,18 @@ awk -v pin="$RELEASE_CONTENT_COMMIT" '
 ' bootstrap.sh > bootstrap.sh.rl && mv -f bootstrap.sh.rl bootstrap.sh
 /bin/bash -n bootstrap.sh || { release_fail "the rewritten bootstrap.sh does not parse"; exit 1; }
 grep -q "BOOTSTRAP_PIN:-$RELEASE_CONTENT_COMMIT}" bootstrap.sh || { release_fail "the pin was not substituted"; exit 1; }
+
+# …and the manifest beneath it, replaced whole: whatever was between the markers is the previous tree.
+release_manifest "$RELEASE_CONTENT_COMMIT" > bootstrap.sh.manifest
+awk -v mf=bootstrap.sh.manifest '
+  /^BOOTSTRAP_RELEASE_MANIFEST$/ { skip = 0 }
+  !skip { print }
+  /<<'\''BOOTSTRAP_RELEASE_MANIFEST'\''$/ { while ((getline l < mf) > 0) print l; skip = 1 }
+' bootstrap.sh > bootstrap.sh.rl && mv -f bootstrap.sh.rl bootstrap.sh
+rm -f bootstrap.sh.manifest
+/bin/bash -n bootstrap.sh || { release_fail "the bootstrap.sh with its manifest does not parse"; exit 1; }
+[ "$(release_embedded_manifest bootstrap.sh)" = "$(release_manifest "$RELEASE_CONTENT_COMMIT")" ] || {
+  release_fail "the manifest written into bootstrap.sh does not read back as the tree at $RELEASE_CONTENT_COMMIT"; exit 1; }
 
 git add bootstrap.sh
 git commit -q -m "release: pin the fetch tree at ${RELEASE_CONTENT_COMMIT}
