@@ -247,3 +247,18 @@ done
 for v in 15.7 26.1 26; do
   case "$(shot_acc "$v")" in *PPPC*) pass "pppc-offered-on-$v" ;; *) fail "pppc-offered-on-$v" "$(shot_acc "$v")" ;; esac
 done
+
+# ── 12. The vendored Hammerspoon config starts no python ────────────────────────────────────────
+# On a Mac without the Command Line Tools /usr/bin/python3 is an xcrun shim, and running it raises
+# Apple's "install the command line developer tools" dialog — and the Dock read ran at load and on
+# every rebind. The config reads the plist with hs.plist.read instead (measured against the real
+# Hammerspoon 1.1.1 on 2026-09-15: the same app list as the python it replaced, on a binary fixture
+# and on a live Dock). Comment lines are skipped, so the history of the fix can still be told.
+hammerspoon_config_calls_python() { /usr/bin/grep -v '^[[:space:]]*--' "$1" | /usr/bin/grep -qi 'python'; }
+TERM_LUA="$CHECK_ROOT/assets/hammerspoon/init.lua"
+if hammerspoon_config_calls_python "$TERM_LUA"; then
+  fail "hammerspoon-config-calls-no-python" "$(/usr/bin/grep -v '^[[:space:]]*--' "$TERM_LUA" | /usr/bin/grep -ni python | head -2)"
+else pass "hammerspoon-config-calls-no-python"; fi
+/usr/bin/sed 's/^local function pinnedApps()$/&\n  hs.execute([[python3 -c "print(1)"]])/' "$TERM_LUA" > "$TERM_FX/init-planted.lua"
+if hammerspoon_config_calls_python "$TERM_FX/init-planted.lua"; then pass "hammerspoon-planted-python-is-caught"
+else fail "hammerspoon-planted-python-is-caught"; fi

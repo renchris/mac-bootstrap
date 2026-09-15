@@ -56,48 +56,27 @@ local function clearHotkeys()
 end
 
 local function pinnedApps()
-  -- Use Python to read plist (handles binary data that can't convert to JSON)
-  local cmd = [[python3 -c "
-import plistlib
-import json
-import sys
-
-try:
-    with open(']] .. dockPlist .. [[', 'rb') as f:
-        plist = plistlib.load(f)
-
-    apps = []
-    for item in plist.get('persistent-apps', []):
-        td = item.get('tile-data', {})
-        name = td.get('file-label')
-        bid = td.get('bundle-identifier')
-        fd = td.get('file-data', {})
-        path = fd.get('_CFURLString', '')
-
-        apps.append({'name': name, 'bundleID': bid, 'path': path})
-
-    print(json.dumps(apps))
-except Exception as e:
-    print('[]', file=sys.stderr)
-    sys.exit(1)
-"]]
-
-  local output, status = hs.execute(cmd)
-  if not status or not output then
-    print("WARNING: python3 not found or plist read failed — Dock shortcuts unavailable")
+  -- hs.plist.read is Hammerspoon's own reader (1.1.1 ships it: extensions/hs/plist.lua over
+  -- libplist.dylib) and reads the Dock's binary plist, file-data blobs included. This used to shell
+  -- out to a python one-liner through hs.execute, at load and on every rebind. On a Mac without the
+  -- Command Line Tools /usr/bin/python3 is an xcrun shim, so each of those calls could raise Apple's
+  -- "install the command line developer tools" dialog, and nothing here needs a second process.
+  local ok, plist = pcall(hs.plist.read, dockPlist)
+  if not ok or type(plist) ~= "table" then
+    print("WARNING: Dock plist read failed — Dock shortcuts unavailable")
     return {}
   end
 
-  local ok, data = pcall(hs.json.decode, output)
-  if not ok or not data then return {} end
-
   local out = {}
-  for _, app in ipairs(data) do
-    local name = app.name
-    local bid = app.bundleID
-    local path = app.path
+  for _, item in ipairs(plist["persistent-apps"] or {}) do
+    local td = type(item) == "table" and item["tile-data"] or nil
+    if type(td) ~= "table" then td = {} end
+    local name = td["file-label"]
+    local bid = td["bundle-identifier"]
+    local fd = td["file-data"]
+    local path = type(fd) == "table" and fd["_CFURLString"] or ""
 
-    if path and path:match("^file://") then
+    if type(path) == "string" and path:match("^file://") then
       path = path:gsub("^file://", "")
     end
 
