@@ -784,6 +784,18 @@ egress_rewrite_model() {
     'dd20bb891979d25aebc8bec07b2b3bbc.r2.cloudflarestorage.com install the model blobs registry.ollama.ai redirects to'
 }
 
+# What a company's IT or security team governs here, one `<class> <clause>` per line. The server is
+# named whatever the route, because either route leaves one running; the software line appears only
+# when this run would install ollama rather than use the one already on disk.
+clearance_rewrite_model() {
+  printf 'background a local ollama server that starts at login, stays running and listens on 127.0.0.1:%s — the LaunchAgent %s, or Homebrew'"'"'s own ollama service (`brew services start ollama`) when your Homebrew runs ollama; uninstall stops the first and leaves Homebrew'"'"'s running\n' \
+    "$(rewrite_model_url_port "$REWRITE_MODEL_URL")" "$REWRITE_MODEL_AGENT_LABEL"
+  case "$(rewrite_model_route 2>/dev/null)" in
+    pinned|oldmac) printf 'software the ollama server and its libraries from ollama'"'"'s GitHub release (Developer ID team 3MU9H2V9Y9), unpacked into the hidden folder ~/.mac-bootstrap/tools, where Gatekeeper never assesses it — not distributed by IT\n' ;;
+    brew)          printf 'software Homebrew'"'"'s ollama build, which is ad-hoc signed with no Team ID — not distributed by IT\n' ;;
+  esac
+}
+
 # rewrite_model_local_only — the second, independent reader of VoiceInk: assets/local-only-check.sh
 # decides, from every key store, every enabled mode and every cloud transcription model, whether
 # VoiceInk can still reach a cloud service. The per-mode proof above cannot see a SAVED cloud key,

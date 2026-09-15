@@ -376,6 +376,18 @@ egress_screenshot() {
   fi
 }
 
+# What a company's IT or security team governs here, one `<class> <clause>` per line. Measured at the
+# 1.1.1 tag: Hammerspoon adds itself to login items only from its Preferences checkbox or from
+# hs.autoLaunch() (MJPreferencesWindowController.m:175, MJLua.m:76), and neither this module nor the
+# vendored init.lua calls either — so the background line says "left running", not "at login".
+clearance_screenshot() {
+  printf '%s\n' \
+    'software Hammerspoon 1.1.1 (Developer ID team VQCYSNZB89) from its GitHub release into ~/Applications, or Homebrew'"'"'s cask for an administrator who already has Homebrew — not distributed by IT' \
+    'background Hammerspoon is left running with a local command port open (hs.ipc, which init.lua installs); it is not added to your login items' \
+    'permission Accessibility for Hammerspoon — and because init.lua opens hs.ipc, any program you run can send Hammerspoon code and so borrow that grant to press keys and read other apps'"'"' windows' \
+    'permission a system-wide keyboard hook (an hs.eventtap on every key press) that sees every keystroke you type, so it can turn Cmd+V into Ctrl+V when an image is on the clipboard'
+}
+
 verify_screenshot() {
   # The defaults domain is resolved from the password database, not from $HOME, so a sandboxed
   # HOME would silently rewrite the REAL machine. Refuse instead. (bootstrap-lib.sh: bootstrap_defaults_home_ok)

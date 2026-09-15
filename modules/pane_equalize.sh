@@ -606,6 +606,11 @@ profile_pane_equalize() { printf '%s' 'lite'; }
 # No network at all: it writes two config files. The one command it may hand a person downloads a
 # terminal, and that is the person's command, run by them, named in the receipt.
 egress_pane_equalize()  { :; }
+# What a company's IT or security team governs here. The module itself installs nothing; the one
+# command it hands a person with no usable terminal (or a too-old one) downloads a vendor app.
+clearance_pane_equalize() {
+  printf '%s\n' 'software only if you run the command it offers when neither kitty nor iTerm2 is usable: the official iTerm2 3.7.1 or kitty 0.48.2 release (Homebrew'"'"'s cask, for an administrator who has Homebrew), a vendor download not distributed by IT'
+}
 
 verify_pane_equalize() {
   local configured=0

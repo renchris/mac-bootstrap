@@ -177,3 +177,21 @@ case "$out" in *"raw.githubusercontent.com install"*) fail "egress-screenshot-no
 case "$out" in *"raw.githubusercontent.com run Hammerspoon update check"*) pass "egress-screenshot-states-update-check" ;; *) fail "egress-screenshot-states-update-check" "$out" ;; esac
 out="$(BOOTSTRAP_SCREENSHOT_REPO_URL=https://git.example.com/me/hs.git terminal_unit screenshot 'egress_screenshot')"
 case "$out" in *"git.example.com install"*) pass "egress-screenshot-names-your-repo-host" ;; *) fail "egress-screenshot-names-your-repo-host" "$out" ;; esac
+
+# ── 9. What IT governs: clearance_ lines are `<class> <clause>`, the class from the fixed set ───
+terminal_clearance_bad() {
+  printf '%s\n' "$1" | awk '
+    BEGIN { c["data"]; c["background"]; c["trust"]; c["permission"]; c["software"]; c["agent"] }
+    NF == 0 { next }
+    !($1 in c) || NF < 3 { print }'
+}
+same "terminal-clearance-check-catches-an-invented-class" "$(terminal_clearance_bad 'network it downloads things')" 'network it downloads things'
+out="$(terminal_unit screenshot 'clearance_screenshot')"
+if [ -n "$out" ] && [ -z "$(terminal_clearance_bad "$out")" ]; then pass "clearance-screenshot-well-formed" "$(printf '%s\n' "$out" | grep -c .) line(s)"
+else fail "clearance-screenshot-well-formed" "${out:-no lines}"; fi
+case "$out" in *"permission "*hs.ipc*"borrow that grant"*) pass "clearance-screenshot-names-the-ipc-proxy" ;; *) fail "clearance-screenshot-names-the-ipc-proxy" "$out" ;; esac
+case "$out" in *"permission "*"every keystroke"*) pass "clearance-screenshot-names-the-key-hook" ;; *) fail "clearance-screenshot-names-the-key-hook" "$out" ;; esac
+case "$out" in *"not added to your login items"*) pass "clearance-screenshot-no-login-item-claim" ;; *) fail "clearance-screenshot-no-login-item-claim" "$out" ;; esac
+out="$(terminal_unit pane_equalize 'clearance_pane_equalize')"
+if [ -n "$out" ] && [ -z "$(terminal_clearance_bad "$out")" ]; then pass "clearance-pane-equalize-well-formed" "$out"
+else fail "clearance-pane-equalize-well-formed" "${out:-no lines}"; fi

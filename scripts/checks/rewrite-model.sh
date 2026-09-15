@@ -293,3 +293,33 @@ RM_KEYED="$( ( . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh"; . "$CHECK_ROOT/mod
 same "rewrite-model-second-reader-clean-fixture" "$RM_CLEAN" 0
 case "$RM_KEYED" in *Gemini*) pass "rewrite-model-second-reader-sees-a-saved-key" ;;
   *) fail "rewrite-model-second-reader-sees-a-saved-key" "${RM_KEYED:-no FAIL line}" ;; esac
+
+# 12. What IT governs: every clearance_ line is `<class> <clause>`, the class from the fixed set. ──
+RM_CLEARANCE_CLASSES='data background trust permission software agent'
+rm_clearance_bad() {                                  # prints every line that is not well formed
+  printf '%s\n' "$1" | awk -v ok="$RM_CLEARANCE_CLASSES" '
+    BEGIN { n = split(ok, a, " "); for (i = 1; i <= n; i++) c[a[i]] = 1 }
+    NF == 0 { next }
+    !($1 in c) || NF < 3 { print }'
+}
+same "clearance-check-catches-an-invented-class" "$(rm_clearance_bad 'telemetry it phones home')" 'telemetry it phones home'
+same "clearance-check-catches-a-bare-class" "$(rm_clearance_bad 'trust')" 'trust'
+h="$(fresh_home rm-clearance)"
+RM_CL="$(rm_call "$h" clearance_rewrite_model 2>/dev/null)"
+if [ -n "$RM_CL" ] && [ -z "$(rm_clearance_bad "$RM_CL")" ]; then pass "clearance-rewrite-model-well-formed" "$(printf '%s\n' "$RM_CL" | grep -c .) line(s)"
+else fail "clearance-rewrite-model-well-formed" "${RM_CL:-no lines}"; fi
+case "$RM_CL" in
+  *"background "*"127.0.0.1:11434"*com.mac-bootstrap.ollama*"brew services start ollama"*) pass "clearance-rewrite-model-names-both-servers" ;;
+  *) fail "clearance-rewrite-model-names-both-servers" "$RM_CL" ;;
+esac
+case "$RM_CL" in *software*) fail "clearance-rewrite-model-present-installs-nothing" "$RM_CL" ;; *) pass "clearance-rewrite-model-present-installs-nothing" ;; esac
+RM_CL="$(RM_OLLAMA="$RM_DIR/no-ollama" rm_call "$h" rm_std clearance_rewrite_model 2>/dev/null)"
+case "$RM_CL" in *"software the ollama server"*3MU9H2V9Y9*) pass "clearance-rewrite-model-pinned-names-software" ;; *) fail "clearance-rewrite-model-pinned-names-software" "$RM_CL" ;; esac
+RM_CL="$( ( . "$RM_LIB" >/dev/null 2>&1; . "$VI_MOD" >/dev/null 2>&1; clearance_voiceink ) 2>/dev/null)"
+if [ -n "$RM_CL" ] && [ -z "$(rm_clearance_bad "$RM_CL")" ]; then pass "clearance-voiceink-well-formed" "$(printf '%s\n' "$RM_CL" | grep -c .) line(s)"
+else fail "clearance-voiceink-well-formed" "${RM_CL:-no lines}"; fi
+case "$RM_CL" in
+  *"trust "*"import -A"*add-trusted-cert*"trust "*"xattr -cr"*) pass "clearance-voiceink-names-both-trust-changes" ;;
+  *) fail "clearance-voiceink-names-both-trust-changes" "$RM_CL" ;;
+esac
+case "$RM_CL" in *"permission Microphone"*Accessibility*) pass "clearance-voiceink-names-permissions" ;; *) fail "clearance-voiceink-names-permissions" "$RM_CL" ;; esac

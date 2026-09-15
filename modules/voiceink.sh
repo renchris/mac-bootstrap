@@ -314,6 +314,17 @@ egress_voiceink() {
     'beingpax.github.io run the Sparkle appcast, only when the person clicks Check for Updates (automatic checks and announcements are switched off before first launch)'
 }
 
+# What a company's IT or security team governs here, one `<class> <clause>` per line (see
+# teammate-common "clearance_"). No `background` line, measured: this module installs no launchd
+# job, and the app's own Launch at Login toggle is off until the person turns it on.
+clearance_voiceink() {
+  printf '%s\n' \
+    'software a self-built VoiceInk.app in ~/Applications, compiled on this Mac from the Beingpax/VoiceInk and whisper.cpp source and signed with a certificate made on this Mac — no Developer ID, not notarized, not distributed by IT' \
+    'trust the signing script it requires you to run imports a self-signed code-signing key into your login keychain with `security import -A`, so any app may use that key without asking, and marks the certificate trusted for code signing with `security add-trusted-cert` — EDR products flag both' \
+    'trust it clears every extended attribute, the quarantine flag included, from the built app with `xattr -cr`, which EDR reads as a Gatekeeper bypass' \
+    'permission Microphone to record dictation and Accessibility for the global hotkey and pasting, both switched on by you in System Settings (Screen Recording too, only if you turn on screen context)'
+}
+
 verify_voiceink() {
   local app dr leaf rc
   app="$BOOTSTRAP_VOICEINK_APP"
