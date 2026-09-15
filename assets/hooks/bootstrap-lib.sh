@@ -796,8 +796,8 @@ bootstrap_security_posture() {
 # network-error (says nothing about trust).
 bootstrap_tls_verdict() {
   local os pub
-  /usr/bin/curl -sS -o /dev/null -m 10 "$1" 2>/dev/null; os=$?
-  OPENSSL_X509_TEA_DISABLE=1 /usr/bin/curl -sS -o /dev/null -m 10 "$1" 2>/dev/null; pub=$?
+  /usr/bin/curl -sS -o /dev/null --connect-timeout 5 -m 10 "$1" 2>/dev/null; os=$?
+  OPENSSL_X509_TEA_DISABLE=1 /usr/bin/curl -sS -o /dev/null --connect-timeout 5 -m 10 "$1" 2>/dev/null; pub=$?
   case "$os:$pub" in
     0:0)   printf 'clean' ;;
     0:60)  printf 'intercepted-os-trusted' ;;
