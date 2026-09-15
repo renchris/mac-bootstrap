@@ -24,8 +24,9 @@
 #     0   every module SATISFIED.
 #    10   satisfied except for modules waiting on YOU (NEEDS_HUMAN). Read the receipt.
 #    20   something FAILED. Read the log.
-#    30   precondition/internal error: this run is not a verdict about the machine. A module the
-#         run never evaluated — `--only` leaves the other seven unjudged — lands here, NOT in 0.
+#    30   precondition/internal error: this run is not a verdict about the machine. A SELECTED
+#         module the run could not evaluate lands here, NOT in 0. A module you did not select is
+#         declined, not judged: the verdict is over the selection, whatever older rows say.
 #   Under --uninstall the scale is: 0 everything removed · 20 an uninstall_ failed · 30 a row
 #   nobody can read. Zero rows is uninstall's SUCCESS, and only uninstall's.
 #   Precedence when several apply: 30 > 20 > 10 > 0. 30 wins because a run that could not
@@ -939,7 +940,7 @@ driver_rows_recover() {
 # printf + explicit escaping. One double quote in a note or a gesture string made the file the
 # agent is TOLD to parse unparseable, and every value below goes through bootstrap_json_escape.
 driver_emit_receipt() {                             # driver_emit_receipt <path> <exit_code> [error]
-  local out="$1" code="$2" err="${3:-}" f m first=1 tmp="$1.tmp.$$"
+  local out="$1" code="$2" err="${3:-}" f m jr first=1 tmp="$1.tmp.$$"
   {
     printf '{\n'
     printf '  "schema": 1,\n'
@@ -957,11 +958,14 @@ driver_emit_receipt() {                             # driver_emit_receipt <path>
       driver_in_manifest "$m" || continue
       [ "$first" = 1 ] || printf ',\n'
       first=0
-      printf '    {"module": "%s", "state": "%s", "note": "%s", "human_command": "%s"}' \
+      # this_run: whether THIS run judged the row. Rows from earlier runs are kept (--only merges), but
+      # the exit code is over the selection only, so a reader needs to tell history from verdict.
+      case " ${BOOTSTRAP_SELECTED:-} " in *" $m "*) jr=true ;; *) jr=false ;; esac
+      printf '    {"module": "%s", "state": "%s", "note": "%s", "human_command": "%s", "this_run": %s}' \
         "$(bootstrap_json_escape "$m")" \
         "$(bootstrap_json_escape "$(driver_row_get "$m" state)")" \
         "$(bootstrap_json_escape "$(driver_row_get "$m" note)")" \
-        "$(bootstrap_json_escape "$(driver_row_get "$m" gesture)")"
+        "$(bootstrap_json_escape "$(driver_row_get "$m" gesture)")" "$jr"
     done
     [ "$first" = 1 ] || printf '\n'
     printf '  ]\n}\n'
@@ -1191,6 +1195,13 @@ driver_verdict() {
     [ -r "$f" ] || continue
     m="${f##*/}"; m="${m%.state}"
     driver_in_manifest "$m" || continue
+    # Scored over the SELECTION, like driver_missing_rows. A row left by an earlier run for a module
+    # this run did not select is history, not a verdict: measured before this, one old FAILED row (a
+    # `--verify --profile lite` "not installed") made every later run — `--only statusline` included —
+    # exit 20, and re-running the one module the person asked about could never clear it.
+    if [ -n "${BOOTSTRAP_SELECTED:-}" ]; then
+      case " $BOOTSTRAP_SELECTED " in *" $m "*) : ;; *) continue ;; esac
+    fi
     any=1; s="$(cat "$f" 2>/dev/null)"
     case "$s" in
       SATISFIED)   : ;;
