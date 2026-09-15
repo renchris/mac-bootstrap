@@ -49,7 +49,17 @@
 # ── THE TWO HOLES this module is required to close ───────────────────────────────────────────
 #   (a) NOTHING INSTALLS A TERMINAL. A genuinely fresh Mac has Terminal.app and nothing else,
 #       so "configured nothing" must NOT exit 0. With neither kitty nor iTerm2 present, gate_
-#       fires and the receipt carries `brew install --cask iterm2`.
+#       fires. Installing a whole terminal to satisfy a key binding is the person's call, not
+#       this module's, so install_ never does it; the receipt carries ONE command instead. An
+#       administrator who has Homebrew gets the cask. Anyone else — above all a standard user,
+#       for whom `brew` and /Applications are both out of reach — gets a one-line fetch of
+#       iTerm2's official release into $HOME/Applications that checks the sha256 pinned here and
+#       Gatekeeper's verdict BEFORE anything lands (measured 2026-09-15: the 3.7.1 zip's sha256
+#       equals the Homebrew cask's; unpacked it carries no quarantine flag and `spctl -a -vv`
+#       says "accepted, source=Notarized Developer ID"; iTerm2's LetsMove counts ~/Applications
+#       as installed, so it does not ask to move itself). A too-old kitty gets the same, from its
+#       pinned dmg (0.48.2, same three measurements). Test seams, module-scoped:
+#       BOOTSTRAP_PANE_EQUALIZE_ITERM_URL / _SHA256 replace the iTerm2 pin in the printed command.
 #   (b) verify_ IS PLIST-ONLY (plus kitty's own config parser). The geometry read — `kitty @ ls`
 #       columns, or AppleScript `columns of session` — needs Accessibility AND an Apple Events
 #       automation consent that no gate here covers, so it is not in verify_ at any price. It is
@@ -81,6 +91,10 @@ PANE_EQUALIZE_ITERM_TIMESTAMPS='Show Timestamps'
 PANE_EQUALIZE_ITERM_CHORD='0x45-0x120000'                    # Cmd+Shift+E as iTerm2 records it
 PANE_EQUALIZE_KITTY_FLOOR='0.47.2'                           # first release with `layout_action equalize`
 PANE_EQUALIZE_PLISTBUDDY='/usr/libexec/PlistBuddy'
+PANE_EQUALIZE_ITERM_URL='https://iterm2.com/downloads/stable/iTerm2-3_7_1.zip'
+PANE_EQUALIZE_ITERM_SHA256='ed5c0f623e584cddc123f87d8bda90cf4d1d18dbbae2b9b0e85939f989c640b0'
+PANE_EQUALIZE_KITTY_URL='https://github.com/kovidgoyal/kitty/releases/download/v0.48.2/kitty-0.48.2.dmg'
+PANE_EQUALIZE_KITTY_SHA256='f804f58ee4b69c76f84eb3281e140748269a63f3f4a816015a8dec2a06d2b195'
 
 # ── small helpers ────────────────────────────────────────────────────────────────────────────
 
@@ -127,13 +141,7 @@ EOF
 
 # ── iTerm2 ───────────────────────────────────────────────────────────────────────────────────
 
-pane_equalize_iterm_app() {                                 # prints the app bundle, rc 1 if absent
-  local c
-  for c in "/Applications/iTerm.app" "$HOME/Applications/iTerm.app"; do
-    [ -d "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  return 1
-}
+pane_equalize_iterm_app() { bootstrap_find_app iTerm.app; }  # prints the app bundle, rc 1 if absent
 pane_equalize_iterm_plist() { printf '%s' "$HOME/Library/Preferences/com.googlecode.iterm2.plist"; }
 pane_equalize_iterm_dyndir() { printf '%s' "$HOME/Library/Application Support/iTerm2/DynamicProfiles"; }
 
@@ -270,10 +278,9 @@ pane_equalize_kitty_bin() {
   local c
   c="$(command -v kitty 2>/dev/null)" || c=""
   [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
-  for c in "/Applications/kitty.app/Contents/MacOS/kitty" "$HOME/Applications/kitty.app/Contents/MacOS/kitty"; do
-    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  return 1
+  c="$(bootstrap_find_app kitty.app)" || return 1
+  [ -x "$c/Contents/MacOS/kitty" ] || return 1
+  printf '%s' "$c/Contents/MacOS/kitty"
 }
 
 pane_equalize_kitty_ver() {                                 # prints "0.48.2", rc 1 if unreadable
@@ -500,6 +507,73 @@ pane_equalize_kitty_uninstall() {
   pane_equalize_kitty_strip "$conf"
 }
 
+# ── getting (or upgrading) a terminal, as ONE command a person can paste ─────────────────────
+# Homebrew is offered only to an administrator: its installer aborts without sudo, and a cask lands
+# in /Applications, which is root:admin 775. `upgrade` also needs the cask to be brew's own — on an
+# app brew did not install, `brew upgrade --cask` fails with "not installed".
+pane_equalize_admin_brew() { bootstrap_is_admin && bootstrap_find_tool brew; }
+pane_equalize_brew_owns() {                                 # <cask>
+  local b
+  b="$(pane_equalize_admin_brew)" && [ -d "${b%/bin/brew}/Caskroom/${1:-}" ]
+}
+
+pane_equalize_kitty_app() {                                 # the kitty.app bundle, rc 1 if kitty is not one
+  local b
+  b="$(pane_equalize_kitty_bin)" || return 1
+  case "$b" in
+    */kitty.app/Contents/MacOS/kitty) printf '%s' "${b%/Contents/MacOS/kitty}" ;;
+    *) bootstrap_find_app kitty.app ;;
+  esac
+}
+
+# pane_equalize_shell_dir <dir> — the dir as the person's shell should read it: "$HOME/…" under the
+# home directory (a receipt never carries a user name), the absolute path otherwise.
+pane_equalize_shell_dir() {
+  case "${1:-}" in
+    "$HOME")   printf '%s' "\$HOME" ;;
+    "$HOME"/*) printf '$HOME/%s' "${1#"$HOME"/}" ;;
+    *)         printf '%s' "${1:-}" ;;
+  esac
+}
+
+# pane_equalize_fetch_cmd <zip|dmg> <url> <sha256> <App.app> <target dir, as the shell spells it> <replace 0|1>
+# One line, `&&` throughout: the sha256 is checked before anything is unpacked, and Gatekeeper's
+# verdict is read on the unpacked bundle in a temp dir before it moves — so a wrong download, or a
+# Mac whose IT refuses the app, stops the line with nothing landed. replace=1 (an upgrade) removes
+# the old bundle only after both checks have passed.
+pane_equalize_fetch_cmd() {
+  local kind="${1:-}" url="${2:-}" sha="${3:-}" app="${4:-}" dir="${5:-}" replace="${6:-0}" f open
+  # shellcheck disable=SC2016  # every $d and $(…) here is for the PERSON's shell, not this one
+  f='$d/download.'"$kind"
+  case "$kind" in
+    zip) open="ditto -x -k \"$f\" \"\$d\"" ;;
+    dmg) open="hdiutil attach -nobrowse -readonly -mountpoint \"\$d/mnt\" \"$f\" >/dev/null && { ditto \"\$d/mnt/$app\" \"\$d/$app\"; hdiutil detach \"\$d/mnt\" >/dev/null; }" ;;
+    *)   return 1 ;;
+  esac
+  # shellcheck disable=SC2016
+  printf 'd="$(mktemp -d)" && curl -fsSL -o "%s" '"'"'%s'"'"' && echo "%s  %s" | shasum -a 256 -c - && %s && spctl -a -vv "$d/%s" && mkdir -p "%s" && ' \
+    "$f" "$url" "$sha" "$f" "$open" "$app" "$dir"
+  [ "$replace" = 1 ] && printf 'rm -rf "%s/%s" && ' "$dir" "$app"
+  printf 'mv "$d/%s" "%s/"' "$app" "$dir"
+}
+
+pane_equalize_iterm_fetch_cmd() {                           # <target dir, shell-spelled> <replace 0|1>
+  pane_equalize_fetch_cmd zip "${BOOTSTRAP_PANE_EQUALIZE_ITERM_URL:-$PANE_EQUALIZE_ITERM_URL}" \
+    "${BOOTSTRAP_PANE_EQUALIZE_ITERM_SHA256:-$PANE_EQUALIZE_ITERM_SHA256}" iTerm.app "${1:-}" "${2:-0}"
+}
+
+# pane_equalize_upgrade_route <iterm2|kitty> — brew · fetch · none: which upgrade THIS person can run.
+pane_equalize_upgrade_route() {
+  local app
+  case "${1:-}" in
+    iterm2) app="$(pane_equalize_iterm_app)" || app="" ;;
+    kitty)  app="$(pane_equalize_kitty_app)" || app="" ;;
+  esac
+  if pane_equalize_brew_owns "${1:-}"; then printf 'brew'
+  elif [ -n "$app" ] && [ -w "$(dirname "$app")" ]; then printf 'fetch'
+  else printf 'none'; fi
+}
+
 # ── the gate, and the one place its reason is decided ────────────────────────────────────────
 # Verbs run in separate subshells with nothing shared, so note_ and gesture_ re-derive this.
 pane_equalize_gate_reason() {
@@ -529,6 +603,9 @@ pane_equalize_gate_reason() {
 what_pane_equalize()    { printf '%s' 'Cmd+Shift+E evens out split panes, in kitty and iTerm2 alike'; }
 cost_pane_equalize()    { printf '%s' 'two config lines and one plist key. No installs, no permissions. Needs one terminal relaunch.'; }
 profile_pane_equalize() { printf '%s' 'lite'; }
+# No network at all: it writes two config files. The one command it may hand a person downloads a
+# terminal, and that is the person's command, run by them, named in the receipt.
+egress_pane_equalize()  { :; }
 
 verify_pane_equalize() {
   local configured=0
@@ -549,14 +626,31 @@ gate_pane_equalize() {
   [ -n "$(pane_equalize_gate_reason)" ]
 }
 
+# pane_equalize_upgrade_note <what is wrong> <iterm2|kitty> <App name>
+pane_equalize_upgrade_note() {
+  case "$(pane_equalize_upgrade_route "${2:-}")" in
+    brew)  printf '%s; the command below upgrades it with Homebrew, then run the bootstrap again' "${1:-}" ;;
+    fetch) printf '%s; the command below replaces it with the pinned official release, checked by sha256 and by Gatekeeper before the old copy is removed — then run the bootstrap again' "${1:-}" ;;
+    *)     if [ "${2:-}" = kitty ] && ! pane_equalize_kitty_app >/dev/null 2>&1; then
+             printf '%s; this kitty is not an app bundle, so update it the way you installed it (https://sw.kovidgoyal.net/kitty/binary/)' "${1:-}"
+           else
+             printf '%s; it sits where only an administrator can replace it, so ask IT to update %s' "${1:-}" "${3:-}"
+           fi ;;
+  esac
+}
+
 note_pane_equalize() {
   case "$(pane_equalize_gate_reason)" in
     NOTERM)
-      printf '%s' "no terminal to bind Cmd+Shift+E in: this Mac has neither kitty nor iTerm2, only Terminal.app, which has no equalize action" ;;
+      if pane_equalize_admin_brew >/dev/null 2>&1; then
+        printf '%s' "no terminal to bind Cmd+Shift+E in: this Mac has neither kitty nor iTerm2, only Terminal.app, which has no equalize action. Installing one is your call; the command below installs iTerm2 with Homebrew, then run the bootstrap again"
+      else
+        printf '%s' "no terminal to bind Cmd+Shift+E in: this Mac has neither kitty nor iTerm2, only Terminal.app, which has no equalize action. Installing one is your call and needs no administrator: the command below downloads iTerm2's official release from iterm2.com into ~/Applications, checking the sha256 this release pins and Gatekeeper's verdict before anything lands. Then run the bootstrap again"
+      fi ;;
     ITERM_OLD)
-      printf '%s' "this iTerm2 build has no 'Arrange Split Panes Evenly' menu item, so Cmd+Shift+E would have nothing to invoke" ;;
+      pane_equalize_upgrade_note "this iTerm2 build has no 'Arrange Split Panes Evenly' menu item, so Cmd+Shift+E would have nothing to invoke" iterm2 iTerm2 ;;
     KITTY_OLD)
-      printf '%s' "kitty is older than $PANE_EQUALIZE_KITTY_FLOOR, the first release with the 'equalize' layout action" ;;
+      pane_equalize_upgrade_note "kitty is older than $PANE_EQUALIZE_KITTY_FLOOR, the first release with the 'equalize' layout action" kitty kitty ;;
     CONFLICT_DYN)
       printf '%s' "an iTerm2 DynamicProfile already binds Cmd+Shift+E and is re-read at every launch; a profile binding beats the menu shortcut, so the key would look bound and do nothing — decide which meaning keeps it" ;;
     CONFLICT_PLIST)
@@ -567,11 +661,22 @@ note_pane_equalize() {
 }
 
 gesture_pane_equalize() {
-  local c j tail
+  local c j tail app
   case "$(pane_equalize_gate_reason)" in
-    NOTERM)     printf '%s' 'brew install --cask iterm2' ;;
-    ITERM_OLD)  printf '%s' 'brew upgrade --cask iterm2' ;;
-    KITTY_OLD)  printf '%s' 'brew upgrade --cask kitty' ;;
+    NOTERM)
+      if pane_equalize_admin_brew >/dev/null 2>&1; then printf '%s' 'HOMEBREW_NO_ANALYTICS=1 brew install --cask iterm2'
+      else pane_equalize_iterm_fetch_cmd "\$HOME/Applications" 0; fi ;;
+    ITERM_OLD)
+      case "$(pane_equalize_upgrade_route iterm2)" in
+        brew)  printf '%s' 'HOMEBREW_NO_ANALYTICS=1 brew upgrade --cask iterm2' ;;
+        fetch) app="$(pane_equalize_iterm_app)" && pane_equalize_iterm_fetch_cmd "$(pane_equalize_shell_dir "$(dirname "$app")")" 1 ;;
+      esac ;;
+    KITTY_OLD)
+      case "$(pane_equalize_upgrade_route kitty)" in
+        brew)  printf '%s' 'HOMEBREW_NO_ANALYTICS=1 brew upgrade --cask kitty' ;;
+        fetch) app="$(pane_equalize_kitty_app)" && pane_equalize_fetch_cmd dmg "$PANE_EQUALIZE_KITTY_URL" "$PANE_EQUALIZE_KITTY_SHA256" \
+                 kitty.app "$(pane_equalize_shell_dir "$(dirname "$app")")" 1 ;;
+      esac ;;
     CONFLICT_DYN)
       c="$(pane_equalize_conflict)" || return 0
       j="${c#dyn }"
@@ -584,6 +689,7 @@ gesture_pane_equalize() {
       printf '%s' 'pgrep -x iTerm2 >/dev/null && echo "Quit iTerm2 first, then run this again." || { for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do /usr/libexec/PlistBuddy -c "Delete '"'"'New Bookmarks'"'"':$i:'"'"'Keyboard Map'"'"':'"'"'0x45-0x120000'"'"'" "$HOME/Library/Preferences/com.googlecode.iterm2.plist" >/dev/null 2>&1; done; echo "Cmd+Shift+E is free now — re-run the bootstrap."; }' ;;
     *) : ;;
   esac
+  return 0
 }
 
 install_pane_equalize() {
