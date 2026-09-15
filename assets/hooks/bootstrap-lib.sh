@@ -744,6 +744,46 @@ bootstrap_fetch_pinned() {
   return 1
 }
 
+# bootstrap_security_posture — what IT has on this Mac, read as a standard user, no network, no sudo:
+#   mdm <enrolled|not-enrolled|unknown>        `profiles status -type enrollment` (measured 0.1 s, rc 0)
+#   endpoint <bundle ids…|none|unknown>        activated+enabled system extensions from known EDR,
+#                                              DLP and secure-web-gateway vendors (systemextensionsctl)
+#   santa <lockdown|monitor|absent|unknown>    binary authorization: in lockdown an unlisted binary
+#                                              never runs, which is why a module reports "ask IT" for it
+# Seams for tests: BOOTSTRAP_POSTURE_PROFILES / _SYSEXT / _SANTACTL name the commands to run instead.
+BOOTSTRAP_POSTURE_VENDORS="crowdstrike microsoft.wdav sentinelone jamf.protect paloaltonetworks carbonblack
+  vmware.carbonblack sophos zscaler netskope forcepoint symantec broadcom cisco.amp trendmicro tanium
+  kandji elastic.endpoint rapid7 cybereason google.santa northpolesec.santa"
+bootstrap_security_posture() {
+  local profiles="${BOOTSTRAP_POSTURE_PROFILES:-/usr/bin/profiles}" sysext="${BOOTSTRAP_POSTURE_SYSEXT:-/usr/bin/systemextensionsctl}"
+  local santactl="${BOOTSTRAP_POSTURE_SANTACTL:-}" out v ids="" c
+  out="$("$profiles" status -type enrollment 2>/dev/null)"
+  case "$out" in
+    *"MDM enrollment: Yes"*) printf 'mdm enrolled\n' ;;
+    *"MDM enrollment: No"*)  printf 'mdm not-enrolled\n' ;;
+    *)                       printf 'mdm unknown\n' ;;
+  esac
+  if out="$("$sysext" list 2>/dev/null)"; then
+    for v in $BOOTSTRAP_POSTURE_VENDORS; do
+      c="$(printf '%s\n' "$out" | /usr/bin/grep 'activated enabled' | /usr/bin/grep -io "[a-z0-9.-]*${v}[a-z0-9.-]*" | /usr/bin/head -n 1)"
+      [ -n "$c" ] && case " $ids " in *" $c "*) : ;; *) ids="$ids $c" ;; esac
+    done
+    if [ -n "$ids" ]; then printf 'endpoint %s\n' "${ids# }"; else printf 'endpoint none\n'; fi
+  else
+    printf 'endpoint unknown\n'
+  fi
+  if [ -z "$santactl" ]; then
+    for c in /usr/local/bin/santactl /Applications/Santa.app/Contents/MacOS/santactl; do [ -x "$c" ] && { santactl="$c"; break; }; done
+  fi
+  if [ -z "$santactl" ]; then printf 'santa absent\n'; return 0; fi
+  out="$("$santactl" status 2>/dev/null | /usr/bin/grep -i '^ *mode' | /usr/bin/head -n 1)"
+  case "$out" in
+    *[Ll]ockdown*) printf 'santa lockdown\n' ;;
+    *[Mm]onitor*)  printf 'santa monitor\n' ;;
+    *)             printf 'santa unknown\n' ;;
+  esac
+}
+
 # ── A TLS-inspecting proxy (Zscaler, Netskope, …). IT installs its root in the System keychain, and
 # every Apple-built client trusts it — /usr/bin/curl, git, Homebrew, ollama, URLSession — because
 # Apple's LibreSSL falls back to the keychain. Node does NOT: it ships its own roots, so npm and every
@@ -1086,6 +1126,18 @@ bootstrap_selftest() {
   printf 'tampered\n' > "$T/mirror${T}/vendor/art"; printf 'pinned bytes\n' > "$T/vendor/art"
   BOOTSTRAP_ARTIFACT_MIRROR="file://$T/mirror" bootstrap_fetch_pinned "file://$T/vendor/art" "$A" "$T/m-dst/c" 2>/dev/null; rc=$?
   bootstrap_is "mirror: a tampered mirror byte is refused, and the vendor's copy is kept" "$rc/$(/usr/bin/shasum -a 256 "$T/m-dst/c" 2>/dev/null | /usr/bin/cut -d' ' -f1)" "0/$A"
+
+  # ── 19. Security posture, from fixtures (the real Mac is not the instrument here). ────────────────
+  printf '#!/bin/sh\necho "Enrolled via DEP: Yes"; echo "MDM enrollment: Yes (User Approved)"\n' > "$T/profiles"
+  printf '#!/bin/sh\nprintf "*\t*\tX9E956P446\tcom.crowdstrike.falcon.Agent (7.1/7.1)\tFalcon\t[activated enabled]\n*\t*\tEQHXZ8M8AV\tcom.google.santa.daemon (1/1)\tSanta\t[activated enabled]\n\t*\tR2H967U7J8\tcom.razer.appengine.driver (0/1)\tRazer\t[activated waiting for user]\n"\n' > "$T/sysext"
+  printf '#!/bin/sh\necho ">>> Daemon Info"; echo "  Mode                      | Lockdown"\n' > "$T/santactl"
+  chmod 755 "$T/profiles" "$T/sysext" "$T/santactl"
+  out="$(BOOTSTRAP_POSTURE_PROFILES="$T/profiles" BOOTSTRAP_POSTURE_SYSEXT="$T/sysext" BOOTSTRAP_POSTURE_SANTACTL="$T/santactl" bootstrap_security_posture | /usr/bin/tr '\n' ';')"
+  bootstrap_is "posture: MDM, the EDR and Santa lockdown are all read" "$out" "mdm enrolled;endpoint com.crowdstrike.falcon.Agent com.google.santa.daemon;santa lockdown;"
+  printf '#!/bin/sh\necho "Enrolled via DEP: No"; echo "MDM enrollment: No"\n' > "$T/profiles"
+  printf '#!/bin/sh\nprintf "*\t*\tW5364U7YZB\tio.tailscale.ipn.macsys.network-extension (1/1)\tTailscale\t[activated enabled]\n"\n' > "$T/sysext"
+  out="$(BOOTSTRAP_POSTURE_PROFILES="$T/profiles" BOOTSTRAP_POSTURE_SYSEXT="$T/sysext" BOOTSTRAP_POSTURE_SANTACTL="$T/none" bootstrap_security_posture | /usr/bin/tr '\n' ';')"
+  bootstrap_is "control: an unmanaged Mac with a VPN extension reads clean" "$out" "mdm not-enrolled;endpoint none;santa unknown;"
 
   printf '\n%s/%s cases passed.\n' "$((bootstrap__t - bootstrap__f))" "$bootstrap__t"
   rm -rf "$T" 2>/dev/null

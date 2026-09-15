@@ -201,6 +201,7 @@ It is:
 | `bootstrap_is_admin` | 0 iff this user is in the admin group. A standard user cannot run the Homebrew installer or write `/Applications`, so never offer them a gesture that needs either. |
 | `bootstrap_find_tool name` · `bootstrap_find_app Name.app` · `bootstrap_tools_dir` | the one search order: a pinned user-owned copy in `$BOOTSTRAP_STATE_DIR/tools/bin`, Homebrew's two prefixes, then `PATH` · `/Applications`, then `$HOME/Applications` |
 | `bootstrap_fetch_pinned url sha256 dest` | a third-party download kept only when its sha256 is the one pinned in the module; `BOOTSTRAP_ARTIFACT_MIRROR` first, then the vendor, each with a 15 s connect timeout. rc 0 kept · 1 not fetched · 2 refused and deleted |
+| `bootstrap_security_posture` | what IT has on this Mac, read with no network and no sudo: `mdm enrolled\|not-enrolled\|unknown`, `endpoint <system-extension ids>\|none\|unknown` (known EDR/DLP/gateway vendors), `santa lockdown\|monitor\|absent\|unknown`. `--list`, `--plan` and the menu print it; a module may call it to name IT in a verdict |
 | `bootstrap_brew brew args…` | Homebrew with its analytics off |
 | `bootstrap_managed_sources agent` · `bootstrap_policy agent key [raw\|json]` · `bootstrap_policy_restricts agent hooks\|mcp\|skills` | read the policy files Claude Code (`claude`) and Copilot CLI (`copilot`) themselves read. A module whose surface IT reserves must not report `SATISFIED`: it is `NEEDS_HUMAN`, "ask IT", with no gesture. |
 
@@ -325,7 +326,7 @@ bash verify.sh --only <name>                      # a cold, separate process agr
 A module is done when `verify_` passes from a cold process, the second install run is a no-op,
 the no-jq arm reaches the same end state, and every gesture you print runs as typed.
 
-## Catalog metadata — five OPTIONAL verbs
+## Catalog metadata — six OPTIONAL verbs
 
 A module may describe itself. These are optional by design: the six required verbs are the
 contract, and a module declaring none of them still works.
@@ -337,6 +338,7 @@ contract, and a module declaring none of them still works.
 | `profile_<m>` | the smallest profile containing it: `lite`, `standard`, `full` | `standard` |
 | `needs_<m>` | space-separated modules it requires to be meaningful | none |
 | `egress_<m>` | one line per host it or an app it sets up can reach: `<host> <install\|run> <purpose>`. Empty output means no network at all | **UNDECLARED**, which fails `--egress` |
+| `clearance_<m>` | one line per thing a company's IT or security team usually governs, `<class> <clause>`. Classes: `data` (work data copied to this disk, outside DLP, retention and eDiscovery) · `background` (runs at login or listens on a port) · `trust` (keychain trust, a signing identity, a stripped quarantine flag) · `permission` (a macOS privacy grant) · `software` (an app or binary IT did not distribute) · `agent` (makes a coding agent run something on its own). Empty output means nothing IT usually governs | **UNDECLARED**, shown as "ask IT" in `--list`, `--plan` and the menu |
 
 `egress_` is the one catalog verb whose absence is not neutral. `--egress` prints every
 declaration, then runs `assets/local-only-check.sh`, which reads the machine — the configuration
@@ -344,6 +346,12 @@ of every app and agent a module sets up — without trusting any declaration, an
 there can send local data to a cloud AI service. A declaration is a promise; the check is the
 evidence. Do not list the driver's own fetch of this repo (it declares that once) or the agents'
 own providers (the report states those once).
+
+`clearance_` answers a different question from `egress_`: not *where can data go* but *what would a
+company's IT team be approving*. `--list` prints every line, `--plan` prints them under each selected
+module, and the menu marks such a module `IT` and shows its lines on `?N` and on the confirm screen,
+under one line of `bootstrap_security_posture` saying whether an organisation manages this Mac. The
+driver never refuses a module on the strength of it: it discloses, and the person decides.
 
 **Why the default profile is `standard` and not `lite`:** silence must never be dangerous. An
 undeclared module is not in `lite`, so a module nobody has priced can never arrive by default on a

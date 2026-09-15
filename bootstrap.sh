@@ -468,6 +468,36 @@ driver_meta() {                                     # driver_meta <module-file> 
   printf '%s' "$4"
 }
 
+# driver_clearance <module-file> <module> — the optional `clearance_<m>` verb: one line per thing a
+# company's IT or security team usually governs (`<class> <clause>`; classes data background trust
+# permission software agent). Empty = nothing. A module without the verb prints UNDECLARED, which is
+# shown as "ask IT" — like egress_, silence must never read as "nothing to clear".
+driver_clearance() {
+  if driver_has_verb "$1" "$2" clearance; then driver_call "$1" "$2" clearance 2>/dev/null; return 0; fi
+  printf 'UNDECLARED\n'
+}
+driver_clearance_classes() {                        # the classes alone, comma-joined: "data,background"
+  driver_clearance "$1" "$2" | awk 'NF { c = ($1 == "UNDECLARED") ? "undeclared" : $1
+    if (!(c in seen)) { seen[c] = 1; out = out (out ? "," : "") c } } END { printf "%s", out }'
+}
+
+# driver_posture_say [fd] — one line on what IT has on this Mac (MDM, endpoint security, Santa), read
+# with no network and no sudo, and when it is managed, the one instruction that follows from it.
+driver_posture_say() {
+  local p mdm ep santa managed=0
+  p="$(bootstrap_security_posture 2>/dev/null)"
+  mdm="$(printf '%s\n' "$p" | sed -n 's/^mdm //p')"; ep="$(printf '%s\n' "$p" | sed -n 's/^endpoint //p')"
+  santa="$(printf '%s\n' "$p" | sed -n 's/^santa //p')"
+  [ "$mdm" = enrolled ] && managed=1
+  case "$ep" in none|unknown|'') : ;; *) managed=1 ;; esac
+  case "$santa" in lockdown|monitor) managed=1 ;; esac
+  printf '  THIS MAC  MDM: %s · endpoint security: %s · Santa: %s\n' "${mdm:-unknown}" "${ep:-unknown}" "${santa:-unknown}"
+  if [ "$managed" = 1 ]; then
+    printf '            An organisation manages this Mac. Clear every module marked IT with your IT team\n'
+    printf '            before you install it: its lines say exactly what they would be approving.\n'
+  fi
+}
+
 # Notes from inside a command substitution. stdout belongs to the caller's capture.
 driver_note_out() { printf '%s\n' "$*" >&2; }
 
@@ -593,8 +623,9 @@ driver_select() {
 
 # ── --list ────────────────────────────────────────────────────────────────────────────────────
 driver_cmd_list() {
-  local m f what cost prof needs selected
+  local m f what cost prof needs selected line
   selected=" $(driver_select) " || return 30
+  printf '\n'; driver_posture_say
   printf '\n  MODULES — a * marks what THIS invocation would act on (profile: %s)\n\n' "${BOOTSTRAP_PROFILE:-$BOOTSTRAP_PROFILE_DEFAULT}"
   for m in $BOOTSTRAP_MANIFEST; do
     f="$(driver_module_file "$m")" || { printf '  ?  %-16s (module file unavailable)\n' "$m"; continue; }
@@ -607,8 +638,15 @@ driver_cmd_list() {
     printf '       what : %s\n' "$what"
     printf '       cost : %s\n' "$cost"
     [ -n "$needs" ] && printf '       needs: %s\n' "$needs"
+    driver_clearance "$f" "$m" | while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ "$line" = UNDECLARED ]; then printf '       IT   : not declared by this module — ask IT before installing it\n'
+      else printf '       IT   : %s\n' "$line"; fi
+    done
     printf '\n'
   done
+  printf '  IT lines name what a company IT or security team usually governs: data (work data copied to\n'
+  printf '  this disk, outside DLP and retention), background, trust, permission, software, agent.\n\n'
   printf '  PROFILES\n'
   printf '    lite      config files only. No Homebrew, no permissions, no Apple ID. THE DEFAULT.\n'
   printf '    standard  lite + the succession engine, a local rewrite model and Outlook.\n'
@@ -759,8 +797,8 @@ driver_pick_read() {
 # driver_cmd_pick — sets BOOTSTRAP_ONLY to what the person chose, dependencies included.
 # rc 0 chosen and confirmed · 30 they quit, or never answered (nothing was installed).
 driver_cmd_pick() {
-  local i n m f sel tok line resolved chosen k want
-  local -a pm pp pw pc pon
+  local i n m f sel tok line resolved chosen k want it
+  local -a pm pp pw pc pon pit pf
   sel=" $(driver_select 2>/dev/null) " || return 30
 
   n=0
@@ -770,10 +808,13 @@ driver_cmd_pick() {
     pp[n]="$(driver_meta "$f" "$m" profile standard)"
     pw[n]="$(driver_meta "$f" "$m" what "$m")"
     pc[n]="$(driver_meta "$f" "$m" cost unpriced)"
+    pit[n]="$(driver_clearance_classes "$f" "$m")"
+    pf[n]="$f"
     case "$sel" in *" $m "*) pon[n]=1 ;; *) pon[n]=0 ;; esac
     n=$((n + 1))
   done
   [ "$n" -gt 0 ] || { driver_note_out "bootstrap: no module could be read — nothing to choose from."; return 30; }
+  printf '\n' >&5; driver_posture_say >&5
 
   while :; do
     driver_pick_drain
@@ -782,12 +823,14 @@ driver_cmd_pick() {
     while [ "$i" -lt "$n" ]; do
       if [ "${pon[i]}" = 1 ]; then k='x'; else k=' '; fi
       line="${pw[i]}"
-      [ "${#line}" -gt 62 ] && line="${line:0:59}..."
-      printf '   [%s] %2d  %-21s %-8s %s\n' "$k" "$((i + 1))" "${pm[i]}" "${pp[i]}" "$line" >&5
+      [ "${#line}" -gt 58 ] && line="${line:0:55}..."
+      if [ -n "${pit[i]}" ]; then it='IT'; else it='  '; fi
+      printf '   [%s] %2d  %-21s %-8s %s %s\n' "$k" "$((i + 1))" "${pm[i]}" "${pp[i]}" "$it" "$line" >&5
       i=$((i + 1))
     done
     printf '\n  Type numbers to switch modules on or off (e.g. 5 7), or a profile: lite, standard, full, none.\n' >&5
-    printf '  ?5 shows what module 5 costs. Press Enter when the list is right; q quits and installs nothing.\n' >&5
+    printf '  ?5 shows what module 5 costs and, where it is marked IT, what your IT team would be approving.\n' >&5
+    printf '  Press Enter when the list is right; q quits and installs nothing.\n' >&5
     printf '  Nothing is installed until you confirm; unanswered, this gives up after %s seconds.\n  > ' "${BOOTSTRAP_PICK_TIMEOUT:-600}" >&5
     driver_pick_read || { printf '\n' >&5; driver_note_out "bootstrap: no answer — nothing was installed."; return 30; }
 
@@ -801,6 +844,11 @@ driver_cmd_pick() {
       for m in $resolved; do
         i=0; while [ "$i" -lt "$n" ] && [ "${pm[i]}" != "$m" ]; do i=$((i + 1)); done
         printf '   %-21s %s\n' "$m" "${pc[i]:-unpriced}" >&5
+        [ -n "${pit[i]}" ] && driver_clearance "${pf[i]}" "$m" | while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          [ "$line" = UNDECLARED ] && line="not declared by this module — ask IT before installing it"
+          printf '   %-21s IT: %s\n' "" "$line"
+        done >&5
       done
       driver_pick_drain
       printf '\n  Install these now? [Y/n] ' >&5
@@ -829,6 +877,11 @@ driver_cmd_pick() {
           case "$k" in ''|*[!0-9]*) printf '  ?%s — which number?\n' "$k" >&5; continue ;; esac
           if [ "$k" -ge 1 ] && [ "$k" -le "$n" ]; then
             printf '\n  %s — %s\n  cost: %s\n' "${pm[k-1]}" "${pw[k-1]}" "${pc[k-1]}" >&5
+            driver_clearance "${pf[k-1]}" "${pm[k-1]}" | while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              [ "$line" = UNDECLARED ] && line="not declared by this module — ask IT before installing it"
+              printf '  IT: %s\n' "$line"
+            done >&5
           else printf '  there is no module %s\n' "$k" >&5; fi ;;
         *[!0-9]*) printf '  "%s" is not a number or a profile name\n' "$tok" >&5 ;;
         *)
@@ -870,12 +923,13 @@ EOF
 
 # ── --plan — writes NOTHING. Distinct from the removed --dry-run, which wrote the receipt. ─────
 driver_cmd_plan() {
-  local m f sel st
+  local m f sel st line
   sel="$(driver_select)" || return 30
   if [ -z "$sel" ]; then
     driver_note_out "bootstrap: this selection contains no modules — nothing to plan. Try --list."
     return 30
   fi
+  printf '\n'; driver_posture_say
   printf '\n  PLAN — profile %s. This run writes NOTHING.\n\n' "${BOOTSTRAP_PROFILE:-$BOOTSTRAP_PROFILE_DEFAULT}"
   for m in $BOOTSTRAP_MANIFEST; do
     case " $sel " in *" $m "*) : ;; *) printf '    skip  %-16s (not in this selection)\n' "$m"; continue ;; esac
@@ -884,6 +938,11 @@ driver_cmd_plan() {
     elif driver_call "$f" "$m" gate >/dev/null 2>&1; then st="NEEDS YOU: $(driver_note "$f" "$m")"
     else st="would install: $(driver_meta "$f" "$m" what "$m")"; fi
     printf '    %-16s %s\n' "$m" "$st"
+    driver_clearance "$f" "$m" | while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      [ "$line" = UNDECLARED ] && line="not declared by this module — ask IT before installing it"
+      printf '    %-16s   IT: %s\n' "" "$line"
+    done
   done
   printf '\n  Nothing above has happened. Run without --plan to act.\n\n'
 }
