@@ -1,0 +1,1023 @@
+#!/bin/bash
+# shared-folder — point a local path at a folder OneDrive syncs, keep the pointer right, and keep a
+# read-only markdown view of what is inside it.
+#
+#   shared-folder add <link-path> <relative-path> [<web-url>]
+#                                     link <link-path> to <relative-path> under the ONE OneDrive root
+#                                     that has it. <web-url> (optional, https) is the folder's SharePoint
+#                                     page, kept so a "not synced" report can open it.
+#   shared-folder remove <link-path>  remove the symlink (only if it is one), its views, and the record
+#   shared-folder check [<link-path>] one line per link: STATE <tab> link <tab> detail; rc 0 iff all OK
+#   shared-folder relink              re-resolve every link and repoint any that MOVED; idempotent
+#   shared-folder refresh [<link-path>]   regenerate the markdown views in <link-path>.views/
+#   shared-folder list                the records, one per line: link <tab> relative-path [<tab> web-url]
+#   shared-folder --version | --selftest
+#
+# WHY A SYMLINK, AND WHY IT IS RE-RESOLVED ON EVERY COMMAND. OneDrive's replica under
+# $HOME/Library/CloudStorage/OneDrive-<Org>/ IS the synced source of truth, so a link into it adds no
+# copy that could drift. But that root's NAME is not stable: it embeds the organisation's display name
+# and moves on a tenant rename and on the sync-engine upgrade. So the record holds the path RELATIVE to
+# a root, never an absolute target, and every command globs the roots again and finds which one has it.
+#
+# check states:
+#   OK            the link points where the relative path resolves today (and views, if any, are fresh)
+#   MOVED         the link is absent or points elsewhere; `relink` repoints it
+#   MISSING       no OneDrive root has the relative path — the folder is no longer synced
+#   AMBIGUOUS n   n roots have it; nothing is guessed — remove the duplicate root or re-add
+#   NOT-A-LINK    a real file or folder sits at the link path; it is never touched
+#   STALE-VIEWS n n views are older than their source; `refresh` regenerates them
+#
+# add exit codes: 20 not synced · 21 ambiguous · 22 link path exists and is not a symlink ·
+#                 23 link path is inside a synced cloud folder · 2 usage · 1 could not write.
+#
+# VIEWS are a derived copy, so they are treated as one: they live BESIDE the link, never inside a cloud
+# folder (writing there would upload them to the client); every file is chmod 444 because a view is for
+# reading, not editing; each carries the size, mtime and sha256 of the source it was made from and the
+# converter that made it, so a reader can see how old it is and a converter upgrade is a rebaseline.
+#
+# 🚨 A DATALESS FILE IS NEVER READ. An online-only OneDrive file is a placeholder whose BSD flags carry
+# SF_DATALESS (0x40000000); opening it downloads it. Its view says so and names the one gesture that
+# fixes it — Always keep on this device — and its bytes are never hashed or converted.
+#
+# Seams (tests): SHARED_FOLDERS_CLOUD_DIR replaces $HOME/Library/CloudStorage; BOOTSTRAP_STATE_DIR moves
+# the records; SHARED_FOLDERS_COMPUTER_NAME replaces `scutil --get ComputerName`; SHARED_FOLDERS_CONVERTER
+# names markdown-convert.sh; DATALESS_STAT_COMMAND replaces /usr/bin/stat for the flag read only.
+#
+# Nothing here writes inside a cloud folder, deletes a symlink's target, or needs any permission.
+
+set -u
+
+SHARED_FOLDER_VERSION="shared-folder 1"
+SHARED_FOLDER_SF_DATALESS=1073741824           # 0x40000000, from <sys/stat.h>
+SHARED_FOLDER_MAX_DEPTH=6
+SHARED_FOLDER_TAB="$(printf '\t')"
+SHARED_FOLDER_NEWLINE='
+'
+SHARED_FOLDER_NOT_SYNCED_HINT="not synced: add it with Add shortcut to My files or Sync"
+SHARED_FOLDER_DATALESS_HINT="Always keep on this device"
+
+shared_folder_say()        { printf 'shared-folder: %s\n' "$*" >&2; }
+shared_folder_state_dir()  { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/shared-folders"; }
+shared_folder_links_file() { printf '%s/links' "$(shared_folder_state_dir)"; }
+shared_folder_cloud_dir()  { printf '%s' "${SHARED_FOLDERS_CLOUD_DIR:-$HOME/Library/CloudStorage}"; }
+
+# ── markdown-convert.sh: beside us in the repo (assets/), beside us once installed
+#    ($BOOTSTRAP_STATE_DIR/bin → ../shared-folders/), or where the state dir keeps it. ──────────────────
+shared_folder_converter() {
+  local self_dir candidate
+  self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)" || self_dir="."
+  for candidate in "${SHARED_FOLDERS_CONVERTER:-}" "$self_dir/../markdown-convert.sh" \
+                   "$self_dir/../shared-folders/markdown-convert.sh" "$(shared_folder_state_dir)/markdown-convert.sh"; do
+    [ -n "$candidate" ] && [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+# ── paths ──────────────────────────────────────────────────────────────────────────────────────────
+# shared_folder_absolute <path> — absolute and logical: "." and empty segments dropped, ".." taken
+# against the segment typed before it (as `cd -L` does), symlinks kept, no trailing slash. Purely
+# lexical, so it gives the SAME key whether or not the folders on the way exist yet — it is the record
+# key, and `add ./links/a` before links/ exists must name the record `remove ./links/a` finds after.
+shared_folder_absolute() {
+  local path="$1" out="" segment rest
+  case "$path" in /*) : ;; *) path="$PWD/$path" ;; esac
+  rest="$path/"
+  while [ -n "$rest" ]; do
+    segment="${rest%%/*}"; rest="${rest#*/}"
+    case "$segment" in
+      ''|.) : ;;
+      ..)   out="${out%/*}" ;;
+      *)    out="$out/$segment" ;;
+    esac
+  done
+  printf '%s' "${out:-/}"
+}
+
+# shared_folder_lower <text> — ASCII case folded. macOS volumes are case-insensitive by default, so
+# $HOME/library/cloudstorage IS the synced folder, and `pwd -P` keeps whatever case was typed.
+shared_folder_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# shared_folder_physical_parent <link-path> — where the link would REALLY live: the physical path of
+# its deepest existing ancestor directory, plus what is left. The link itself is never followed (an
+# existing link into the cloud would otherwise look like it lives there).
+shared_folder_physical_parent() {
+  local dir tail="" real
+  dir="$(dirname -- "$1")"
+  while [ "$dir" != "/" ] && [ ! -d "$dir" ]; do tail="/$(basename -- "$dir")$tail"; dir="$(dirname -- "$dir")"; done
+  real="$(CDPATH='' cd -P -- "$dir" 2>/dev/null && pwd -P)" || return 1
+  printf '%s%s/%s' "${real%/}" "$tail" "$(basename -- "$1")"
+}
+
+# shared_folder_inside_sync <physical-path> — rc 0 when the path is inside a folder a sync client
+# uploads: the cloud storage dir (every OneDrive root, and every other provider's) or iCloud Drive.
+# Compared with the letter case folded on both sides (see shared_folder_lower); on a case-sensitive
+# volume that can only refuse more, never less.
+shared_folder_inside_sync() {
+  local area real path
+  path="$(shared_folder_lower "$1")"
+  for area in "$(shared_folder_cloud_dir)" "$HOME/Library/Mobile Documents"; do
+    [ -d "$area" ] || continue
+    real="$(CDPATH='' cd -P -- "$area" 2>/dev/null && pwd -P)" || continue
+    real="$(shared_folder_lower "$real")"
+    case "$path/" in "$real"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+# shared_folder_git_work_tree <link> — prints the folder holding the .git of the work tree the link
+# would sit in, rc 1 when it is in none. Found by walking up for a .git entry, so no git (and no
+# "install the command line tools" dialog on a fresh Mac) is needed to ask.
+shared_folder_git_work_tree() {
+  local dir
+  dir="$(dirname -- "$1")"
+  while :; do
+    [ -e "$dir/.git" ] && { printf '%s' "$dir"; return 0; }
+    [ "$dir" = "/" ] && return 1
+    dir="$(dirname -- "$dir")"
+  done
+}
+
+# shared_folder_clean_relative <relative-path> — no leading or trailing slash, no "." or ".."
+# segment, not empty. Prints the cleaned path; rc 1 when it cannot be one.
+shared_folder_clean_relative() {
+  local rel="$1"
+  while [ "${rel#/}" != "$rel" ]; do rel="${rel#/}"; done
+  while [ "${rel%/}" != "$rel" ]; do rel="${rel%/}"; done
+  [ -n "$rel" ] || return 1
+  case "/$rel/" in */../*|*/./*|*//*) return 1 ;; esac
+  printf '%s' "$rel"
+}
+
+shared_folder_has_control_character() {
+  case "$1" in *"$SHARED_FOLDER_TAB"*|*"$SHARED_FOLDER_NEWLINE"*) return 0 ;; esac
+  return 1
+}
+
+# ── the cloud roots, globbed afresh every time ────────────────────────────────────────────────────
+shared_folder_roots() {
+  local root
+  for root in "$(shared_folder_cloud_dir)"/OneDrive*; do
+    [ -d "$root" ] && printf '%s\n' "$root"
+  done
+}
+
+# shared_folder_resolve <relative-path> — sets resolve_count, resolve_target (the last match) and
+# resolve_matches (every match, one per line).
+shared_folder_resolve() {
+  local root
+  resolve_count=0; resolve_target=""; resolve_matches=""
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    if [ -e "$root/$1" ]; then
+      resolve_count=$((resolve_count + 1)); resolve_target="$root/$1"
+      resolve_matches="$resolve_matches  $root/$1$SHARED_FOLDER_NEWLINE"
+    fi
+  done <<EOF
+$(shared_folder_roots)
+EOF
+}
+
+# ── records ────────────────────────────────────────────────────────────────────────────────────────
+# shared_folder_record_get <link> — sets record_key (the key as stored), record_relative and
+# record_url; rc 1 when not recorded. A stored key is matched as written, or after the same
+# canonicalisation <link> went through, so a record an older release keyed "<dir>/./links/a" is still
+# the record of "<dir>/links/a".
+shared_folder_record_get() {
+  local link rel url
+  record_key=""; record_relative=""; record_url=""
+  [ -f "$(shared_folder_links_file)" ] || return 1
+  while IFS="$SHARED_FOLDER_TAB" read -r link rel url; do
+    [ -n "$link" ] || continue
+    if [ "$link" = "$1" ] || [ "$(shared_folder_absolute "$link")" = "$1" ]; then
+      record_key="$link"; record_relative="$rel"; record_url="$url"; return 0
+    fi
+  done < "$(shared_folder_links_file)"
+  return 1
+}
+
+# shared_folder_record_write <link> [<line>] — replace the link's record with <line> in place (append
+# when new), or drop it when <line> is empty. The file is rewritten only when its bytes change.
+shared_folder_record_write() {
+  local file tmp
+  file="$(shared_folder_links_file)"
+  mkdir -p "$(dirname -- "$file")" 2>/dev/null || return 1
+  tmp="$file.tmp.$$"
+  [ -f "$file" ] || : > "$file" || return 1
+  RECORD_LINK="$1" RECORD_LINE="${2:-}" /usr/bin/awk -F'\t' '
+    $1 == ENVIRON["RECORD_LINK"] { if (!done && ENVIRON["RECORD_LINE"] != "") print ENVIRON["RECORD_LINE"]; done = 1; next }
+    { print }
+    END { if (!done && ENVIRON["RECORD_LINE"] != "") print ENVIRON["RECORD_LINE"] }
+  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 0; fi
+  mv -f "$tmp" "$file"
+}
+
+# shared_folder_each_record <function> [<only-link>] — call <function> link relative url per record.
+# Returns the OR of the calls' failures, or 2 when <only-link> is not recorded.
+shared_folder_each_record() {
+  local fn="$1" only="${2:-}" link rel url failed=0 list
+  list="$(shared_folder_links_file)"
+  if [ -n "$only" ]; then
+    only="$(shared_folder_absolute "$only")"
+    shared_folder_record_get "$only" || { shared_folder_say "not a recorded link: $only"; return 2; }
+    "$fn" "$only" "$record_relative" "$record_url" || failed=1
+    return "$failed"
+  fi
+  [ -f "$list" ] || return 0
+  while IFS="$SHARED_FOLDER_TAB" read -r link rel url; do
+    [ -n "$link" ] || continue
+    "$fn" "$link" "$rel" "$url" < /dev/null || failed=1
+  done < "$list"
+  return "$failed"
+}
+
+# ── dataless detection (the same parse as markdown-convert.sh; see its header) ─────────────────────
+shared_folder_flags_say_dataless() {
+  local hex="${1:-}"
+  case "$hex" in ''|*[!0-9a-fA-F]*) return 0 ;; esac
+  [ "${#hex}" -le 15 ] || return 0
+  [ $(( 0x$hex & SHARED_FOLDER_SF_DATALESS )) -ne 0 ]
+}
+shared_folder_is_dataless() {
+  local flags
+  flags="$("${DATALESS_STAT_COMMAND:-/usr/bin/stat}" -L -f %Xf "$1" 2>/dev/null)" || return 0
+  shared_folder_flags_say_dataless "$flags"
+}
+
+# ── link state ─────────────────────────────────────────────────────────────────────────────────────
+# shared_folder_link_state <link> <relative> — sets state (one of the check words), state_detail and
+# state_target. Views are not looked at here.
+shared_folder_link_state() {
+  local link="$1" rel="$2" current
+  state=""; state_detail=""; state_target=""
+  if [ -e "$link" ] && [ ! -L "$link" ]; then
+    state="NOT-A-LINK"; state_detail="a real file or folder is at the link path; it is left alone"; return
+  fi
+  shared_folder_resolve "$rel"
+  if [ "$resolve_count" -eq 0 ]; then state="MISSING"; state_detail="$rel — $SHARED_FOLDER_NOT_SYNCED_HINT"; return; fi
+  if [ "$resolve_count" -gt 1 ]; then
+    state="AMBIGUOUS $resolve_count"; state_detail="$rel is in $resolve_count OneDrive roots; nothing is guessed"; return
+  fi
+  state_target="$resolve_target"
+  if [ ! -L "$link" ]; then state="MOVED"; state_detail="no link yet; relink creates it -> $state_target"; return; fi
+  current="$(readlink -- "$link")"
+  if [ "$current" != "$state_target" ]; then state="MOVED"; state_detail="points at $current; now at $state_target"; return; fi
+  state="OK"; state_detail="$state_target"
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+# VIEWS
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+shared_folder_extension() {
+  local name="${1##*/}"
+  case "$name" in .*.*) name="${name#.}" ;; .*) return 0 ;; esac
+  case "$name" in *.*) : ;; *) return 0 ;; esac
+  printf '%s' "${name##*.}" | tr '[:upper:]' '[:lower:]'
+}
+
+# shared_folder_walk <target> — every file a view could be made of, relative to <target>, sorted.
+# Hidden files and folders (.DS_Store, .~lock*, .git …) are skipped and hidden folders never entered;
+# Office lock files (~$*) and *.tmp are skipped; nothing deeper than SHARED_FOLDER_MAX_DEPTH; nested
+# symlinks are not followed (find -P, -type f).
+# Names come back NUL-delimited: a client can name a folder "x<newline>..", and a newline-delimited
+# walk would read a file under it as "../README.md" — a view written outside .views, of a file outside
+# the linked folder. A name holding a newline gets no view, and neither does any path with an empty,
+# "." or ".." segment.
+shared_folder_walk() {
+  local path
+  ( CDPATH='' cd -P -- "$1" 2>/dev/null || exit 1
+    /usr/bin/find . -mindepth 1 -maxdepth "$SHARED_FOLDER_MAX_DEPTH" \
+      \( -type d -name '.*' -prune \) -o \
+      \( -type f ! -name '.*' ! -name '~$*' ! -name '*.tmp' -print0 \) 2>/dev/null ) \
+    | while IFS= read -r -d '' path; do
+        path="${path#./}"
+        case "$path" in *"$SHARED_FOLDER_NEWLINE"*) continue ;; esac
+        case "/$path/" in */../*|*/./*|*//*) continue ;; esac
+        printf '%s\n' "$path"
+      done | LC_ALL=C sort
+}
+
+# shared_folder_converter_id_for <extension> <file> — sets converter_id, cached per extension for the run.
+shared_folder_converter_id_for() {
+  local cached
+  case "$converter_cache" in
+    *"$SHARED_FOLDER_NEWLINE$1$SHARED_FOLDER_TAB"*)
+      cached="${converter_cache#*"$SHARED_FOLDER_NEWLINE$1$SHARED_FOLDER_TAB"}"
+      converter_id="${cached%%"$SHARED_FOLDER_NEWLINE"*}"; return ;;
+  esac
+  converter_id="$(/bin/bash "$converter" --converter-id "$2" 2>/dev/null | sed -n 1p)"
+  [ -n "$converter_id" ] || converter_id="none"
+  converter_cache="$converter_cache$SHARED_FOLDER_NEWLINE$1$SHARED_FOLDER_TAB$converter_id$SHARED_FOLDER_NEWLINE"
+}
+
+# shared_folder_view_meta <view> — size|mtime|sha256|converter|status from its front matter.
+shared_folder_view_meta() {
+  /usr/bin/awk '
+    NR == 1 { if ($0 != "---") exit; next }
+    $0 == "---" { exit }
+    { key = $0; sub(/:.*/, "", key); value = $0; sub(/^[^:]*:[ ]?/, "", value)
+      if (value ~ /^".*"$/) value = substr(value, 2, length(value) - 2)
+      field[key] = value }
+    END { printf "%s|%s|%s|%s|%s\n", field["source_size"], field["source_mtime"], field["source_sha256"], field["converter"], field["status"] }
+  ' "$1" 2>/dev/null
+}
+
+shared_folder_yaml_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"; value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+# shared_folder_source_stat <file> — sets source_size and source_mtime (ISO 8601 UTC with nanoseconds,
+# so two edits in one second still differ). Metadata only: stat never opens the file.
+shared_folder_source_stat() {
+  local meta fraction iso
+  meta="$(TZ=UTC /usr/bin/stat -f '%z|%Fm|%Sm' -t '%Y-%m-%dT%H:%M:%S' "$1" 2>/dev/null)" || return 1
+  source_size="${meta%%|*}"; meta="${meta#*|}"
+  fraction="${meta%%|*}"; iso="${meta#*|}"
+  case "$fraction" in *.*) fraction=".${fraction#*.}" ;; *) fraction="" ;; esac
+  source_mtime="$iso${fraction}Z"
+}
+
+# shared_folder_view_check <target> <views> <relative> — the CHEAP stale test. Sets view_file,
+# view_stale (0|1), view_dataless (0|1), old_* from the existing view, converter_id.
+shared_folder_view_check() {
+  local source="$1/$3" meta
+  view_file="$2/$3.md"; view_stale=1; view_dataless=0
+  old_size=""; old_mtime=""; old_sha=""; old_converter=""; old_status=""
+  shared_folder_is_dataless "$source" && view_dataless=1
+  shared_folder_converter_id_for "$(shared_folder_extension "$3")" "$source"
+  source_size=""; source_mtime=""
+  shared_folder_source_stat "$source" || return 0
+  [ -f "$view_file" ] || return 0
+  meta="$(shared_folder_view_meta "$view_file")"
+  IFS='|' read -r old_size old_mtime old_sha old_converter old_status <<EOF
+$meta
+EOF
+  [ "$old_size" = "$source_size" ] || return 0
+  [ "$old_mtime" = "$source_mtime" ] || return 0
+  [ "$old_converter" = "$converter_id" ] || return 0             # a converter upgrade is a rebaseline
+  [ "$old_status" = "dataless" ] && [ "$view_dataless" -eq 0 ] && return 0   # it was downloaded since
+  view_stale=0
+}
+
+# shared_folder_install_file <tmp> <dest> — chmod 444 and rename into place ONLY when the bytes differ.
+# rc 0 written · 1 unchanged · 2 failed.
+shared_folder_install_file() {
+  if [ -f "$2" ] && cmp -s "$1" "$2"; then rm -f "$1"; return 1; fi
+  if chmod 444 "$1" && mv -f "$1" "$2"; then return 0; fi
+  rm -f "$1"; return 2
+}
+
+# shared_folder_view_build <target> <views> <relative> — regenerate one stale view. Sets view_status;
+# increments views_written when the file changed.
+shared_folder_view_build() {
+  local source="$1/$3" scratch="$2/.shared-folder.$$" sha="" body_start rc
+  mkdir -p "$(dirname -- "$view_file")" 2>/dev/null || { view_status="failed"; return; }
+  : > "$scratch.body"
+  if [ "$view_dataless" -eq 1 ]; then
+    view_status="dataless"
+    { printf '_Not downloaded._ This file is online-only on this Mac, and reading it would download it, so it was not converted.\n\n'
+      printf 'To get a view: in Finder, right-click it (or its folder) and choose **%s**, then run `shared-folder refresh`.\n' "$SHARED_FOLDER_DATALESS_HINT"
+    } > "$scratch.body"
+  else
+    sha="$(/usr/bin/shasum -a 256 < "$source" 2>/dev/null)"; sha="${sha%% *}"
+    if [ "${#sha}" -ne 64 ]; then
+      sha=""; view_status="failed"
+      printf '_Could not read this file_ (permission denied, or it vanished mid-read). Nothing was converted.\n' > "$scratch.body"
+    elif [ -f "$view_file" ] && [ "$old_sha" = "$sha" ] && [ "$old_converter" = "$converter_id" ] \
+         && [ "$old_status" != "dataless" ] && [ "$old_status" != "failed" ]; then
+      # Same bytes, same converter: the body cannot change, so it is not re-converted — only the
+      # size/mtime in the front matter move, so the cheap test agrees with the file again.
+      view_status="$old_status"
+      body_start="$(/usr/bin/awk 'NR > 1 && $0 == "---" { print NR + 2; exit }' "$view_file")"
+      [ -n "$body_start" ] && tail -n "+$body_start" "$view_file" > "$scratch.body"
+    else
+      /bin/bash "$converter" "$source" > "$scratch.body" 2> "$scratch.err"; rc=$?
+      case "$rc" in
+        0)  view_status="converted" ;;
+        10) view_status="no-converter"
+            { printf '_No converter is installed for this type._\n\n'; sed -n '1,5p' "$scratch.err" | sed 's/^markdown-convert: //'; } > "$scratch.body" ;;
+        11) view_status="dataless"; sha=""
+            printf '_Not downloaded._ Choose **%s** on it in Finder, then run `shared-folder refresh`.\n' "$SHARED_FOLDER_DATALESS_HINT" > "$scratch.body" ;;
+        *)  view_status="failed"
+            { printf '_Conversion failed_ (exit %s):\n\n```text\n' "$rc"; sed -n '1,20p' "$scratch.err"; printf '```\n'; } > "$scratch.body" ;;
+      esac
+      rm -f "$scratch.err"
+    fi
+  fi
+  { printf -- '---\n'
+    printf 'source: %s\n' "$(shared_folder_yaml_quote "$3")"
+    printf 'source_size: %s\n' "$source_size"
+    printf 'source_mtime: %s\n' "$source_mtime"
+    printf 'source_sha256: %s\n' "$(shared_folder_yaml_quote "$sha")"
+    printf 'converter: %s\n' "$(shared_folder_yaml_quote "$converter_id")"
+    printf 'status: %s\n' "$view_status"
+    printf -- '---\n\n'
+    cat "$scratch.body"
+  } > "$scratch.view"
+  rm -f "$scratch.body"
+  shared_folder_install_file "$scratch.view" "$view_file"
+  [ $? -eq 0 ] && views_written=$((views_written + 1))
+}
+
+# shared_folder_markdown_cell <text> — safe inside a table cell.
+shared_folder_markdown_cell() { printf '%s' "$1" | sed 's/|/\\|/g'; }
+# shared_folder_link_destination <relative> — safe as a <…> link destination inside a table cell: '%',
+# '<' and '>' percent-encoded, and '|' escaped, which GFM unescapes before it reads the link.
+shared_folder_link_destination() { printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/</%3C/g' -e 's/>/%3E/g' -e 's/|/\\|/g'; }
+
+# shared_folder_view_is_ours <file> — rc 0 only for a file whose front matter this tool wrote (it opens
+# with --- and carries source, source_sha256, converter and status). The orphan sweep deletes nothing else.
+shared_folder_view_is_ours() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  /usr/bin/awk '
+    NR == 1 { if ($0 != "---") exit 1; next }
+    $0 == "---" { closed = 1; exit }
+    /^source: / { s = 1 } /^source_sha256: / { h = 1 } /^converter: / { c = 1 } /^status: / { t = 1 }
+    END { exit (closed && s && h && c && t) ? 0 : 1 }
+  ' "$1" 2>/dev/null
+}
+
+# shared_folder_views_pass <target> <views> <link> <mode> — mode "refresh" writes; mode "count" only
+# sets views_stale. Both walk the same tree through the same stale test, so check and refresh agree.
+shared_folder_views_pass() {
+  local target="$1" views="$2" link="$3" mode="$4" scratch rel ext types name base stem original dir computer
+  views_stale=0; views_written=0; views_removed=0; views_total=0
+  count_converted=0; count_dataless=0; count_no_converter=0; count_failed=0
+  converter_cache="$SHARED_FOLDER_NEWLINE"
+  converter="$(shared_folder_converter)" || { shared_folder_say "markdown-convert.sh not found beside $0"; return 1; }
+  types=" $(/bin/bash "$converter" --types 2>/dev/null | tr '\n' ' ') "
+  scratch="$(mktemp -d -t shared-folder)" || return 1
+  shared_folder_walk "$target" > "$scratch/all"
+  : > "$scratch/expected"; : > "$scratch/index"; : > "$scratch/conflicts"
+  if [ "$mode" = refresh ] && [ ! -d "$views" ]; then
+    # A new views folder is marked as this tool's BEFORE any view lands in it, so one interrupted
+    # mid-refresh is still recognised (shared_folder_views_ours) and finished by the next refresh.
+    mkdir -p "$views" || { rm -rf "$scratch"; return 1; }
+    printf -- '---\ngenerator: %s\n---\n\n_Being generated._\n' "$SHARED_FOLDER_VERSION" > "$views/_index.md" || { rm -rf "$scratch"; return 1; }
+  fi
+
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "/$rel/" in */../*|*/./*|*//*) continue ;; esac     # the walk drops these; never trusted twice
+    ext="$(shared_folder_extension "$rel")"
+    case "$types" in *" $ext "*) [ -n "$ext" ] || continue ;; *) continue ;; esac
+    printf '%s.md\n' "$rel" >> "$scratch/expected"
+    views_total=$((views_total + 1))
+    shared_folder_view_check "$target" "$views" "$rel"
+    view_status="$old_status"
+    if [ "$view_stale" -eq 1 ]; then
+      views_stale=$((views_stale + 1))
+      [ "$mode" = refresh ] && shared_folder_view_build "$target" "$views" "$rel"
+    fi
+    case "$view_status" in
+      converted) count_converted=$((count_converted + 1)) ;;
+      dataless) count_dataless=$((count_dataless + 1)) ;;
+      no-converter) count_no_converter=$((count_no_converter + 1)) ;;
+      *) count_failed=$((count_failed + 1)) ;;
+    esac
+    printf '| [%s](<%s.md>) | %s | %s |\n' "$(shared_folder_markdown_cell "$rel")" "$(shared_folder_link_destination "$rel")" "${view_status:-missing}" \
+      "$(shared_folder_markdown_cell "$converter_id")" >> "$scratch/index"
+  done < "$scratch/all"
+
+  # Views whose source is gone. The two index files at the top are ours, not views, and a file whose
+  # front matter this tool did not write is somebody else's: never counted, never deleted.
+  if [ -d "$views" ]; then
+    ( CDPATH='' cd -P -- "$views" && /usr/bin/find . -type f -name '*.md' ! -path './_index.md' ! -path './_conflicts.md' ) \
+      | sed 's|^\./||' | LC_ALL=C sort > "$scratch/present"
+    LC_ALL=C sort "$scratch/expected" > "$scratch/expected.sorted"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      shared_folder_view_is_ours "$views/$rel" || continue
+      views_stale=$((views_stale + 1))
+      if [ "$mode" = refresh ]; then rm -f "$views/$rel" && views_removed=$((views_removed + 1)); fi
+    done <<EOF
+$(LC_ALL=C comm -23 "$scratch/present" "$scratch/expected.sorted")
+EOF
+    [ "$mode" = refresh ] && /usr/bin/find "$views" -mindepth 1 -type d -empty -delete 2>/dev/null
+  fi
+
+  if [ "$mode" = refresh ]; then
+    # Conflict copies: <stem>-<ComputerName>.<ext> (or -<ComputerName>-<n>) beside <stem>.<ext>.
+    computer="${SHARED_FOLDERS_COMPUTER_NAME:-$(/usr/sbin/scutil --get ComputerName 2>/dev/null)}"
+    if [ -n "$computer" ]; then
+      while IFS= read -r rel; do
+        name="${rel##*/}"; case "$name" in *.*) : ;; *) continue ;; esac
+        ext="${name##*.}"; base="${name%.*}"; stem=""
+        case "$base" in
+          *"-$computer") stem="${base%"-$computer"}" ;;
+          *"-$computer-"[0-9]|*"-$computer-"[0-9][0-9]) stem="${base%"-$computer-"*}" ;;
+        esac
+        [ -n "$stem" ] || continue
+        case "$rel" in */*) dir="${rel%/*}/" ;; *) dir="" ;; esac
+        original="$dir$stem.$ext"
+        [ -e "$target/$original" ] || continue
+        printf '| %s | %s |\n' "$(shared_folder_markdown_cell "$rel")" "$(shared_folder_markdown_cell "$original")" >> "$scratch/conflicts"
+      done < "$scratch/all"
+    fi
+    { printf -- '---\ngenerator: %s\n---\n\n# Conflict copies in %s\n\n' "$SHARED_FOLDER_VERSION" "${link##*/}"
+      if [ -s "$scratch/conflicts" ]; then
+        printf 'OneDrive saved these beside the original when two edits collided. Neither is the truth until a person merges them.\n\n'
+        printf '| conflict copy | original |\n| --- | --- |\n'; cat "$scratch/conflicts"
+      else
+        printf 'No conflict copies.\n'
+      fi
+    } > "$views/.shared-folder.$$.conflicts"
+    shared_folder_install_file "$views/.shared-folder.$$.conflicts" "$views/_conflicts.md"
+    [ $? -eq 0 ] && views_written=$((views_written + 1))
+    { printf -- '---\ngenerator: %s\n---\n\n# Markdown views of %s\n\n' "$SHARED_FOLDER_VERSION" "${link##*/}"
+      printf 'Read-only copies, made from the synced folder. Each view carries the size, mtime and sha256 of the file it was made from.\n'
+      printf '%s views: %s converted, %s dataless, %s no-converter, %s failed.\n\n' "$views_total" "$count_converted" "$count_dataless" "$count_no_converter" "$count_failed"
+      printf '| source | status | converter |\n| --- | --- | --- |\n'
+      cat "$scratch/index"
+    } > "$views/.shared-folder.$$.index"
+    shared_folder_install_file "$views/.shared-folder.$$.index" "$views/_index.md"
+    [ $? -eq 0 ] && views_written=$((views_written + 1))
+  fi
+  rm -rf "$scratch"
+  return 0
+}
+
+# shared_folder_views_ours <views-dir> — rc 0 only for a directory this tool generated: a real dir whose
+# _index.md names this generator on line 2. Nothing else is ever deleted as "views".
+shared_folder_views_ours() {
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/_index.md" ] || return 1
+  [ "$(/usr/bin/awk 'NR == 2 { print; exit }' "$1/_index.md" 2>/dev/null)" = "generator: $SHARED_FOLDER_VERSION" ]
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+# COMMANDS
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+shared_folder_add() {
+  local link rel url physical current key repo
+  [ $# -ge 2 ] && [ $# -le 3 ] || { shared_folder_say "usage: shared-folder add <link-path> <relative-path> [<web-url>]"; return 2; }
+  link="$(shared_folder_absolute "$1")"
+  rel="$(shared_folder_clean_relative "$2")" || { shared_folder_say "not a relative path inside a OneDrive root: $2"; return 2; }
+  url="${3:-}"
+  case "$url" in ''|https://*) : ;; *) shared_folder_say "the web URL must start with https://: $url"; return 2 ;; esac
+  case "$(basename -- "$link")" in .|..|/) shared_folder_say "not a usable link path: $1"; return 2 ;; esac
+  if shared_folder_has_control_character "$link$rel$url"; then shared_folder_say "a tab or newline in a path cannot be recorded"; return 2; fi
+
+  shared_folder_resolve "$rel"
+  if [ "$resolve_count" -eq 0 ]; then shared_folder_say "$rel — $SHARED_FOLDER_NOT_SYNCED_HINT"; return 20; fi
+  if [ "$resolve_count" -gt 1 ]; then
+    shared_folder_say "$rel is in $resolve_count OneDrive roots — refusing to guess which one:"
+    printf '%s' "$resolve_matches" >&2
+    return 21
+  fi
+  if [ -e "$link" ] && [ ! -L "$link" ]; then
+    shared_folder_say "refusing: $link exists and is not a symlink — nothing was changed"; return 22
+  fi
+  physical="$(shared_folder_physical_parent "$link")" || { shared_folder_say "cannot resolve where $link would live"; return 2; }
+  if shared_folder_inside_sync "$physical"; then
+    shared_folder_say "refusing: $link is inside a synced cloud folder — the link and its views would be uploaded"; return 23
+  fi
+  mkdir -p "$(dirname -- "$link")" || return 1
+  current="$(readlink -- "$link" 2>/dev/null)"
+  if [ "$current" != "$resolve_target" ] || [ ! -L "$link" ]; then
+    ln -sfn "$resolve_target" "$link" || { shared_folder_say "could not create the link $link"; return 1; }
+  fi
+  key="$link"
+  shared_folder_record_get "$link" && key="$record_key"      # replace this link's record, never add a second
+  if [ -n "$url" ]; then
+    shared_folder_record_write "$key" "$link$SHARED_FOLDER_TAB$rel$SHARED_FOLDER_TAB$url" || return 1
+  else
+    shared_folder_record_write "$key" "$link$SHARED_FOLDER_TAB$rel" || return 1
+  fi
+  printf 'linked %s -> %s\n' "$link" "$resolve_target"
+  # Inside a git work tree, `git add -A` would commit the link (an absolute path into your OneDrive,
+  # with your user name in it) and the views (copies of the client's files). Say so; never edit the repo.
+  if repo="$(shared_folder_git_work_tree "$link")"; then
+    shared_folder_say "$link is inside the git work tree $repo — unless they are already ignored, add these two lines to $repo/.git/info/exclude (or .gitignore) so the link and its views are never committed:"
+    printf '/%s\n/%s.views/\n' "${link#"${repo%/}"/}" "${link#"${repo%/}"/}" >&2
+  fi
+  return 0
+}
+
+shared_folder_remove() {
+  local link physical
+  [ $# -eq 1 ] || { shared_folder_say "usage: shared-folder remove <link-path>"; return 2; }
+  link="$(shared_folder_absolute "$1")"
+  # Only a link this tool recorded is ever removed: a typo'd or tab-completed path must not delete
+  # a symlink of somebody else's.
+  shared_folder_record_get "$link" || { shared_folder_say "not a recorded link: $link — nothing was removed (see: shared-folder list)"; return 2; }
+  physical="$(shared_folder_physical_parent "$link")" || physical="$link"
+  if shared_folder_inside_sync "$physical"; then
+    shared_folder_say "refusing: $link is inside a synced cloud folder, so it is not one of ours — nothing was removed"; return 23
+  fi
+  if [ -L "$link" ]; then
+    rm -f -- "$link" && printf 'removed link %s (its target was not touched)\n' "$link"
+  elif [ -e "$link" ]; then
+    shared_folder_say "$link is not a symlink — left in place"
+  fi
+  if shared_folder_views_ours "$link.views"; then
+    rm -rf -- "$link.views" && printf 'removed views %s.views\n' "$link"
+  fi
+  shared_folder_record_write "$record_key" "" || return 1
+  return 0
+}
+
+shared_folder_check_one() {
+  local link="$1" rel="$2"
+  shared_folder_link_state "$link" "$rel"
+  # Only a views folder this tool made is judged; anything else at <link>.views is not ours to count.
+  if [ "$state" = OK ] && [ -d "$state_target" ] && shared_folder_views_ours "$link.views"; then
+    shared_folder_views_pass "$state_target" "$link.views" "$link" count
+    if [ "$views_stale" -gt 0 ]; then state="STALE-VIEWS $views_stale"; state_detail="shared-folder refresh $link"; fi
+  fi
+  printf '%s\t%s\t%s\n' "$state" "$link" "$state_detail"
+  [ "$state" = OK ]
+}
+
+shared_folder_relink_one() {
+  local link="$1" rel="$2" physical
+  shared_folder_link_state "$link" "$rel"
+  case "$state" in
+    OK) printf 'OK\t%s\n' "$link"; return 0 ;;
+    MOVED)
+      physical="$(shared_folder_physical_parent "$link")" || return 1
+      if shared_folder_inside_sync "$physical"; then printf 'REFUSED\t%s\tinside a synced cloud folder\n' "$link"; return 1; fi
+      mkdir -p "$(dirname -- "$link")" && ln -sfn "$state_target" "$link" || { printf 'FAILED\t%s\n' "$link"; return 1; }
+      printf 'RELINKED\t%s\t%s\n' "$link" "$state_target"; return 0 ;;
+    *) printf '%s\t%s\t%s\n' "$state" "$link" "$state_detail"; return 1 ;;
+  esac
+}
+
+shared_folder_refresh_one() {
+  local link="$1" rel="$2" physical
+  shared_folder_link_state "$link" "$rel"
+  case "$state" in
+    OK|MOVED) : ;;
+    *) printf '%s\t%s\t%s\n' "$state" "$link" "$state_detail"; return 1 ;;
+  esac
+  if [ ! -d "$state_target" ]; then printf 'SKIPPED\t%s\ta single file needs no views — read it through the link\n' "$link"; return 0; fi
+  # refresh WRITES and DELETES in <link>.views, so it must be absent (it is then created and marked)
+  # or a real folder this tool made — never a symlink (it could lead into a client's cloud folder)
+  # and never somebody's own folder. Where it physically is — the folder itself, not just its
+  # parent — must be outside every synced tree.
+  if [ -e "$link.views" ] || [ -L "$link.views" ]; then
+    if ! shared_folder_views_ours "$link.views"; then
+      printf 'REFUSED\t%s.views\texists and is not a views folder this tool made (a symlink, or no generator mark on its _index.md); it is left alone\n' "$link"; return 1
+    fi
+    physical="$(CDPATH='' cd -P -- "$link.views" 2>/dev/null && pwd -P)" || return 1
+  else
+    physical="$(shared_folder_physical_parent "$link.views")" || return 1
+  fi
+  if shared_folder_inside_sync "$physical"; then printf 'REFUSED\t%s.views\tinside a synced cloud folder\n' "$link"; return 1; fi
+  shared_folder_views_pass "$state_target" "$link.views" "$link" refresh || return 1
+  printf 'REFRESHED\t%s.views\t%s views (%s converted, %s dataless, %s no-converter, %s failed); %s written, %s removed\n' \
+    "$link" "$views_total" "$count_converted" "$count_dataless" "$count_no_converter" "$count_failed" "$views_written" "$views_removed"
+}
+
+shared_folder_list() {
+  [ -f "$(shared_folder_links_file)" ] || return 0
+  /bin/cat "$(shared_folder_links_file)"
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+# SHIPPED FIXTURES — shared-folder --selftest
+# A fake cloud under a temp dir. Every positive case has a negative control beside it.
+# ═════════════════════════════════════════════════════════════════════════════════════════════════
+shared_folder_selftest_total=0
+shared_folder_selftest_failed=0
+shared_folder_ok()  { shared_folder_selftest_total=$((shared_folder_selftest_total + 1)); printf '  ok   %s\n' "$1"; }
+shared_folder_bad() {
+  shared_folder_selftest_total=$((shared_folder_selftest_total + 1))
+  shared_folder_selftest_failed=$((shared_folder_selftest_failed + 1))
+  printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"
+}
+shared_folder_is() { if [ "$2" = "$3" ]; then shared_folder_ok "$1"; else shared_folder_bad "$1" "want [$3] got [$2]"; fi; }
+
+# a fingerprint of a whole tree: every path, its mode, mtime (ns), inode and content hash.
+shared_folder_tree_print() {
+  ( CDPATH='' cd -P -- "$1" 2>/dev/null && /usr/bin/find . -print | LC_ALL=C sort | while IFS= read -r p; do
+      if [ -f "$p" ]; then printf '%s %s %s\n' "$p" "$(/usr/bin/stat -f '%Lp %Fm %i' "$p")" "$(/usr/bin/shasum -a 256 < "$p" | cut -c1-64)"
+      else printf '%s %s\n' "$p" "$(/usr/bin/stat -f '%Lp' "$p")"; fi
+    done ) | /usr/bin/shasum -a 256 | cut -c1-64
+}
+shared_folder_field() { shared_folder_view_meta "$1" | cut -d'|' -f"$2"; }
+shared_folder_body() {
+  local start
+  start="$(/usr/bin/awk 'NR > 1 && $0 == "---" { print NR + 2; exit }' "$1")"
+  tail -n "+${start:-1}" "$1"
+}
+
+shared_folder_selftest() {
+  local self work cloud home stub rc out before after acme views sum lines rel
+  self="${BASH_SOURCE[0]:-$0}"
+  self="$(CDPATH='' cd -- "$(dirname -- "$self")" && pwd -P)/$(basename -- "$self")"   # absolute: some cases run from another dir
+  work="$(mktemp -d -t shared-folder-selftest)" || return 30
+  work="$(CDPATH='' cd -P -- "$work" && pwd -P)"
+  printf 'shared-folder selftest · bash %s · %s\n' "${BASH_VERSION:-?}" "$(sw_vers -productVersion 2>/dev/null)"
+  # Everything the CLI touches is redirected into the temp dir, whatever the caller's environment says.
+  cloud="$work/cloud"; home="$work/home"
+  export SHARED_FOLDERS_CLOUD_DIR="$cloud" BOOTSTRAP_STATE_DIR="$work/state" SHARED_FOLDERS_COMPUTER_NAME="Test Mac"
+  export MARKDOWN_CONVERT_TOOL_DIRS="" PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+  unset DATALESS_STAT_COMMAND SHARED_FOLDERS_CONVERTER
+  mkdir -p "$home" "$cloud/OneDrive-Old/Clients/Acme/a/b/c/d/e/f" "$cloud/OneDrive-Old/Clients/Acme/.hidden" "$cloud/OneDrive-Old/Clients/Gone"
+  acme="$cloud/OneDrive-Old/Clients/Acme"
+  printf '# Brief\n\nversion one\n' > "$acme/brief.md"
+  printf 'name,note\nA,"x | y"\n' > "$acme/data.csv"
+  printf 'x' > "$acme/image.png"
+  printf 'x' > "$acme/deck.pptx"
+  printf 'x' > "$acme/~\$brief.docx"
+  printf 'x' > "$acme/scratch.tmp"
+  printf 'x' > "$acme/.DS_Store"
+  printf '# secret\n' > "$acme/.hidden/secret.md"
+  printf '# ok\n' > "$acme/a/b/c/d/e/six.md"
+  printf '# too deep\n' > "$acme/a/b/c/d/e/f/seven.md"
+  printf '# notes\n' > "$acme/notes.md"
+  printf '# notes, the other edit\n' > "$acme/notes-Test Mac.md"
+
+  shared_folder_is "--version" "$(/bin/bash "$self" --version)" "$SHARED_FOLDER_VERSION"
+
+  # ── add ────────────────────────────────────────────────────────────────────────────────────────
+  /bin/bash "$self" add "$home/acme" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "add: rc 0" "$rc" "0"
+  shared_folder_is "add: the link reads back to the one root that has it" "$(readlink "$home/acme")" "$acme"
+  out="$(/usr/bin/awk -F'\t' -v n=0 '{ n++; key = $1; rel = $2 } END { print n "|" key "|" rel }' "$work/state/shared-folders/links")"
+  shared_folder_is "add: one record, tab-separated link and relative path" "$out" "1|$home/acme|Clients/Acme"
+  before="$(/usr/bin/shasum -a 256 < "$work/state/shared-folders/links")$(/usr/bin/stat -f '%i %Fm' "$home/acme")"
+  /bin/bash "$self" add "$home/acme/" "/Clients/Acme/" > /dev/null 2>&1; rc=$?
+  after="$(/usr/bin/shasum -a 256 < "$work/state/shared-folders/links")$(/usr/bin/stat -f '%i %Fm' "$home/acme")"
+  shared_folder_is "add again (typed with slashes): rc 0" "$rc" "0"
+  shared_folder_is "add again: record and link unchanged, same inode" "$after" "$before"
+  /bin/bash "$self" add "$home/nothing" "Clients/Nobody" > /dev/null 2>&1; rc=$?
+  shared_folder_is "negative control — a folder no root has: rc 20" "$rc" "20"
+  if [ -e "$home/nothing" ] || [ -L "$home/nothing" ]; then shared_folder_bad "rc 20 left a link behind"; else shared_folder_ok "rc 20 created nothing"; fi
+  /bin/bash "$self" add "$home/bad" "Clients/../Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a relative path with .. is usage (rc 2)" "$rc" "2"
+
+  # ── check ──────────────────────────────────────────────────────────────────────────────────────
+  out="$(/bin/bash "$self" check)"; rc=$?
+  shared_folder_is "check: rc 0 when every link is healthy" "$rc" "0"
+  shared_folder_is "check: the state word is OK" "$(printf '%s\n' "$out" | cut -f1)" "OK"
+
+  # ── the root is renamed, as a tenant rename or the sync-engine upgrade does ─────────────────────
+  mv "$cloud/OneDrive-Old" "$cloud/OneDrive-New"; acme="$cloud/OneDrive-New/Clients/Acme"
+  out="$(/bin/bash "$self" check)"; rc=$?
+  shared_folder_is "after the rename, check says MOVED" "$(printf '%s\n' "$out" | cut -f1)" "MOVED"
+  shared_folder_is "after the rename, check: rc 1" "$rc" "1"
+  /bin/bash "$self" relink > /dev/null 2>&1; rc=$?
+  shared_folder_is "relink: rc 0" "$rc" "0"
+  shared_folder_is "relink: the link now reads back to the renamed root" "$(readlink "$home/acme")" "$acme"
+  before="$(/usr/bin/stat -f '%i %Fm' "$home/acme")"
+  /bin/bash "$self" relink > /dev/null 2>&1; rc=$?
+  shared_folder_is "relink twice: rc 0 and the link is not recreated" "$rc $(/usr/bin/stat -f '%i %Fm' "$home/acme")" "0 $before"
+  /bin/bash "$self" check > /dev/null 2>&1; rc=$?
+  shared_folder_is "check after relink: rc 0" "$rc" "0"
+
+  # ── refusals ──────────────────────────────────────────────────────────────────────────────────
+  mkdir "$home/realdir"; printf 'keep\n' > "$home/realdir/keep.txt"
+  /bin/bash "$self" add "$home/realdir" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a real directory at the link path: rc 22" "$rc" "22"
+  if [ -d "$home/realdir" ] && [ ! -L "$home/realdir" ] && [ "$(cat "$home/realdir/keep.txt")" = keep ]; then
+    shared_folder_ok "rc 22 left the real directory and its file intact"
+  else shared_folder_bad "rc 22 disturbed the real directory"; fi
+  ln -s /nonexistent/elsewhere "$home/stale-link"
+  /bin/bash "$self" add "$home/stale-link" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "negative control — an existing SYMLINK at the link path is replaced: rc 0" "$rc" "0"
+  shared_folder_is "the replaced symlink reads back to the target" "$(readlink "$home/stale-link")" "$acme"
+  /bin/bash "$self" remove "$home/stale-link" > /dev/null 2>&1
+
+  mkdir -p "$cloud/OneDrive-Duplicate/Clients/Acme"
+  out="$(/bin/bash "$self" add "$home/twice" "Clients/Acme" 2>&1 >/dev/null)"; rc=$?
+  shared_folder_is "two roots have it: rc 21" "$rc" "21"
+  lines="$(printf '%s\n' "$out" | /usr/bin/awk -v a="$cloud/OneDrive-Duplicate/Clients/Acme" -v b="$acme" '$1 == a || $1 == b { n++ } END { print n + 0 }')"
+  shared_folder_is "rc 21 lists both matches" "$lines" "2"
+  if [ -L "$home/twice" ]; then shared_folder_bad "rc 21 created a link"; else shared_folder_ok "rc 21 created nothing"; fi
+  out="$(/bin/bash "$self" check "$home/acme")"
+  shared_folder_is "check on a link whose folder is now in two roots says AMBIGUOUS 2" "$(printf '%s\n' "$out" | cut -f1)" "AMBIGUOUS 2"
+  rm -rf "$cloud/OneDrive-Duplicate"
+  /bin/bash "$self" add "$home/twice" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "negative control — the same add with the duplicate gone: rc 0" "$rc" "0"
+
+  /bin/bash "$self" add "$cloud/OneDrive-New/link-in-cloud" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a link path inside a cloud root: rc 23" "$rc" "23"
+  if [ -L "$cloud/OneDrive-New/link-in-cloud" ]; then shared_folder_bad "rc 23 created a link in the cloud"; else shared_folder_ok "rc 23 created nothing in the cloud"; fi
+  ln -s "$cloud/OneDrive-New" "$home/cloud-alias"
+  /bin/bash "$self" add "$home/cloud-alias/sneaky" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a link path that reaches the cloud through a symlinked parent: rc 23" "$rc" "23"
+  rm -f "$home/cloud-alias"
+
+  # ── MISSING and NOT-A-LINK: reported, never "repaired" ────────────────────────────────────────
+  /bin/bash "$self" add "$home/gone" "Clients/Gone" > /dev/null 2>&1
+  rm -rf "$cloud/OneDrive-New/Clients/Gone"
+  out="$(/bin/bash "$self" check "$home/gone")"; rc=$?
+  shared_folder_is "a folder no longer synced: check says MISSING, rc 1" "$(printf '%s\n' "$out" | cut -f1) $rc" "MISSING 1"
+  /bin/bash "$self" relink > /dev/null 2>&1; rc=$?
+  shared_folder_is "relink with a MISSING link: rc 1" "$rc" "1"
+  /bin/bash "$self" remove "$home/gone" > /dev/null 2>&1; rc=$?
+  shared_folder_is "remove: rc 0" "$rc" "0"
+  if [ -L "$home/gone" ] || /usr/bin/awk -F'\t' -v l="$home/gone" '$1 == l { f = 1 } END { exit f ? 0 : 1 }' "$work/state/shared-folders/links"; then
+    shared_folder_bad "remove left the link or its record"
+  else shared_folder_ok "remove took the link and its record"; fi
+  /bin/bash "$self" remove "$home/twice" > /dev/null 2>&1
+  if [ -f "$acme/brief.md" ] && [ -f "$acme/data.csv" ]; then shared_folder_ok "remove never touches the link's target"
+  else shared_folder_bad "remove deleted files in the target"; fi
+
+  rm -f "$home/acme"; mkdir "$home/acme"
+  out="$(/bin/bash "$self" check "$home/acme")"; rc=$?
+  shared_folder_is "a real folder where the link was: NOT-A-LINK, rc 1" "$(printf '%s\n' "$out" | cut -f1) $rc" "NOT-A-LINK 1"
+  /bin/bash "$self" relink > /dev/null 2>&1
+  if [ -d "$home/acme" ] && [ ! -L "$home/acme" ]; then shared_folder_ok "relink leaves a NOT-A-LINK alone"; else shared_folder_bad "relink replaced a real folder"; fi
+  rmdir "$home/acme"
+  /bin/bash "$self" relink > /dev/null 2>&1; rc=$?
+  shared_folder_is "relink recreates a link that went missing: rc 0 and it reads back" "$rc $(readlink "$home/acme")" "0 $acme"
+
+  # ── views ─────────────────────────────────────────────────────────────────────────────────────
+  views="$home/acme.views"
+  /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "refresh: rc 0" "$rc" "0"
+  shared_folder_is "view of brief.md: status converted" "$(shared_folder_field "$views/brief.md.md" 5)" "converted"
+  shared_folder_is "view of brief.md: source_sha256 is the source's sha256, computed independently" \
+    "$(shared_folder_field "$views/brief.md.md" 3)" "$(/usr/bin/shasum -a 256 < "$acme/brief.md" | cut -c1-64)"
+  shared_folder_is "view of brief.md: source_size is the source's size" "$(shared_folder_field "$views/brief.md.md" 1)" "$(/usr/bin/stat -f %z "$acme/brief.md")"
+  shared_folder_is "view of brief.md: converter is the id markdown-convert.sh reports" "$(shared_folder_field "$views/brief.md.md" 4)" "passthrough 1"
+  if shared_folder_body "$views/brief.md.md" | cmp -s - "$acme/brief.md"; then shared_folder_ok "view of brief.md: body is the markdown"
+  else shared_folder_bad "view of brief.md: body differs"; fi
+  shared_folder_is "view of data.csv: status converted" "$(shared_folder_field "$views/data.csv.md" 5)" "converted"
+  shared_folder_is "view of deck.pptx with no converter installed: status no-converter" "$(shared_folder_field "$views/deck.pptx.md" 5)" "no-converter"
+  shared_folder_is "a file 6 levels down gets a view" "$(shared_folder_field "$views/a/b/c/d/e/six.md.md" 5)" "converted"
+  out=""
+  for rel in image.png '~$brief.docx' scratch.tmp .DS_Store .hidden/secret.md a/b/c/d/e/f/seven.md; do
+    [ -e "$views/$rel.md" ] && out="$out $rel"
+  done
+  shared_folder_is "no view for: png, ~\$ lock, *.tmp, .DS_Store, a hidden folder, 7 levels down" "$out" ""
+  shared_folder_is "a view file is mode 444" "$(/usr/bin/stat -f %Lp "$views/brief.md.md")" "444"
+  sum="$( ( CDPATH='' cd "$views" && /usr/bin/find . -type f -name '*.md' ! -name '_index.md' ! -name '_conflicts.md' ) | wc -l | tr -d ' ')"
+  lines="$(/usr/bin/awk -F' [|] ' '/^\| \[/ { n++ } END { print n + 0 }' "$views/_index.md")"
+  shared_folder_is "_index.md has one row per view file on disk" "$lines" "$sum"
+  out="$(/usr/bin/awk -F' [|] ' '/^\| notes-Test Mac\.md / { sub(/ \|$/, "", $2); print $2 }' "$views/_conflicts.md")"
+  shared_folder_is "_conflicts.md pairs the conflict copy with its original" "$out" "notes.md"
+  if /usr/bin/awk '/^\| brief\.md / { f = 1 } END { exit f ? 0 : 1 }' "$views/_conflicts.md"; then
+    shared_folder_bad "negative control: brief.md was listed as a conflict"
+  else shared_folder_ok "negative control: a file with no conflict copy is not listed"; fi
+
+  before="$(shared_folder_tree_print "$views")"
+  /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1
+  after="$(shared_folder_tree_print "$views")"
+  shared_folder_is "a second refresh writes nothing (paths, modes, mtimes, inodes, hashes identical)" "$after" "$before"
+  /bin/bash "$self" check "$home/acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "check with fresh views: rc 0" "$rc" "0"
+
+  # a source edit
+  before="$(/usr/bin/stat -f '%i %Fm' "$views/data.csv.md")"
+  printf '# Brief\n\nversion two, longer\n' > "$acme/brief.md"
+  out="$(/bin/bash "$self" check "$home/acme")"
+  shared_folder_is "after a source edit, check says STALE-VIEWS 1" "$(printf '%s\n' "$out" | cut -f1)" "STALE-VIEWS 1"
+  /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1
+  if shared_folder_body "$views/brief.md.md" | cmp -s - "$acme/brief.md"; then shared_folder_ok "after a source edit, refresh updates the view body"
+  else shared_folder_bad "the view body did not follow the edit"; fi
+  shared_folder_is "after a source edit, the view's sha256 follows" "$(shared_folder_field "$views/brief.md.md" 3)" "$(/usr/bin/shasum -a 256 < "$acme/brief.md" | cut -c1-64)"
+  shared_folder_is "negative control — an unedited file's view is not rewritten" "$(/usr/bin/stat -f '%i %Fm' "$views/data.csv.md")" "$before"
+  # a touch that changes no byte: the body stays, the front matter catches up, check converges
+  touch -t 202001010000 "$acme/brief.md"
+  /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1
+  /bin/bash "$self" check "$home/acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a touch with no byte changed: after refresh, check converges to OK" "$rc" "0"
+
+  # ── DATALESS: a stubbed flag, on a file that CANNOT be read ───────────────────────────────────
+  stub="$work/stat-stub"
+  cat > "$stub" <<'STUB'
+#!/bin/bash
+for last in "$@"; do :; done
+case "$last" in *online-only*) printf '40000000\n'; exit 0 ;; esac
+exec /usr/bin/stat "$@"
+STUB
+  chmod 755 "$stub"
+  printf '# online\n' > "$acme/online-only report.md"; chmod 000 "$acme/online-only report.md"
+  printf '# locked\n' > "$acme/locked.md";               chmod 000 "$acme/locked.md"
+  DATALESS_STAT_COMMAND="$stub" /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "refresh with a dataless file: rc 0" "$rc" "0"
+  shared_folder_is "a dataless file's view: status dataless" "$(shared_folder_field "$views/online-only report.md.md" 5)" "dataless"
+  shared_folder_is "a dataless file's view: no sha256 (it was never read)" "$(shared_folder_field "$views/online-only report.md.md" 3)" ""
+  shared_folder_is "negative control — the SAME kind of chmod 000 file without the flag: status failed (reading it fails)" \
+    "$(shared_folder_field "$views/locked.md.md" 5)" "failed"
+  out="$(shared_folder_body "$views/online-only report.md.md" | /usr/bin/awk -v h="$SHARED_FOLDER_DATALESS_HINT" 'index($0, h) { f = 1 } END { print f + 0 }')"
+  shared_folder_is "a dataless view names the gesture: $SHARED_FOLDER_DATALESS_HINT" "$out" "1"
+  before="$(shared_folder_tree_print "$views")"
+  DATALESS_STAT_COMMAND="$stub" /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1
+  shared_folder_is "a dataless view is stable: a second refresh writes nothing" "$(shared_folder_tree_print "$views")" "$before"
+  chmod 644 "$acme/online-only report.md"
+  /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1
+  shared_folder_is "once downloaded (flag gone), the same size and mtime still reconvert: status converted" \
+    "$(shared_folder_field "$views/online-only report.md.md" 5)" "converted"
+  chmod 644 "$acme/locked.md"
+
+  # ── a deleted source takes its view with it ───────────────────────────────────────────────────
+  rm -f "$acme/data.csv"
+  out="$(/bin/bash "$self" check "$home/acme")"
+  shared_folder_is "a deleted source: check counts its orphan view" "$(printf '%s\n' "$out" | cut -f1)" "STALE-VIEWS 1"
+  /bin/bash "$self" refresh "$home/acme" > /dev/null 2>&1
+  if [ -e "$views/data.csv.md" ]; then shared_folder_bad "the orphan view survived refresh"; else shared_folder_ok "refresh removes the view of a deleted source"; fi
+
+  # ── remove takes the link, its views and its record; the target and the cloud keep every file ──
+  before="$( ( CDPATH='' cd "$cloud" && /usr/bin/find . | LC_ALL=C sort ) | /usr/bin/shasum -a 256)"
+  /bin/bash "$self" remove "$home/acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "remove: rc 0" "$rc" "0"
+  if [ -L "$home/acme" ] || [ -d "$views" ]; then shared_folder_bad "remove left the link or the views"; else shared_folder_ok "remove took the link and its views"; fi
+  shared_folder_is "remove left every file in the cloud in place" "$( ( CDPATH='' cd "$cloud" && /usr/bin/find . | LC_ALL=C sort ) | /usr/bin/shasum -a 256)" "$before"
+  mkdir -p "$home/user.views"; printf 'mine\n' > "$home/user.views/_index.md"; mkdir -p "$home/user"
+  /bin/bash "$self" remove "$home/user" > /dev/null 2>&1
+  if [ -d "$home/user" ] && [ -f "$home/user.views/_index.md" ]; then shared_folder_ok "negative control — remove never deletes a real folder, nor a .views dir it did not make"
+  else shared_folder_bad "remove deleted something it did not create"; fi
+  shared_folder_is "list: no records remain" "$(/bin/bash "$self" list)" ""
+  /bin/bash "$self" frobnicate > /dev/null 2>&1; rc=$?
+  shared_folder_is "an unknown command: rc 2" "$rc" "2"
+
+  # ── what refresh, remove and add must refuse, or survive ──────────────────────────────────────
+  mkdir -p "$cloud/OneDrive-New/Clients/Other" "$cloud/OneDrive-New/Clients/Evil/x
+.."
+  printf '# plan\n' > "$cloud/OneDrive-New/Clients/Other/plan.md"
+  printf '# fine\n' > "$cloud/OneDrive-New/Clients/Evil/fine.md"
+  printf '# inside\n' > "$cloud/OneDrive-New/Clients/Evil/x
+../README.md"
+  printf '# SIBLING, not shared with the link\n' > "$cloud/OneDrive-New/Clients/README.md"
+  # a .views that is a symlink into another client's cloud folder: refused, and nothing in it touched
+  /bin/bash "$self" add "$home/guard" "Clients/Acme" > /dev/null 2>&1
+  ln -s "$cloud/OneDrive-New/Clients/Other" "$home/guard.views"
+  /bin/bash "$self" refresh "$home/guard" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a .views symlinked into the cloud: refresh refuses (rc 1) and the folder behind it is untouched" \
+    "$rc $(ls "$cloud/OneDrive-New/Clients/Other" | tr '\n' ' ')" "1 plan.md "
+  rm -f "$home/guard.views"
+  /bin/bash "$self" refresh "$home/guard" > /dev/null 2>&1; rc=$?
+  shared_folder_is "negative control — with the symlink gone, the same refresh makes the views (rc 0)" "$rc $([ -f "$home/guard.views/_index.md" ] && echo made)" "0 made"
+  # a file of the user's own inside a views folder this tool made: never counted, never deleted
+  printf '# mine\n' > "$home/guard.views/my-own.md"
+  /bin/bash "$self" refresh "$home/guard" > /dev/null 2>&1
+  /bin/bash "$self" check "$home/guard" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a file without this tool's front matter survives refresh, and check still says OK" "$rc $(cat "$home/guard.views/my-own.md")" "0 # mine"
+  # somebody's own folder already at <link>.views
+  mkdir "$home/own.views"; printf '# my own notes\n' > "$home/own.views/my-notes.md"
+  /bin/bash "$self" add "$home/own" "Clients/Acme" > /dev/null 2>&1
+  /bin/bash "$self" refresh "$home/own" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a folder of the user's own at <link>.views: refresh refuses (rc 1) and its file stays" "$rc $(cat "$home/own.views/my-notes.md" 2>/dev/null)" "1 # my own notes"
+  # the cloud dir spelled in another letter case (the same folder on a case-insensitive volume)
+  /bin/bash "$self" add "$work/CLOUD/onedrive-new/Clients/Other/folded" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a link path inside the cloud spelled in another letter case: rc 23, nothing created" \
+    "$rc $(ls "$cloud/OneDrive-New/Clients/Other" | tr '\n' ' ')" "23 plan.md "
+  # a folder named "x<newline>..": no view escapes .views, and no file outside the link is read
+  /bin/bash "$self" add "$home/evil" "Clients/Evil" > /dev/null 2>&1
+  /bin/bash "$self" refresh "$home/evil" > /dev/null 2>&1
+  if [ -e "$home/README.md.md" ] || grep -rq SIBLING "$home/evil.views" 2>/dev/null; then
+    shared_folder_bad "a newline in a folder name wrote a view outside .views, or read a file outside the link"
+  else shared_folder_ok "a newline in a folder name: no view outside .views, nothing outside the link read"; fi
+  shared_folder_is "negative control — the ordinary file beside it still gets its view" "$(shared_folder_field "$home/evil.views/fine.md.md" 5)" "converted"
+  # a pipe in a source name: its _index.md row still splits into 3 cells, and its link still lands
+  printf '# q\n' > "$acme/Q3 | Q4 plan.md"
+  /bin/bash "$self" refresh "$home/guard" > /dev/null 2>&1
+  out="$(/usr/bin/awk '/^\| \[Q3/ { gsub(/\\\|/, "@"); n = split($0, parts, "|"); print n - 2 }' "$home/guard.views/_index.md")"
+  shared_folder_is "a source named with a pipe: its _index.md row splits into exactly 3 cells" "$out" "3"
+  out="$(/usr/bin/awk '/^\| \[Q3/ { s = $0; sub(/^[^<]*</, "", s); sub(/>.*$/, "", s); gsub(/\\\|/, "|", s); gsub(/%20/, " ", s); print s }' "$home/guard.views/_index.md")"
+  shared_folder_is "…and its link destination, unescaped, names the view file on disk" "$out $([ -f "$home/guard.views/$out" ] && echo exists)" "Q3 | Q4 plan.md.md exists"
+  rm -f "$acme/Q3 | Q4 plan.md"
+  # a relative link path whose parent does not exist yet: one record key, before and after
+  ( CDPATH='' cd -- "$home" && /bin/bash "$self" add ./links/rel "Clients/Acme" > /dev/null 2>&1 )
+  shared_folder_is "add ./links/rel before links/ exists: the key is canonical" "$(/usr/bin/awk -F'\t' '/links\/rel/ { print $1 }' "$work/state/shared-folders/links")" "$home/links/rel"
+  ( CDPATH='' cd -- "$home" && /bin/bash "$self" remove ./links/rel > /dev/null 2>&1 ); rc=$?
+  shared_folder_is "remove ./links/rel: rc 0, the link and its record both gone" \
+    "$rc $([ -L "$home/links/rel" ] && echo link) $(/usr/bin/awk -F'\t' '/links\/rel/ { print "record" }' "$work/state/shared-folders/links")" "0  "
+  printf '%s/./links/old\tClients/Acme\n' "$home" >> "$work/state/shared-folders/links"; ln -s "$acme" "$home/links/old"
+  /bin/bash "$self" remove "$home/links/old" > /dev/null 2>&1; rc=$?
+  shared_folder_is "remove finds a record an older release keyed with /./" \
+    "$rc $([ -L "$home/links/old" ] && echo link) $(/usr/bin/awk -F'\t' '/links\/old/ { print "record" }' "$work/state/shared-folders/links")" "0  "
+  # remove never deletes a symlink it did not record
+  ln -s /nonexistent/elsewhere "$home/mine-link"
+  /bin/bash "$self" remove "$home/mine-link" > /dev/null 2>&1; rc=$?
+  shared_folder_is "remove of a symlink this tool never recorded: rc 2, the symlink stays" "$rc $([ -L "$home/mine-link" ] && echo kept)" "2 kept"
+  # a link inside a git work tree: the two exclude lines are printed, and only there
+  mkdir -p "$home/repo/.git"
+  out="$(/bin/bash "$self" add "$home/repo/sub/docs" "Clients/Acme" 2>&1 >/dev/null)"
+  shared_folder_is "a link inside a git work tree: stderr names both lines for .git/info/exclude" \
+    "$(printf '%s\n' "$out" | /usr/bin/awk '$0 == "/sub/docs" || $0 == "/sub/docs.views/" { n++ } END { print n + 0 }')" "2"
+  out="$(/bin/bash "$self" add "$home/guard" "Clients/Acme" 2>&1 >/dev/null)"
+  shared_folder_is "negative control — a link outside any work tree prints no exclude lines" "$out" ""
+  for rel in guard own evil repo/sub/docs; do /bin/bash "$self" remove "$home/$rel" > /dev/null 2>&1; done
+  shared_folder_is "the cloud kept every file it had (plan.md, the sibling README)" \
+    "$(cat "$cloud/OneDrive-New/Clients/Other/plan.md" "$cloud/OneDrive-New/Clients/README.md")" "# plan
+# SIBLING, not shared with the link"
+
+  chmod -R u+rwx "$work" 2>/dev/null
+  rm -rf "$work"
+  printf '%d/%d passed\n' "$((shared_folder_selftest_total - shared_folder_selftest_failed))" "$shared_folder_selftest_total"
+  [ "$shared_folder_selftest_failed" -eq 0 ]
+}
+
+case "${1:-}" in
+  add)        shift; shared_folder_add "$@"; exit $? ;;
+  remove)     shift; shared_folder_remove "$@"; exit $? ;;
+  check)      shift; [ $# -le 1 ] || { shared_folder_say "usage: shared-folder check [<link-path>]"; exit 2; }
+              shared_folder_each_record shared_folder_check_one "${1:-}"; exit $? ;;
+  relink)     shift; [ $# -eq 0 ] || { shared_folder_say "usage: shared-folder relink"; exit 2; }
+              shared_folder_each_record shared_folder_relink_one; exit $? ;;
+  refresh)    shift; [ $# -le 1 ] || { shared_folder_say "usage: shared-folder refresh [<link-path>]"; exit 2; }
+              shared_folder_each_record shared_folder_refresh_one "${1:-}"; exit $? ;;
+  list)       shared_folder_list; exit $? ;;
+  --version)  printf '%s\n' "$SHARED_FOLDER_VERSION"; exit 0 ;;
+  --selftest) shared_folder_selftest; exit $? ;;
+  -h|--help)  sed -n '2,36p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  "")         sed -n '2,36p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  *)          shared_folder_say "unknown command: $1 (try --help)"; exit 2 ;;
+esac
