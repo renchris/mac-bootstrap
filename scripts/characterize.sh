@@ -48,6 +48,15 @@
 set -u
 # NOT set -e: a failed check must be REPORTED, not abort the run and hide the ones after it.
 
+# HERMETIC BY CONSTRUCTION. A sandbox HOME does not stop a tool that follows its own variable: `claude
+# auth status` reads CLAUDE_CONFIG_DIR, so a sandbox run on a developer's Mac read the REAL account, and
+# the agent_cli module would download ~400 MB of real agent binaries on a runner with none. So every
+# driver run in this suite — the pty release-tree tests included, which inherit this environment —
+# selects no agent, and the agents' own config roots are dropped. scripts/checks/agent-cli.sh sets
+# BOOTSTRAP_AGENTS per case against file:// fixtures, which is where the real behaviour is measured.
+export BOOTSTRAP_AGENTS=none
+unset CLAUDE_CONFIG_DIR COPILOT_HOME
+
 CHECK_KEEP=0
 CHECK_SNAPSHOT=""
 
