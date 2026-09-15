@@ -15,6 +15,13 @@
 #      because create-draft then send-draft is send-mail with extra steps. A prompt the person
 #      TYPES starts a new turn; injected traffic (task notifications, Stop-hook feedback) does not.
 #      No session id means no way to tell, so the send is refused: it fails CLOSED.
+#   3. A BATCH MAY ONLY READ. graph-batch forwards up to 20 raw Graph requests, so one POST inside it
+#      reaches /me/sendMail — and every other write — without passing rules 1 or 2 (measured: before
+#      this rule a batched POST /me/sendMail was allowed, rc 0 and silent). It is allowed only when
+#      every sub-request is a GET; a batch whose request list cannot be read is refused.
+#   4. THE SIGN-IN IS THE PERSON'S. logout and remove-account delete it and select-account switches
+#      it for every session sharing the server's cache; only a person can put either back. The tools
+#      take an account parameter per call, so nothing an agent legitimately does needs them.
 #
 # ── HOW A TURN IS SEEN, AND WHY NOT FROM THE TRANSCRIPT ─────────────────────────────────────
 # The obvious design reads the transcript back to the last human prompt. Copilot CLI 1.0.83 sends
@@ -86,6 +93,26 @@ MAIL_PAYLOAD=""
 mail_field() { bootstrap_settings_get "$MAIL_PAYLOAD" "$1" raw 2>/dev/null; }
 mail_has()   { bootstrap_settings_type "$MAIL_PAYLOAD" "$1" >/dev/null 2>&1; }
 
+# mail_batch_reads_only — rc 0 iff graph-batch's request list is readable, non-empty, and every
+# method is GET (Graph reads the method case-insensitively, so this does too). Both placements are
+# accepted: under body, where the server's schema puts it, and at the top of tool_input.
+mail_batch_reads_only() {
+  local k n i m
+  for k in tool_input.body.requests tool_input.requests; do
+    [ "$(bootstrap_settings_type "$MAIL_PAYLOAD" "$k" 2>/dev/null)" = array ] || continue
+    n="$(bootstrap_settings_get "$MAIL_PAYLOAD" "$k" raw 2>/dev/null)" || return 1
+    case "$n" in ''|*[!0-9]*|0) return 1 ;; esac
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      m="$(mail_field "$k.$i.method" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      [ "$m" = GET ] || return 1
+      i=$((i + 1))
+    done
+    return 0
+  done
+  return 1
+}
+
 mail_deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' \
     "$(printf '%s' "$1" | LC_ALL=C tr -d '"\\' | LC_ALL=C tr '\n\r\t' '   ')"
@@ -124,6 +151,16 @@ mail_main() {
     mail_deny "$name sends email the moment it runs, and this Mac never lets an agent do that. Write it as a draft with $k instead; the person reads it in Outlook and sends it, or tells you to send it in their next message."
     return 0
   fi
+
+  if [ "$name" = "graph-batch" ]; then
+    mail_batch_reads_only || mail_deny "graph-batch was refused because it carries a request that is not a GET, or a request list this guard cannot read. A batched POST reaches /me/sendMail and every other write without the checks the named tools get. Batch reads only, and make a write with its own tool — mail as a draft with create-draft-email."
+    return 0
+  fi
+  case "$name" in
+    logout|remove-account|select-account)
+      mail_deny "$name changes which Microsoft account this Mac is signed in to, for every session sharing it, and only the person can put that back. Pass the account parameter on each call instead. If they want to sign out, they run the server with --logout themselves."
+      return 0 ;;
+  esac
 
   if mail_composes_always "$name"; then
     [ -n "$sid" ] && mkdir -p "$d" 2>/dev/null && touch "$d/$sid.composed" 2>/dev/null
@@ -198,6 +235,17 @@ mail_selftest() {
     expect "[$arm] …so send-draft is denied again"           deny  "$(pre s1 ms365-send-draft-message)"
     expect "[$arm] no session id: send-draft fails closed"   deny  '{"hook_event_name":"PreToolUse","tool_name":"mcp__ms365__send-draft-message","tool_input":{}}'
     expect "[$arm] garbage in exits 0 silently"              quiet 'not json ms365'
+    expect "[$arm] batched POST /me/sendMail is denied"      deny  "$(pre s3 mcp__ms365__graph-batch '{"body":{"requests":[{"id":"1","method":"GET","url":"/me"},{"id":"2","method":"POST","url":"/me/sendMail","body":{}}]}}')"
+    expect "[$arm] a lowercase post is still a post"         deny  "$(pre s3 ms365-graph-batch '{"body":{"requests":[{"id":"1","method":"post","url":"/me/messages/x/send"}]}}')"
+    expect "[$arm] a batch with no request list is denied"   deny  "$(pre s3 mcp__ms365__graph-batch '{"body":{}}')"
+    expect "[$arm] an empty request list is denied"          deny  "$(pre s3 mcp__ms365__graph-batch '{"body":{"requests":[]}}')"
+    expect "[$arm] a batch of GETs passes"                   quiet "$(pre s3 mcp__ms365__graph-batch '{"body":{"requests":[{"id":"1","method":"GET","url":"/me"},{"id":"2","method":"get","url":"/me/events"}]}}')"
+    expect "[$arm] top-level requests of GETs pass"          quiet "$(pre s3 ms365-graph-batch '{"requests":[{"id":"1","method":"GET","url":"/me"}]}')"
+    expect "[$arm] ANOTHER server's graph-batch is untouched" quiet "$(pre s3 mcp__other__graph-batch '{"body":{"requests":[{"id":"1","method":"POST","url":"/x"}]}}')"
+    expect "[$arm] logout is denied"                         deny  "$(pre s3 mcp__ms365__logout)"
+    expect "[$arm] remove-account is denied"                 deny  "$(pre s3 ms365-remove-account)"
+    expect "[$arm] select-account is denied"                 deny  "$(pre s3 mcp__ms365__select-account)"
+    expect "[$arm] list-accounts is untouched"               quiet "$(pre s3 mcp__ms365__list-accounts)"
   done
   rm -rf "$T"
   printf '%s/%s cases passed.\n' "$((n - f))" "$n"

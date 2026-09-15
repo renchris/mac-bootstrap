@@ -29,7 +29,8 @@
 # THE AGENT NEVER SENDS MAIL ON ITS OWN SAY-SO. assets/hooks/guard-mail-send.sh is installed beside
 # the server and wired on both agents (PreToolUse + UserPromptSubmit) BEFORE the server is
 # registered, so the send tools are never reachable unguarded: compose-and-send is denied outright,
-# and a draft may be sent only in a later turn than the one that wrote it. The guard's header
+# a draft may be sent only in a later turn than the one that wrote it, graph-batch may only batch
+# GETs, and the tools that delete or switch the sign-in are refused. The guard's header
 # carries the measurements. Without it this module is not satisfied.
 #
 # No permission, no credential, no allow-list keypath is written here or anywhere below.
