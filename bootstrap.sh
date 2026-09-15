@@ -43,6 +43,11 @@ set -u
 # instance of that in this design (`xcodebuild -version | head -1`) SIGPIPEd rc=141 in 1 of 80
 # runs and misdiagnosed as an Xcode licence problem. This file captures, then reads the rc.
 
+# THE WHOLE DRIVER IS ONE { … } BLOCK, closed on the last line. Under `curl … | bash` bash reads the
+# script from the pipe as it runs, so a command that read stdin would consume the rest of it; a block is
+# parsed in full before any of it executes. Nothing inside is indented, so release.sh's anchored rewrites
+# of the pin and the manifest still match.
+{
 BOOTSTRAP_VERSION=1
 BOOTSTRAP_REPO="renchris/mac-bootstrap"
 BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-e72735464824aad403f6e72d5ff2340413e74b12}"          # replaced at release time. NEVER "main": a main-pinned
@@ -107,8 +112,23 @@ driver_say()  { printf '%s\n' "$*"; printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >
 driver_fail() { printf '  x %s\n' "$*" >&2; printf '%s FAIL %s\n' "$(date -u +%FT%TZ)" "$*" >&3 2>/dev/null; }
 driver_log()  { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&3 2>/dev/null; return 0; }
 
+# The header above IS the help. Under `curl … | bash` there is no file to read it from ($0 is bash
+# itself, and sed on that binary printed an error), so a short form is printed instead.
 driver_help() {
-  sed -n '2,36p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
+  if [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ]; then
+    sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    return 0
+  fi
+  cat <<'HELP'
+mac-bootstrap — set up a Mac for Claude Code and Copilot CLI, one module at a time.
+  (no flags)            in a terminal: a menu to pick modules. With nobody to ask: the default profile
+  --pick | --no-pick    always | never show the menu
+  --list  --plan  --manifest  --egress      look; change nothing
+  --profile lite|standard|full   --only a,b   --except x      choose without the menu
+  --verify   --uninstall   --bench <model> --only rewrite_model
+Exit: 0 all satisfied · 10 some steps are yours · 20 something failed · 30 not a verdict about this Mac.
+Save the script and run `bash <file> --help` for the full text.
+HELP
 }
 
 # ── flags ────────────────────────────────────────────────────────────────────────────────────
@@ -582,9 +602,15 @@ driver_pick_open() {
     return 0
   fi
   ( exec 4</dev/tty ) 2>/dev/null || return 1
+  driver_foreground || return 1
   exec 4</dev/tty 5>/dev/tty
 }
 driver_pick_close() { exec 4<&- 5>&-; }
+
+# driver_foreground — 0 iff this shell is in its terminal's foreground process group. A background
+# job (`bash bootstrap.sh &`) can open /dev/tty, but the kernel STOPS it on the read (SIGTTIN), and
+# `read -t` cannot wake a stopped process — measured: still stopped at twice its timeout.
+driver_foreground() { case "$(/bin/ps -o stat= -p $$ 2>/dev/null)" in *+*) return 0 ;; esac; return 1; }
 
 # driver_invocation — how to run THIS script again, for a hint the person can paste. Under
 # `curl … | bash` there is no file and $0 is just "bash", which printed `bash bash --only …`.
@@ -600,16 +626,34 @@ driver_pick_auto() {
   [ "$BOOTSTRAP_MODE" = install ] || return 1
   [ "$BOOTSTRAP_PICK" = auto ] || return 1
   [ -z "$BOOTSTRAP_ONLY$BOOTSTRAP_EXCEPT$BOOTSTRAP_PROFILE" ] || return 1
-  [ -z "${CI:-}${CLAUDECODE:-}${BOOTSTRAP_NONINTERACTIVE:-}" ] || return 1
+  # NOT CLAUDECODE: an IDE extension sets it in a PERSON's integrated terminal too (documented), and
+  # an agent's own tool shell is already excluded — it has no /dev/tty at all (measured).
+  [ -z "${CI:-}${BOOTSTRAP_NONINTERACTIVE:-}" ] || return 1
   [ -t 1 ] || return 1
-  ( exec 4</dev/tty ) 2>/dev/null
+  ( exec 4</dev/tty ) 2>/dev/null || return 1
+  driver_foreground
+}
+
+# driver_pick_drain — discard keys typed BEFORE the question was on screen. Without it, two stray
+# Enters pressed while the menu was still loading read as "accept the list" and "yes, install" —
+# measured: exit 0 with modules installed that nobody had seen offered. Non-blocking (14 ms measured).
+driver_pick_drain() {
+  [ -t 4 ] || return 0                        # the answer-file seam is not a terminal: nothing to drain
+  local old
+  old="$(stty -g <&4 2>/dev/null)" || return 0
+  stty -icanon min 0 time 0 <&4 2>/dev/null
+  dd bs=4096 count=1 <&4 >/dev/null 2>&1
+  stty "$old" <&4 2>/dev/null
 }
 
 # driver_pick_read — one line from the person into PICK_LINE. rc 1 on end-of-input or a timeout.
+# Always `<&4`: bash 3.2's `read -u 4` quietly ignores -s/-n/-e when stdin is a pipe (measured).
+# The drain is the CALLER's, BEFORE it prints the question: draining here, after the question is on
+# screen, would throw away an answer typed the moment it appeared (measured, in a pseudo-terminal).
 PICK_LINE=""
 driver_pick_read() {
   PICK_LINE=""
-  IFS= read -r -t "${BOOTSTRAP_PICK_TIMEOUT:-1800}" PICK_LINE <&4 && return 0
+  IFS= read -r -t "${BOOTSTRAP_PICK_TIMEOUT:-600}" PICK_LINE <&4 && return 0
   [ -n "$PICK_LINE" ]                         # a last line with no newline still counts
 }
 
@@ -633,6 +677,7 @@ driver_cmd_pick() {
   [ "$n" -gt 0 ] || { driver_note_out "bootstrap: no module could be read — nothing to choose from."; return 30; }
 
   while :; do
+    driver_pick_drain
     printf '\n  Pick what to install. [x] is selected now.\n\n' >&5
     i=0
     while [ "$i" -lt "$n" ]; do
@@ -643,7 +688,8 @@ driver_cmd_pick() {
       i=$((i + 1))
     done
     printf '\n  Type numbers to switch modules on or off (e.g. 5 7), or a profile: lite, standard, full, none.\n' >&5
-    printf '  ?5 shows what module 5 costs. Press Enter when the list is right; q quits and installs nothing.\n  > ' >&5
+    printf '  ?5 shows what module 5 costs. Press Enter when the list is right; q quits and installs nothing.\n' >&5
+    printf '  Nothing is installed until you confirm; unanswered, this gives up after %s seconds.\n  > ' "${BOOTSTRAP_PICK_TIMEOUT:-600}" >&5
     driver_pick_read || { printf '\n' >&5; driver_note_out "bootstrap: no answer — nothing was installed."; return 30; }
 
     if [ -z "$(printf '%s' "$PICK_LINE" | tr -d ' ')" ]; then
@@ -657,6 +703,7 @@ driver_cmd_pick() {
         i=0; while [ "$i" -lt "$n" ] && [ "${pm[i]}" != "$m" ]; do i=$((i + 1)); done
         printf '   %-21s %s\n' "$m" "${pc[i]:-unpriced}" >&5
       done
+      driver_pick_drain
       printf '\n  Install these now? [Y/n] ' >&5
       driver_pick_read || { printf '\n' >&5; driver_note_out "bootstrap: no answer — nothing was installed."; return 30; }
       case "$(printf '%s' "$PICK_LINE" | tr -d ' ' | tr 'YN' 'yn')" in
@@ -840,24 +887,29 @@ driver_emit_receipt() {                             # driver_emit_receipt <path>
 # so a single stray `exit` in one module would end the whole run and every later module would
 # silently never run. A subshell contains both. The cost is the contract in CONTRACT.md: no
 # state survives between verbs; persist to disk if you need it.
+# STDIN IS /dev/null for every verb. Under `curl … | bash` stdin IS the rest of this script, and bash
+# reads a piped script as it goes: a module that read stdin would eat the driver. Measured, with a test
+# module whose install_ ran `cat | wc -c`: 4,227 bytes of the driver swallowed, no receipt, no verdict,
+# exit 0. (The whole driver is also one { … } block — see its first line — so bash has read all of it
+# before running any of it.)
 driver_call() {                                     # driver_call <module-file> <module> <verb> [redirect-to-log]
   local mf="$1" m="$2" verb="$3" tolog="${4:-}"
   if [ "$tolog" = "log" ]; then
     # shellcheck disable=SC1090  # both paths are resolved at runtime by design
     ( . "$BOOTSTRAP_LIB" >/dev/null 2>&1; . "$mf" >/dev/null 2>&1 || exit 90
       command -v "${verb}_${m}" >/dev/null 2>&1 || exit 91
-      "${verb}_${m}" ) >>"$BOOTSTRAP_LOG" 2>&1
+      "${verb}_${m}" ) </dev/null >>"$BOOTSTRAP_LOG" 2>&1
   else
     # shellcheck disable=SC1090
     ( . "$BOOTSTRAP_LIB" >/dev/null 2>&1; . "$mf" >/dev/null 2>&1 || exit 90
       command -v "${verb}_${m}" >/dev/null 2>&1 || exit 91
-      "${verb}_${m}" ) 2>>"$BOOTSTRAP_LOG"
+      "${verb}_${m}" ) </dev/null 2>>"$BOOTSTRAP_LOG"
   fi
 }
 driver_has_verb() {
   # shellcheck disable=SC1090
   ( . "$BOOTSTRAP_LIB" >/dev/null 2>&1; . "$1" >/dev/null 2>&1 || exit 1
-    command -v "${3}_${2}" >/dev/null 2>&1 ) >/dev/null 2>&1
+    command -v "${3}_${2}" >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1
 }
 
 # A row whose module is NOT in this release's manifest is not evidence about this release —
@@ -1212,3 +1264,4 @@ case "$BOOTSTRAP_EXIT_CODE" in
   30) driver_say "exit 30 — precondition error: this run is NOT a verdict about your Mac." ;;
 esac
 exit "$BOOTSTRAP_EXIT_CODE"
+}
