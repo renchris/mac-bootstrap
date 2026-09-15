@@ -460,3 +460,157 @@ case "$(ms_run "$h" note_microsoft365_archive)" in *'rm -rf "$HOME/Microsoft365A
   *) fail "microsoft-archive-note-names-kept-copies" "$(ms_run "$h" note_microsoft365_archive)" ;; esac
 rm -rf "$h/Microsoft365Archive"
 case "$(ms_run "$h" note_microsoft365_archive)" in *"was kept"*) fail "microsoft-archive-note-kept-control" ;; *) pass "microsoft-archive-note-kept-control" ;; esac
+
+# ── 9. A BLOCKED NETWORK — NEEDS_HUMAN naming the host, quickly, and never FAILED ───────────────
+# Stand-ins only: a fake npm (a shell script beside a stubbed node), a stand-in for curl
+# (microsoft365_curl) and for the TLS verdict (bootstrap_tls_verdict), and closed loopback ports.
+MS_NET="$CHECK_TMP/ms-net"; mkdir -p "$MS_NET/bin"
+cat > "$MS_NET/bin/npm" <<'NPM'
+#!/bin/sh
+case "$1" in
+  config)  printf 'registry=%s\nhttps-proxy=%s\nproxy=null\nnoproxy=\n' "${FAKE_NPM_REGISTRY:-https://registry.npmjs.org/}" "${FAKE_NPM_PROXY:-null}" ;;
+  install) cat "$FAKE_NPM_OUT"; exit 1 ;;
+esac
+NPM
+printf '#!/bin/sh\nexit 0\n' > "$MS_NET/bin/node"; chmod 755 "$MS_NET/bin/npm" "$MS_NET/bin/node"
+printf 'npm error code ENOTFOUND\nnpm error syscall getaddrinfo\nnpm error network request to https://registry.npmjs.org/@softeria%%2fms-365-mcp-server failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org\n' > "$MS_NET/enotfound.txt"
+printf 'npm error code ETARGET\nnpm error notarget No matching version found for @softeria/ms-365-mcp-server@0.143.0.\n' > "$MS_NET/etarget.txt"
+# The module as far as npm: a node it found, the package not yet in, the registry answering.
+MS_NET_FAKE="microsoft365_node() { printf '%s' '$MS_NET/bin/node'; }; microsoft365_installed() { return 1; }"
+MS_NET_UP='microsoft365_curl() { printf "200 000"; }'
+MS_NET_AFTER='install_microsoft365 >/dev/null 2>&1; printf "install=%s|" $?; (gate_microsoft365) && printf "gated|" || printf "not-gated|"; (note_microsoft365); printf "|"; (gesture_microsoft365)'
+
+# npm's own words, classified. Each line: <want> <npm output line>; "-" is a real failure (the controls).
+MS_NPM_LINES='dns registry.npmjs.org|npm error network request to https://registry.npmjs.org/x failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org
+dns registry.npmjs.org|npm error errno EAI_AGAIN request to https://registry.npmjs.org/x failed
+refused mirror.corp.test|npm error network request to https://mirror.corp.test/x failed, reason: connect ECONNREFUSED 10.0.0.1:443
+timeout registry.npmjs.org|npm error code ETIMEDOUT fetching https://registry.npmjs.org/x
+reset registry.npmjs.org|npm error code ECONNRESET
+proxy-login registry.npmjs.org|npm error code E407
+forbidden registry.npmjs.org|npm error 403 Forbidden - GET https://registry.npmjs.org/x - blocked by policy
+cert registry.npmjs.org|npm error code UNABLE_TO_GET_ISSUER_CERT_LOCALLY
+dns github.com|prebuild-install warn install getaddrinfo ENOTFOUND github.com
+-|npm error code ETARGET
+-|npm error 404 Not Found - GET https://registry.npmjs.org/@softeria%2fnope
+-|gyp ERR! stack Error: `make` failed with exit code: 2'
+MS_WRONG=""; ms_n=0
+while IFS='|' read -r ms_want ms_line; do
+  [ -n "$ms_line" ] || continue
+  printf '%s\n' "$ms_line" > "$MS_NET/one.txt"; ms_n=$((ms_n + 1))
+  ms_out="$(ms_run "$CHECK_HOME" "microsoft365_npm_blocked '$MS_NET/one.txt' https://registry.npmjs.org/ || printf -")"
+  [ "$ms_out" = "$ms_want" ] || MS_WRONG="$MS_WRONG [$ms_want ≠ $ms_out]"
+done <<EOF
+$MS_NPM_LINES
+EOF
+if [ -z "$MS_WRONG" ]; then pass "microsoft-npm-output-classified" "$ms_n lines, 3 real failures kept"
+else fail "microsoft-npm-output-classified" "$MS_WRONG"; fi
+
+# Through install_ and the gate_ the driver asks next: a network that said no is NEEDS_HUMAN naming the
+# host; a package that is broken is FAILED (not gated). Each verb in its own subshell, as the driver runs them.
+h="$(fresh_home net-enotfound)"
+ms_out="$(ms_run "$h" "$MS_NET_FAKE; $MS_NET_UP; $MS_NET_AFTER" FAKE_NPM_OUT="$MS_NET/enotfound.txt" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT")"
+case "$ms_out" in
+  "install=1|gated|npm could not reach registry.npmjs.org (its name does not resolve"*"ask IT to allow HTTPS"*"npm_config_registry"*"|") pass "microsoft-npm-enotfound-needs-human" ;;
+  *) fail "microsoft-npm-enotfound-needs-human" "$ms_out" ;;
+esac
+ms_out="$(ms_run "$h" "$MS_NET_FAKE; $MS_NET_UP; $MS_NET_AFTER" FAKE_NPM_OUT="$MS_NET/etarget.txt" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT")"
+case "$ms_out" in "install=1|not-gated|"*) pass "microsoft-npm-package-error-failed" "not gated, so the driver says FAILED" ;;
+  *) fail "microsoft-npm-package-error-failed" "$ms_out" ;; esac
+
+# The registry is npm's: a fixture ~/.npmrc names a mirror, npm_config_registry outranks it, and with
+# neither it is npm's default. First with no node (the sources npm reads), then through a real npm.
+h="$(fresh_home net-npmrc)"; printf 'registry=https://127.0.0.1:9/mirror/\n' > "$h/.npmrc"
+MS_NO_NODE_NET='microsoft365_node() { return 1; }; microsoft365_registry'
+same "microsoft-registry-from-npmrc" "$(ms_run "$h" "$MS_NO_NODE_NET")" "https://127.0.0.1:9/mirror/"
+same "microsoft-registry-env-outranks-npmrc" "$(ms_run "$h" "$MS_NO_NODE_NET" npm_config_registry=https://127.0.0.1:9/env/)" "https://127.0.0.1:9/env/"
+same "microsoft-registry-default-control" "$(ms_run "$(fresh_home net-no-npmrc)" "$MS_NO_NODE_NET")" "https://registry.npmjs.org/"
+ms_node="$(ms_run "$CHECK_HOME" microsoft365_node)"
+if [ -n "$ms_node" ] && [ -x "$(dirname "$ms_node")/npm" ]; then
+  ms_before="$(cd "$h" && find . | sort)"
+  same "microsoft-registry-through-npm" "$(ms_run "$h" microsoft365_registry)" "https://127.0.0.1:9/mirror/"
+  same "microsoft-registry-npm-writes-nothing" "$(cd "$h" && find . | sort)" "$ms_before"
+  # The control: npm asked plainly leaves its debug log in $HOME/.npm — the thing the flags prevent.
+  ms_run "$h" '"$(dirname "$(microsoft365_node)")/npm" config get registry' >/dev/null
+  if [ -d "$h/.npm" ]; then pass "microsoft-registry-npm-writes-control" "a plain npm wrote $HOME/.npm"; rm -rf "$h/.npm"
+  else fail "microsoft-registry-npm-writes-control" "a plain npm left no trace, so the check above proves nothing"; fi
+else
+  pass "microsoft-registry-through-npm" "n/a: no node with npm beside it on this Mac"
+  pass "microsoft-registry-npm-writes-nothing" "n/a: no node with npm beside it on this Mac"
+  pass "microsoft-registry-npm-writes-control" "n/a: no node with npm beside it on this Mac"
+fi
+
+# The TLS probe asks that registry, never a hardcoded one — and each host once per RUN, all at once.
+# The stand-in verdict logs each host it is asked about and takes 2 s, like a dropped connection.
+MS_COUNT_VERDICT='bootstrap_tls_verdict() { printf "%s\n" "$1" >> "$MS_COUNT"; sleep 2; printf network-error; }'
+MS_COUNT_NO_NODE="$MS_COUNT_VERDICT; microsoft365_node() { return 1; }"
+ms_c="$CHECK_TMP/ms-net-count"; rm -f "$ms_c"
+ms_run "$h" "$MS_COUNT_NO_NODE; microsoft365_tls_load" BOOTSTRAP_TLS_PROBE_URL= MS_COUNT="$ms_c"
+case "$(sort "$ms_c" 2>/dev/null | tr '\n' ' ')" in
+  *"https://127.0.0.1:9/mirror/"*registry.npmjs.org*|*registry.npmjs.org*"https://127.0.0.1:9/mirror/"*) fail "microsoft-tls-asks-npm-registry" "$(tr '\n' ' ' < "$ms_c")" ;;
+  *"https://127.0.0.1:9/mirror/"*) pass "microsoft-tls-asks-npm-registry" "the mirror, not registry.npmjs.org" ;;
+  *) fail "microsoft-tls-asks-npm-registry" "$(tr '\n' ' ' < "$ms_c" 2>/dev/null)" ;;
+esac
+rm -f "$ms_c"; ms_run "$(fresh_home net-tls-default)" "$MS_COUNT_NO_NODE; microsoft365_tls_load" BOOTSTRAP_TLS_PROBE_URL= MS_COUNT="$ms_c"
+case "$(tr '\n' ' ' < "$ms_c" 2>/dev/null)" in *"https://registry.npmjs.org/"*) pass "microsoft-tls-default-registry-control" ;;
+  *) fail "microsoft-tls-default-registry-control" "$(tr '\n' ' ' < "$ms_c" 2>/dev/null)" ;; esac
+MS_THREE_VERBS='s=$(date +%s); (gate_microsoft365); printf "%s" $(( $(date +%s) - s )) > "$MS_COUNT.t"; (note_microsoft365 >/dev/null); (gesture_microsoft365 >/dev/null)'
+rm -f "$ms_c"; ms_run "$h" "$MS_COUNT_NO_NODE; $MS_THREE_VERBS" BOOTSTRAP_TLS_PROBE_URL= MS_COUNT="$ms_c" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT"
+ms_n="$(grep -c . "$ms_c" 2>/dev/null | tr -d ' ')"; ms_t="$(cat "$ms_c.t" 2>/dev/null)"
+same "microsoft-tls-once-per-run" "$ms_n" 3
+if [ "${ms_t:-99}" -lt 5 ]; then pass "microsoft-tls-hosts-in-parallel" "3 hosts × 2 s answered in ${ms_t} s"
+else fail "microsoft-tls-hosts-in-parallel" "${ms_t:-?} s for 3 hosts × 2 s"; fi
+# The control: drop the run's cache between the verbs and every verb asks again.
+rm -f "$ms_c"; ms_run "$h" "$MS_COUNT_NO_NODE; (gate_microsoft365); rm -f \"\$TMPDIR/mac-bootstrap-microsoft365.\$\$\"; (note_microsoft365 >/dev/null)" \
+  BOOTSTRAP_TLS_PROBE_URL= MS_COUNT="$ms_c" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT"
+same "microsoft-tls-once-per-run-control" "$(grep -c . "$ms_c" 2>/dev/null | tr -d ' ')" 6
+
+# Before npm, the registry npm will use is asked through npm's own proxy — never on a command line.
+rm -f "$ms_c"
+ms_run "$h" "$MS_NET_FAKE"'; microsoft365_curl() { printf "%s|%s\n" "$https_proxy" "$*" > "$MS_COUNT"; printf "200 000"; }; microsoft365_registry_blocked "$(microsoft365_node)" || printf up' >/dev/null \
+  MS_COUNT="$ms_c" FAKE_NPM_REGISTRY=https://127.0.0.1:9/mirror/ FAKE_NPM_PROXY=http://proxy.corp.test:3128
+ms_out="$(cat "$ms_c" 2>/dev/null)"
+case "$ms_out" in
+  *"|"*proxy.corp.test*) fail "microsoft-preflight-npm-registry-and-proxy" "the proxy is on curl's command line: $ms_out" ;;
+  "http://proxy.corp.test:3128|"*"--connect-timeout 10 -m 20 https://127.0.0.1:9/mirror/") pass "microsoft-preflight-npm-registry-and-proxy" "npm's registry, npm's proxy, bounded" ;;
+  *) fail "microsoft-preflight-npm-registry-and-proxy" "$ms_out" ;;
+esac
+# A silent drop (curl gives up: 28), a proxy that wants a login (CONNECT 407), and a real closed
+# loopback port: each is NEEDS_HUMAN naming the host, in seconds.
+h="$(fresh_home net-drop)"
+ms_s="$(date +%s)"
+ms_out="$(ms_run "$h" "$MS_NET_FAKE"'; microsoft365_curl() { printf "000 000"; return 28; }; '"$MS_NET_AFTER" \
+  FAKE_NPM_OUT="$MS_NET/etarget.txt" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT")"
+ms_t=$(( $(date +%s) - ms_s ))
+case "$ms_out" in "install=1|gated|npm could not reach registry.npmjs.org (the connection timed out"*"|")
+  if [ "$ms_t" -lt 10 ]; then pass "microsoft-preflight-silent-drop-needs-human" "${ms_t} s"; else fail "microsoft-preflight-silent-drop-needs-human" "${ms_t} s"; fi ;;
+  *) fail "microsoft-preflight-silent-drop-needs-human" "$ms_out" ;;
+esac
+ms_out="$(ms_run "$h" "$MS_NET_FAKE"'; microsoft365_curl() { printf "000 407"; return 56; }; '"$MS_NET_AFTER" \
+  FAKE_NPM_OUT="$MS_NET/etarget.txt" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT")"
+case "$ms_out" in "install=1|gated|"*"proxy asked for a login"*) pass "microsoft-preflight-proxy-login-needs-human" ;;
+  *) fail "microsoft-preflight-proxy-login-needs-human" "$ms_out" ;; esac
+same "microsoft-preflight-closed-port" "$(ms_run "$h" "$MS_NET_FAKE"'; microsoft365_registry_blocked "$(microsoft365_node)"' FAKE_NPM_REGISTRY=http://127.0.0.1:9/)" "refused 127.0.0.1"
+same "microsoft-preflight-mirror-root-401-is-up" "$(ms_run "$h" "$MS_NET_FAKE"'; microsoft365_curl() { printf "401 000"; }; microsoft365_registry_blocked "$(microsoft365_node)" || printf up')" up
+
+# A node download that did not complete is NEEDS_HUMAN naming nodejs.org and the mirror variable.
+h="$(fresh_home net-node)"
+ms_out="$(ms_run "$h" 'microsoft365_node() { return 1; }; bootstrap_fetch_pinned() { return 1; }; '"$MS_NET_AFTER" \
+  BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT" BOOTSTRAP_ASSUME_STANDARD_USER=1 BOOTSTRAP_ENTRY=)"
+if [ -n "$(ms_run "$h" 'microsoft365_macos_ok && microsoft365_node_arch')" ]; then
+  case "$ms_out" in "install=1|gated|"*nodejs.org*BOOTSTRAP_ARTIFACT_MIRROR*) pass "microsoft-node-not-fetched-needs-human" ;;
+    *) fail "microsoft-node-not-fetched-needs-human" "$ms_out" ;; esac
+else pass "microsoft-node-not-fetched-needs-human" "n/a: this macOS or CPU has no pinned node build"; fi
+
+# A looking mode writes nothing under HOME — the plan through the driver, and the verbs asking a
+# real npm for its registry, with the run's cache in $TMPDIR.
+h="$(fresh_home net-looking)"; printf 'registry=https://127.0.0.1:9/mirror/\n' > "$h/.npmrc"
+ms_before="$(cd "$h" && find . | sort)"
+ms_drive "$h" --plan --only microsoft365
+ms_run "$h" "$MS_COUNT_VERDICT; (gate_microsoft365); (note_microsoft365 >/dev/null)" \
+  BOOTSTRAP_READ_ONLY=1 BOOTSTRAP_TLS_PROBE_URL= MS_COUNT="$CHECK_TMP/ms-net-looking" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT"
+same "microsoft-looking-mode-writes-nothing" "$(cd "$h" && find . | sort | tr '\n' ' ')" "$(printf '%s\n' "$ms_before" | tr '\n' ' ')"
+# The control: the same verbs outside a looking mode do write (the state directory), so the
+# comparison above can say no.
+ms_run "$h" "$MS_COUNT_VERDICT; (gate_microsoft365)" BOOTSTRAP_TLS_PROBE_URL= MS_COUNT="$CHECK_TMP/ms-net-looking" BOOTSTRAP_MANAGED_ROOT="$MS_EMPTY_ROOT"
+if [ -d "$h/.mac-bootstrap" ]; then pass "microsoft-looking-mode-control" "install mode created the state directory"
+else fail "microsoft-looking-mode-control" "nothing was written, so the check above proves nothing"; fi

@@ -191,29 +191,204 @@ microsoft365_node_fetch() {
   return 0
 }
 
+# ── one driver run's answers ─────────────────────────────────────────────────────────────────
+# Every verb is a subshell of the driver, so an answer kept in a variable dies with the verb that
+# found it: a blocked network used to cost the full TLS probe once per verb (measured: 61 s for ONE
+# gate_ on a silently dropped network). What one run learns about the network is kept in a file keyed
+# by the driver's pid AND that process's start time, so a recycled pid never inherits an old answer.
+# It lives in $TMPDIR in every mode: a pid-named file in the state dir would make the second of two
+# identical runs differ from the first, and a looking mode must write nothing there at all. Lines:
+#   run <key> · registry <url> · tls <url> <rc> [NODE_EXTRA_CA_CERTS=…] · network <kind> <host>
+microsoft365_cache() {
+  local d f key
+  d="${TMPDIR:-/tmp}"; d="${d%/}"; f="$d/mac-bootstrap-microsoft365.$$"
+  key="run $$ $(/bin/ps -o lstart= -p $$ 2>/dev/null | tr -s ' ' '-')"
+  [ "$(head -n 1 "$f" 2>/dev/null)" = "$key" ] && { printf '%s' "$f"; return 0; }
+  find "$d" -maxdepth 1 -name 'mac-bootstrap-microsoft365.*' -mtime +0 -exec rm -f {} + 2>/dev/null
+  ( umask 077; printf '%s\n' "$key" > "$f" ) 2>/dev/null || return 1
+  printf '%s' "$f"
+}
+microsoft365_cached() { local c; c="$(microsoft365_cache)" || return 1; sed -n "s/^$1 //p" "$c" | head -n 1; }
+
+# ── npm's registry ───────────────────────────────────────────────────────────────────────────
+# The registry npm WILL use, never an assumed one: a company that mirrors npm names its mirror in
+# ~/.npmrc or npm_config_registry, and asking registry.npmjs.org there tests a host npm never calls.
+MICROSOFT365_DEFAULT_REGISTRY="https://registry.npmjs.org/"
+
+# microsoft365_npm_config [node] — npm's own registry, https-proxy, proxy and noproxy, as key=value
+# lines, read through the npm beside the module's node. Local only; its cache and logs go to a
+# throwaway directory, since npm otherwise writes a debug log into $HOME/.npm on every command.
+microsoft365_npm_config() {
+  local node="${1:-}" npm tmp
+  [ -n "$node" ] || node="$(microsoft365_node 2>/dev/null)" || return 1
+  npm="$(dirname "$node")/npm"; [ -x "$npm" ] || return 1
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/microsoft365-npm.XXXXXX")" || return 1
+  /usr/bin/env PATH="$(dirname "$node"):$PATH" "$npm" config get registry https-proxy proxy noproxy \
+    --no-update-notifier --logs-max=0 --cache="$tmp" 2>/dev/null | LC_ALL=C grep -E '^(registry|https-proxy|proxy|noproxy)='
+  rm -rf "$tmp" 2>/dev/null
+  return 0
+}
+# microsoft365_npm_value <key=value lines> <key> — the value, or nothing when npm says it is unset.
+microsoft365_npm_value() {
+  local v
+  v="$(printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -n 1)"
+  case "$v" in null|undefined) v="" ;; esac
+  printf '%s' "$v"
+}
+
+# microsoft365_registry — npm's registry URL. Through npm when the module's node has one beside it;
+# before any node exists, the same sources npm reads first: npm_config_registry, then ~/.npmrc.
+microsoft365_registry() {
+  local r f
+  r="$(microsoft365_cached registry)" && [ -n "$r" ] && { printf '%s' "$r"; return 0; }
+  r="$(microsoft365_npm_value "$(microsoft365_npm_config)" registry)"
+  if [ -z "$r" ]; then
+    r="${npm_config_registry:-${NPM_CONFIG_REGISTRY:-}}"
+    f="${npm_config_userconfig:-${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}}"
+    [ -z "$r" ] && [ -r "$f" ] && r="$(sed -n 's/^[[:space:]]*registry[[:space:]]*=[[:space:]]*//p' "$f" | tail -n 1 | tr -d '"\r' | sed 's/[[:space:]]*$//')"
+    [ -n "$r" ] || r="$MICROSOFT365_DEFAULT_REGISTRY"
+  fi
+  f="$(microsoft365_cache)" && printf 'registry %s\n' "$r" >> "$f"
+  printf '%s' "$r"
+}
+
+# microsoft365_url_host <url> — the host alone: no scheme, login, port or path.
+microsoft365_url_host() {
+  local h="${1#*://}"
+  h="${h%%/*}"; h="${h##*@}"
+  case "$h" in \[*) h="${h%%]*}"; printf '%s]' "$h"; return 0 ;; esac
+  printf '%s' "${h%%:*}"
+}
+
+# ── the network, when it says no ─────────────────────────────────────────────────────────────
+# A network that blocks npm is not a defect in this module: it is IT's to open, so it is reported as
+# a gate naming the host, never FAILED. Found in install_, and kept in this run's cache so the gate_
+# the driver asks next can report it.
+microsoft365_network_record()  { local c; c="$(microsoft365_cache)" && printf 'network %s\n' "$1" >> "$c"; }
+microsoft365_network_blocked() { local w; w="$(microsoft365_cached network)" && [ -n "$w" ] && printf '%s' "$w"; }
+
+microsoft365_curl() { /usr/bin/curl "$@"; }      # one function, so a check can stand in for curl
+
+# microsoft365_registry_blocked <node> — prints "<kind> <host>" and rc 0 when npm's registry cannot be
+# reached from here; rc 1 when it answers (any HTTP answer but a refusal: a mirror may say 401 or 404
+# at its root). It asks through npm's own proxy settings when ~/.npmrc has them, else the environment's
+# (curl reads https_proxy and no_proxy itself). Bounded: 10 s to connect, 20 s in all. A proxy URL can
+# carry a login, so it goes to curl in the environment, never on a command line, and is never printed.
+microsoft365_registry_blocked() {
+  local node="$1" cfg reg px np out rc code conn host
+  cfg="$(microsoft365_npm_config "$node")"
+  reg="$(microsoft365_npm_value "$cfg" registry)"; [ -n "$reg" ] || reg="$(microsoft365_registry)"
+  case "$reg" in
+    https:*) px="$(microsoft365_npm_value "$cfg" https-proxy)"; [ -n "$px" ] || px="$(microsoft365_npm_value "$cfg" proxy)" ;;
+    *)       px="$(microsoft365_npm_value "$cfg" proxy)" ;;
+  esac
+  np="$(microsoft365_npm_value "$cfg" noproxy)"
+  out="$(
+    if [ -n "$px" ]; then export https_proxy="$px" HTTPS_PROXY="$px" http_proxy="$px" HTTP_PROXY="$px"; fi
+    if [ -n "$np" ]; then export no_proxy="$np" NO_PROXY="$np"; fi
+    microsoft365_curl -sS -I -o /dev/null -w '%{http_code} %{http_connect}' --connect-timeout 10 -m 20 "$reg" 2>/dev/null
+  )"; rc=$?
+  code="${out%% *}"; conn="${out##* }"; host="$(microsoft365_url_host "$reg")"
+  case "$conn" in 403) printf 'proxy-refused %s' "$host"; return 0 ;; 407) printf 'proxy-login %s' "$host"; return 0 ;; esac
+  case "$rc" in
+    0)     case "$code" in 407) printf 'proxy-login %s' "$host" ;; 403) printf 'forbidden %s' "$host" ;; *) return 1 ;; esac ;;
+    5)     printf 'proxy-unknown %s' "$host" ;;
+    6)     printf 'dns %s' "$host" ;;
+    7)     printf 'refused %s' "$host" ;;
+    28)    printf 'timeout %s' "$host" ;;
+    35|60) printf 'cert %s' "$host" ;;
+    52|56) printf 'reset %s' "$host" ;;
+    *)     return 1 ;;
+  esac
+  return 0
+}
+
+# microsoft365_npm_blocked <npm-output-file> <registry> — prints "<kind> <host>" and rc 0 when npm
+# failed because the NETWORK said no; rc 1 for anything else, which stays a real failure. The host is
+# the one the failing line names (a dependency's prebuilt binary comes from github.com, not the
+# registry), else the registry's.
+MICROSOFT365_NPM_NETWORK='proxy-login:E407|407 Proxy Authentication
+forbidden:E403|403 Forbidden
+dns:ENOTFOUND|EAI_AGAIN
+refused:ECONNREFUSED
+timeout:ETIMEDOUT|E[A-Z]*TIMEOUT|ERR_SOCKET_TIMEOUT
+reset:ECONNRESET|socket hang up
+unreachable:ENETUNREACH|EHOSTUNREACH|ENETDOWN|EHOSTDOWN
+cert:UNABLE_TO_GET_ISSUER_CERT|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|CERT_NOT_YET_VALID|ERR_TLS_CERT_ALTNAME_INVALID|CERT_UNTRUSTED'
+microsoft365_npm_blocked() {
+  local f="$1" reg="$2" pair line host
+  while IFS= read -r pair; do
+    line="$(LC_ALL=C grep -E "${pair#*:}" "$f" 2>/dev/null | head -n 1)"
+    [ -n "$line" ] || continue
+    host="$(printf '%s' "$line" | LC_ALL=C grep -Eo 'https?://[^/[:space:]]+' | head -n 1)"
+    if [ -n "$host" ]; then host="$(microsoft365_url_host "$host")"
+    else host="$(printf '%s' "$line" | LC_ALL=C sed -nE 's/.*(ENOTFOUND|EAI_AGAIN)[[:space:]]+([A-Za-z0-9._-]+).*/\2/p' | head -n 1)"; fi
+    [ -n "$host" ] || host="$(microsoft365_url_host "$reg")"
+    printf '%s %s' "${pair%%:*}" "$host"; return 0
+  done <<EOF
+$MICROSOFT365_NPM_NETWORK
+EOF
+  return 1
+}
+
 # ── TLS ──────────────────────────────────────────────────────────────────────────────────────
 # Behind a TLS-inspecting proxy every node process of this module fails with
 # UNABLE_TO_GET_ISSUER_CERT_LOCALLY — npm, the server each agent starts, verify's own runs of it —
 # because node ships its own roots and ignores the keychain. bootstrap_node_ca_env answers, per host,
 # with the variable that fixes it. Proxies bypass inspection per host, so each host a node process
-# here talks to is asked: Microsoft's two always, npm's registry until the package is installed.
-# BOOTSTRAP_TLS_PROBE_URL, when set, replaces every one of them (a test seam).
+# here talks to is asked: Microsoft's two always, npm's registry (the one npm will use) until the
+# package is installed. BOOTSTRAP_TLS_PROBE_URL, when set, replaces every one of them (a test seam).
 #
-# The answer is loaded ONCE per verb, at the verb's top (never inside $(…), whose subshell would
-# forget it), because each probe is two HTTPS requests.
+# Each host is asked ONCE per driver run (the run cache above), and the hosts not yet asked are asked
+# all at once: each verdict is two bounded requests, so a dropped network costs one timeout, not one
+# per host per verb. Only bootstrap_tls_verdict runs in parallel — bootstrap_node_ca_env writes the
+# PEM through one fixed temporary name, so it runs once, and only when a root the OS trusts intercepts.
+# Loaded at the verb's top (never inside $(…), whose subshell would forget the variables).
 MICROSOFT365_TLS_LOADED=""; MICROSOFT365_TLS_VAR=""; MICROSOFT365_TLS_RC=1
 microsoft365_tls_load() {
-  local urls u out rc known=1 untrusted=0
+  local urls u c todo="" d i pids="" lines="" v rc out known=1 untrusted=0 exported=""
   [ -n "$MICROSOFT365_TLS_LOADED" ] && return 0
   if [ -n "${BOOTSTRAP_TLS_PROBE_URL:-}" ]; then urls="$BOOTSTRAP_TLS_PROBE_URL"
   else
     urls="https://login.microsoftonline.com/ https://graph.microsoft.com/"
     # The package on disk, not microsoft365_installed: that one RUNS the server, which asks for this.
-    [ -f "$(microsoft365_entry)" ] || urls="$urls https://registry.npmjs.org/"
+    [ -f "$(microsoft365_entry)" ] || urls="$urls $(microsoft365_registry)"
+  fi
+  c="$(microsoft365_cache)" || c=""
+  for u in $urls; do
+    [ -n "$c" ] && LC_ALL=C grep -qF "tls $u " "$c" && continue
+    todo="$todo $u"
+  done
+  if [ -n "$todo" ] && d="$(mktemp -d "${TMPDIR:-/tmp}/microsoft365-tls.XXXXXX")"; then
+    i=0
+    for u in $todo; do
+      i=$((i + 1)); bootstrap_tls_verdict "$u" > "$d/$i" 2>/dev/null & pids="$pids $!"
+    done
+    # shellcheck disable=SC2086  # a list of pids
+    wait $pids 2>/dev/null
+    i=0
+    for u in $todo; do
+      i=$((i + 1)); v="$(cat "$d/$i" 2>/dev/null)"; out=""
+      case "$v" in
+        clean)                  rc=0 ;;
+        intercepted-untrusted)  rc=2 ;;
+        intercepted-os-trusted)
+          if [ -z "$exported" ]; then exported="$(bootstrap_node_ca_env "$u" 2>/dev/null)"; rc=$?
+          else rc=0; fi
+          out="$exported" ;;
+        *)                      rc=1 ;;
+      esac
+      lines="${lines}tls $u $rc $out
+"
+    done
+    rm -rf "$d" 2>/dev/null
+    [ -n "$c" ] && printf '%s' "$lines" >> "$c"
   fi
   MICROSOFT365_TLS_VAR=""
   for u in $urls; do
-    out="$(bootstrap_node_ca_env "$u" 2>/dev/null)"; rc=$?
+    v="$({ [ -n "$c" ] && cat "$c"; printf '%s' "$lines"; } | LC_ALL=C grep -F "tls $u " | head -n 1)"
+    v="${v#"tls $u "}"; rc="${v%% *}"; out=""
+    case "$v" in *" "*) out="${v#* }" ;; esac
     case "$rc" in
       0) known=0; [ -n "$out" ] && MICROSOFT365_TLS_VAR="$out" ;;
       2) untrusted=1 ;;
@@ -721,11 +896,11 @@ software npm package $MICROSOFT365_PACKAGE@$MICROSOFT365_SERVER_VERSION and abou
 data the agent can save mail attachments, meeting recordings and OneDrive files to this Mac's disk (the server's download-bytes-to-file tool), outside the tenant's DLP, retention and eDiscovery
 E
 }
-# One host per line: <host> <install|run> <purpose>. The TLS check (bootstrap_node_ca_env) makes a
+# One host per line: <host> <install|run> <purpose>. The TLS check (bootstrap_tls_verdict) makes a
 # request to each Microsoft host at install and verify, and to npm's registry until the package is in.
 egress_microsoft365() { cat <<'E'
 nodejs.org install node 24.21.0, pinned by sha256, only when this Mac has no node 20 or later
-registry.npmjs.org install npm package @softeria/ms-365-mcp-server@0.143.0 and its dependencies (or the registry ~/.npmrc names)
+registry.npmjs.org install npm package @softeria/ms-365-mcp-server@0.143.0 and its dependencies, and a reachability check first — or the registry npm is set to use instead (npm_config_registry, ~/.npmrc)
 github.com install keytar prebuilt binary (prebuild-install), redirects to release-assets.githubusercontent.com
 release-assets.githubusercontent.com install keytar prebuilt binary download
 login.microsoftonline.com run Microsoft sign-in and token refresh; the TLS check at install and verify
@@ -833,6 +1008,7 @@ gate_microsoft365() {
   microsoft365_tls_load
   microsoft365_tls_untrusted && return 0
   microsoft365_node_blocked >/dev/null && return 0
+  microsoft365_network_blocked >/dev/null && return 0
   # Neither agent can take the server: installing ~85 MB for no one is not worth doing.
   [ -n "$(microsoft365_usable_agents)" ] || return 0
   microsoft365_node >/dev/null 2>&1 || return 1
@@ -853,6 +1029,35 @@ microsoft365_short_path() {
 microsoft365_rerun() {
   case "${BOOTSTRAP_ENTRY:-}" in ''|*'"'*|*'$'*|*'`'*|*'\'*) return 0 ;; esac
   printf 'bash "%s" --only microsoft365' "$(microsoft365_short_path "$BOOTSTRAP_ENTRY")"
+}
+
+# microsoft365_network_note <kind> <host> — what the network refused, and what IT must allow. A
+# company that mirrors npm is told to point npm at it, but only when the host refused IS the registry.
+microsoft365_network_note() {
+  local kind="$1" host="$2" what
+  case "$kind" in
+    dns)           what="its name does not resolve on this network" ;;
+    refused)       what="the connection was refused" ;;
+    timeout)       what="the connection timed out, which is how a firewall that drops traffic looks" ;;
+    reset)         what="the connection was cut off" ;;
+    unreachable)   what="this network has no route to it" ;;
+    forbidden)     what="it answered 403 Forbidden, which is how a proxy or a web filter refuses" ;;
+    proxy-refused) what="the proxy npm goes through refused it" ;;
+    proxy-login)   what="the proxy asked for a login npm does not have (407)" ;;
+    proxy-unknown) what="the proxy npm is set to use does not resolve" ;;
+    cert)          what="its certificate is not one this Mac trusts" ;;
+    *)             what="the network refused it" ;;
+  esac
+  printf 'npm could not reach %s (%s), so the Microsoft 365 server was not installed; ' "$host" "$what"
+  if [ "$kind" = cert ]; then printf 'ask IT to install the certificate their proxy uses on this Mac'
+  else
+    # A dependency's prebuilt binary (keytar) is a github.com release, which redirects to its asset host.
+    case "$host" in github.com) host="github.com and release-assets.githubusercontent.com" ;; esac
+    printf 'ask IT to allow HTTPS from this Mac to %s' "$host"
+  fi
+  [ "${host%% *}" = "$(microsoft365_url_host "$(microsoft365_registry)")" ] \
+    && printf ', or, if your company runs its own npm mirror, set npm_config_registry to it'
+  printf ', then run this again.'
 }
 
 note_microsoft365() {
@@ -877,8 +1082,12 @@ note_microsoft365() {
       macos-old)   printf 'the Microsoft 365 server needs node %s or later, and the node build this module fetches needs macOS %s or later; update macOS, or ask IT for node.' "$MICROSOFT365_NODE_FLOOR" "$MICROSOFT365_NODE_MIN_MACOS" ;;
       no-build)    printf 'the Microsoft 365 server needs node %s or later, and nodejs.org has no build for this processor; ask IT for node.' "$MICROSOFT365_NODE_FLOOR" ;;
       refused)     printf 'node %s was downloaded from nodejs.org, but its sha256 is not the one this release pins, so it was thrown away: something between this Mac and nodejs.org changed it. Try again on another network, or ask IT.' "$MICROSOFT365_NODE_VERSION" ;;
-      *)           printf 'node %s could not be downloaded from nodejs.org (a proxy or firewall may block it), and this Mac has no node %s or later; run this again once nodejs.org is reachable, or ask IT to allow it.' "$MICROSOFT365_NODE_VERSION" "$MICROSOFT365_NODE_FLOOR" ;;
+      *)           printf 'node %s could not be downloaded from nodejs.org (a proxy or firewall may block it), and this Mac has no node %s or later; ask IT to allow nodejs.org, or set BOOTSTRAP_ARTIFACT_MIRROR to a company mirror holding nodejs.org/dist/v%s/, then run this again.' "$MICROSOFT365_NODE_VERSION" "$MICROSOFT365_NODE_FLOOR" "$MICROSOFT365_NODE_VERSION" ;;
     esac
+    return 0
+  fi
+  if why="$(microsoft365_network_blocked)"; then
+    microsoft365_network_note "${why%% *}" "${why#* }"
     return 0
   fi
   pol="$(microsoft365_policy_note)"
@@ -917,6 +1126,7 @@ gesture_microsoft365() {
     esac
     return 0
   fi
+  microsoft365_network_blocked >/dev/null && return 0     # IT opens the network: no command exists
   node="$(microsoft365_node)" || return 0
   # The one policy line a person may change themselves: disableAllHooks in their own settings file.
   for g in $MICROSOFT365_AGENTS; do
@@ -936,7 +1146,7 @@ gesture_microsoft365() {
 }
 
 install_microsoft365() {
-  local node dir npm out ent rc envj ca a f why
+  local node dir npm out ent rc envj ca a f why log
   microsoft365_tls_load
   microsoft365_tls_untrusted && { bootstrap_warn "microsoft365: TLS to npm or Microsoft is intercepted by a certificate this Mac does not trust"; return 1; }
   if ! node="$(microsoft365_node)"; then
@@ -957,12 +1167,34 @@ install_microsoft365() {
     # inspecting proxy it gets the CA file too — never npm's --cafile, which REPLACES node's roots.
     npm="$(dirname "$node")/npm"
     [ -x "$npm" ] || { bootstrap_warn "microsoft365: no npm beside $node"; return 1; }
+    # Asked first, bounded: can npm's registry be reached from here at all? npm alone cannot say so
+    # quickly — its fetch-timeout is an IDLE timeout, and a dropped connection waits out the kernel's
+    # ~75 s connect timeout per try (measured: 153 s against a silent drop, even with the flags below).
+    if why="$(microsoft365_registry_blocked "$node")"; then
+      microsoft365_network_record "$why"
+      bootstrap_warn "microsoft365: npm's registry cannot be reached from this network ($why)"; return 1
+    fi
     ca="$(microsoft365_ca_path)"
     set -- PATH="$(dirname "$node"):$PATH"
     [ -n "$ca" ] && set -- "$@" NODE_EXTRA_CA_CERTS="$ca"
+    log="$(mktemp -t microsoft365npm)" || return 1
+    # One retry, short waits between tries (measured with npm 11.17: a refused registry fails in 3 s,
+    # not 71 s; a proxy's 407 or a registry's 403 at once). The output is kept to tell a network that
+    # said no from a package that is broken — only the second is FAILED.
     /usr/bin/env "$@" "$npm" install --prefix "$dir" --cache "$dir/.npm-cache" \
-      --no-fund --no-audit --no-update-notifier --omit=dev "$MICROSOFT365_PACKAGE@$MICROSOFT365_SERVER_VERSION" >&2 \
-      || { bootstrap_warn "microsoft365: npm install of $MICROSOFT365_PACKAGE@$MICROSOFT365_SERVER_VERSION failed"; return 1; }
+      --fetch-timeout=20000 --fetch-retries=1 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=5000 \
+      --no-fund --no-audit --no-update-notifier --omit=dev "$MICROSOFT365_PACKAGE@$MICROSOFT365_SERVER_VERSION" > "$log" 2>&1; rc=$?
+    cat "$log" >&2
+    if [ "$rc" != 0 ]; then
+      if why="$(microsoft365_npm_blocked "$log" "$(microsoft365_registry)")"; then
+        microsoft365_network_record "$why"
+        bootstrap_warn "microsoft365: npm install was stopped by the network ($why)"
+      else
+        bootstrap_warn "microsoft365: npm install of $MICROSOFT365_PACKAGE@$MICROSOFT365_SERVER_VERSION failed"
+      fi
+      rm -f "$log" 2>/dev/null; return 1
+    fi
+    rm -f "$log" 2>/dev/null
     rm -rf "$dir/.npm-cache" 2>/dev/null
     microsoft365_installed || { bootstrap_warn "microsoft365: installed, but the server does not report $MICROSOFT365_SERVER_VERSION"; return 1; }
   fi
