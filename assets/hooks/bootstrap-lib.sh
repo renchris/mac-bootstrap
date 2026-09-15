@@ -713,18 +713,35 @@ bootstrap_find_app() {
 # pinned in the repo. rc 0 kept · 1 not fetched · 2 fetched but refused (deleted, never left half-way).
 # A file curl writes carries no com.apple.quarantine flag (measured), so a signed binary fetched this
 # way runs with no Gatekeeper prompt — which is exactly why the hash is not optional.
+#
+# BOOTSTRAP_ARTIFACT_MIRROR — a company mirror or a carried folder for every THIRD-PARTY download (node,
+# ollama, Hammerspoon, iTerm2, kitty, the agents), as BOOTSTRAP_RAW is for this repo's own files. It holds
+# the same bytes at <mirror>/<host>/<path> — the layout `wget -x` and `curl --create-dirs -o host/path`
+# produce — over https:// or file://. It is tried FIRST, under the same pinned sha256, so the mirror is
+# trusted for nothing: a wrong byte is refused exactly as from the vendor, and the vendor is tried next.
+# --connect-timeout keeps a blocked host from hanging the run; a mirror answers in time or is skipped.
 bootstrap_fetch_pinned() {
-  local url="${1:-}" want="${2:-}" dest="${3:-}" got
+  local url="${1:-}" want="${2:-}" dest="${3:-}" got src refused=0 hostpath
   [ -n "$url" ] && [ -n "$want" ] && [ -n "$dest" ] || return 1
   /bin/mkdir -p "$(/usr/bin/dirname "$dest")" 2>/dev/null || return 1
-  /usr/bin/curl -fsSL --retry 2 -o "$dest.part" "$url" 2>/dev/null || { /bin/rm -f "$dest.part"; return 1; }
-  got="$(/usr/bin/shasum -a 256 "$dest.part" 2>/dev/null | /usr/bin/cut -d' ' -f1)"
-  if [ "$got" != "$want" ]; then
-    /bin/rm -f "$dest.part"
-    bootstrap_warn "pinned download refused: $url has sha256 ${got:-none}, the repo pins $want"
-    return 2
+  set --
+  if [ -n "${BOOTSTRAP_ARTIFACT_MIRROR:-}" ]; then
+    hostpath="${url#*://}"
+    set -- "${BOOTSTRAP_ARTIFACT_MIRROR%/}/$hostpath"
   fi
-  /bin/mv -f "$dest.part" "$dest"
+  set -- "$@" "$url"
+  for src in "$@"; do
+    /usr/bin/curl -fsSL --connect-timeout 15 --retry 2 -o "$dest.part" "$src" 2>/dev/null || { /bin/rm -f "$dest.part"; continue; }
+    got="$(/usr/bin/shasum -a 256 "$dest.part" 2>/dev/null | /usr/bin/cut -d' ' -f1)"
+    if [ "$got" = "$want" ]; then
+      /bin/mv -f "$dest.part" "$dest" && return 0
+      return 1
+    fi
+    /bin/rm -f "$dest.part"; refused=1
+    bootstrap_warn "pinned download refused: $src has sha256 ${got:-none}, the repo pins $want"
+  done
+  [ "$refused" = 1 ] && return 2
+  return 1
 }
 
 # ── A TLS-inspecting proxy (Zscaler, Netskope, …). IT installs its root in the System keychain, and
@@ -1056,6 +1073,19 @@ bootstrap_selftest() {
   for k in env.GITHUB_TOKEN env.MAX_AUTH_TOKENS env.MAX_API_KEY_TOKENS env.COPILOT_PROVIDER_BEARER_TOKEN; do
     bootstrap_is "control: guard still refuses $k" "$(bootstrap_settings_refuse "$T/g.json" "$k" 2>/dev/null && echo refused || echo allowed)" "refused"
   done
+
+  # ── 18. The artifact mirror: tried first under the same hash; a wrong mirror byte falls to the vendor. ──
+  /bin/mkdir -p "$T/vendor"
+  printf 'pinned bytes\n' > "$T/vendor/art"; A="$(/usr/bin/shasum -a 256 "$T/vendor/art" | /usr/bin/cut -d' ' -f1)"
+  /bin/mkdir -p "$T/mirror${T}/vendor"; cp "$T/vendor/art" "$T/mirror${T}/vendor/art"
+  rm -f "$T/vendor/art"                     # the vendor is gone: only the mirror can answer
+  BOOTSTRAP_ARTIFACT_MIRROR="file://$T/mirror" bootstrap_fetch_pinned "file://$T/vendor/art" "$A" "$T/m-dst/a" 2>/dev/null; rc=$?
+  bootstrap_is "mirror: <mirror>/<host>/<path> answers when the vendor cannot" "$rc/$([ -f "$T/m-dst/a" ] && echo kept)" "0/kept"
+  bootstrap_fetch_pinned "file://$T/vendor/art" "$A" "$T/m-dst/b" 2>/dev/null; rc=$?
+  bootstrap_is "control: with no mirror and no vendor, nothing is fetched" "$rc/$([ -f "$T/m-dst/b" ] && echo kept)" "1/"
+  printf 'tampered\n' > "$T/mirror${T}/vendor/art"; printf 'pinned bytes\n' > "$T/vendor/art"
+  BOOTSTRAP_ARTIFACT_MIRROR="file://$T/mirror" bootstrap_fetch_pinned "file://$T/vendor/art" "$A" "$T/m-dst/c" 2>/dev/null; rc=$?
+  bootstrap_is "mirror: a tampered mirror byte is refused, and the vendor's copy is kept" "$rc/$(/usr/bin/shasum -a 256 "$T/m-dst/c" 2>/dev/null | /usr/bin/cut -d' ' -f1)" "0/$A"
 
   printf '\n%s/%s cases passed.\n' "$((bootstrap__t - bootstrap__f))" "$bootstrap__t"
   rm -rf "$T" 2>/dev/null
