@@ -4,8 +4,8 @@ One entry point that bootstraps a brand-new Mac for an agent workflow which must
 
 ## Commands — the only ones; never guess a script or a package manager
 - Install `git clone <this repo>` · Dev `bash bootstrap.sh` · Build — there is no build step
-- Test `bash scripts/characterize.sh` — 49 name-independent behaviour checks from a sandbox `HOME`. Narrower: `bash assets/hooks/bootstrap-lib.sh --selftest` (and the same flag on each hook) · one module: `bash verify.sh --only instructions`
-- Lint + typecheck `shellcheck -S warning bootstrap.sh verify.sh scripts/*.sh modules/*.sh assets/hooks/*.sh` and `/bin/bash -n` each file — run both before every commit
+- Test `bash scripts/characterize.sh` — name-independent behaviour checks from a sandbox `HOME`; a feature adds its own in `scripts/checks/<feature>.sh`, which it sources. Narrower: `bash assets/hooks/bootstrap-lib.sh --selftest` (and the same flag on each hook) · one module: `bash verify.sh --only instructions`
+- Lint + typecheck `shellcheck -S warning bootstrap.sh verify.sh scripts/*.sh scripts/checks/*.sh modules/*.sh assets/hooks/*.sh` and `/bin/bash -n` each file — run both before every commit
 - Release `bash scripts/release.sh` after pushing content · check a published one `bash scripts/release.sh --check` (CI runs it on every push to main)
 
 ## Layout

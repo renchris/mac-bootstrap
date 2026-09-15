@@ -101,6 +101,16 @@ drive() {                                       # drive <args...>  → sets CHEC
   return 0
 }
 
+# fresh_home <name> — a second sandbox HOME under the same mktemp root, so a feature check never
+# inherits the state the sections above left behind. drive_at runs the driver against one.
+fresh_home() { local h="$CHECK_TMP/home-$1"; rm -rf "$h"; mkdir -p "$h" "$CHECK_TMP/work-$1" && printf '%s' "$h"; }
+drive_at() {                                    # drive_at <home> <args...> → sets CHECK_RC, CHECK_OUT
+  local h="$1"; shift
+  CHECK_OUT="$(HOME="$h" TMPDIR="$CHECK_WORK" /bin/bash "$CHECK_ROOT/bootstrap.sh" "$@" 2>&1)"
+  CHECK_RC=$?
+  return 0
+}
+
 # ── an INDEPENDENT JSON read-back ────────────────────────────────────────────────────────────
 # Deliberately not the repo's own library: a harness that reads a receipt with the same code that
 # wrote it cannot see a defect that lives in that code. plutil is a second engine, and its
@@ -196,7 +206,7 @@ fi
 # /bin/bash is 3.2.57 on the target. Homebrew's bash 5 accepts constructs 3.2 rejects, so the
 # parse check has to be the system one.
 PARSE_BAD=""
-for f in "$CHECK_ROOT"/bootstrap.sh "$CHECK_ROOT"/verify.sh "$CHECK_ROOT"/scripts/*.sh \
+for f in "$CHECK_ROOT"/bootstrap.sh "$CHECK_ROOT"/verify.sh "$CHECK_ROOT"/scripts/*.sh "$CHECK_ROOT"/scripts/checks/*.sh \
          "$CHECK_ROOT"/modules/*.sh "$CHECK_ROOT"/assets/hooks/*.sh \
          "$CHECK_ROOT"/assets/succession/*.sh "$CHECK_ROOT"/assets/*.sh; do
   [ -r "$f" ] || continue
@@ -432,6 +442,16 @@ else fail "uninstall-leaves-no-content" "$RESIDUE_BAD"; fi
 LOST="$(printf '%s\n' "$BEFORE" | comm -23 - <(printf '%s\n' "$FINAL"))"
 if [ -z "$LOST" ]; then pass "uninstall-destroys-nothing-it-did-not-write"
 else fail "uninstall-destroys-nothing-it-did-not-write" "$LOST"; fi
+
+# ── 12b. FEATURE CHECKS — one file per feature in scripts/checks/, sourced here ───────────────
+# Sourced, not executed, so each file has this harness (drive_at, fresh_home, pass, fail, same, true_,
+# json_at) and this sandbox root — and so two features built in parallel never edit the same file.
+for CHECK_FILE in "$CHECK_ROOT"/scripts/checks/*.sh; do
+  [ -r "$CHECK_FILE" ] || continue
+  printf -- '-- %s\n' "${CHECK_FILE##*/}"
+  # shellcheck source=/dev/null
+  . "$CHECK_FILE"
+done
 
 # ── 13. ISOLATION, re-asserted ───────────────────────────────────────────────────────────────
 ESCAPED=""

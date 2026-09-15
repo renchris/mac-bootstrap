@@ -6,7 +6,8 @@
 # a GUI permission, a Keychain dialog, sudo, an Apple ID, the App Store, money. It never
 # attempts one of those and it never writes your agent's permissions, allowlists or credentials.
 #
-#   bash bootstrap.sh                  install everything that is installable, then verify it
+#   bash bootstrap.sh                  in a terminal: a menu to pick modules. Without one: the default profile
+#   bash bootstrap.sh --pick           the menu, even when flags pre-select; --no-pick never shows it
 #   bash bootstrap.sh --verify         re-read the machine cold; change nothing
 #   bash bootstrap.sh --only statusline      re-drive ONE module (merges into the receipt)
 #   bash bootstrap.sh --only rewrite_model --bench qwen3:8b     measure a candidate, write nothing
@@ -61,6 +62,7 @@ BOOTSTRAP_PROFILE=""            # empty => the default profile below
 BOOTSTRAP_PROFILE_DEFAULT=lite    # the safest useful set: config files only, no installs, no gestures
 BOOTSTRAP_BENCH=""
 BOOTSTRAP_MODEL=""
+BOOTSTRAP_PICK=auto              # auto: the menu when a person is at a terminal and no flag chose · yes · no
 BOOTSTRAP_RC=0
 
 # ── THE INSTALL ORDER, DECLARED. Cheapest and most reversible first; anything that needs a
@@ -90,7 +92,7 @@ driver_fail() { printf '  x %s\n' "$*" >&2; printf '%s FAIL %s\n' "$(date -u +%F
 driver_log()  { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&3 2>/dev/null; return 0; }
 
 driver_help() {
-  sed -n '2,32p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
+  sed -n '2,34p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'
 }
 
 # ── flags ────────────────────────────────────────────────────────────────────────────────────
@@ -111,6 +113,8 @@ while [ $# -gt 0 ]; do
                  BOOTSTRAP_PROFILE="$2"; shift ;;
     --except)    [ $# -ge 2 ] || { printf 'bootstrap: --except needs a module name\n' >&2; exit 30; }
                  BOOTSTRAP_EXCEPT="$BOOTSTRAP_EXCEPT $(printf '%s' "$2" | tr ',' ' ')"; shift ;;
+    --pick)      BOOTSTRAP_PICK=yes ;;
+    --no-pick)   BOOTSTRAP_PICK=no ;;
     --help|-h)   driver_help; exit 0 ;;
     --dry-run)   printf 'bootstrap: --dry-run was REMOVED, not renamed.\n' >&2
                  printf '  It overwrote the receipt and exited 0 on a machine where nothing was\n' >&2
@@ -361,8 +365,141 @@ driver_cmd_list() {
   printf '    lite      config files only. No Homebrew, no permissions, no Apple ID. THE DEFAULT.\n'
   printf '    standard  lite + the succession engine, a local rewrite model and Outlook.\n'
   printf '    full      standard + the app build, the screenshot pipeline, the Microsoft 365 markdown archive and shared-folder links. Apple ID, ~9 GB.\n\n'
-  printf '  SELECT      --profile <name>   --only a,b,c   --except x\n'
+  printf '  SELECT      --pick (a menu)   --profile <name>   --only a,b,c   --except x\n'
   printf '  INSPECT     --list   --plan   --manifest   --verify\n\n'
+}
+
+# ── --pick — the menu ─────────────────────────────────────────────────────────────────────────
+# One command has to serve a person who wants to choose, and three places that command runs:
+# `curl … | bash` (stdin IS the script, so the answer cannot come from stdin), `bash file` in a
+# terminal, and an agent's tool shell or CI, where there is no person to answer at all. So the menu
+# reads from /dev/tty, never stdin, and is shown only when a person is visibly there. It is never
+# waited on forever: an unanswered menu installs NOTHING, because an unattended run must never do
+# something nobody chose.
+#
+# BOOTSTRAP_PICK_INPUT (a test seam) names a file of answers; the menu then goes to stderr.
+
+# driver_pick_open — fd 4 carries the answers and fd 5 the menu. rc 1: nobody can answer.
+# The open is tried in a SUBSHELL first: a failed `exec` redirection is not something to find out
+# in the shell that is running the install.
+driver_pick_open() {
+  if [ -n "${BOOTSTRAP_PICK_INPUT:-}" ]; then
+    [ -r "$BOOTSTRAP_PICK_INPUT" ] || return 1
+    exec 4<"$BOOTSTRAP_PICK_INPUT" 5>&2
+    return 0
+  fi
+  ( exec 4</dev/tty ) 2>/dev/null || return 1
+  exec 4</dev/tty 5>/dev/tty
+}
+driver_pick_close() { exec 4<&- 5>&-; }
+
+# driver_invocation — how to run THIS script again, for a hint the person can paste. Under
+# `curl … | bash` there is no file and $0 is just "bash", which printed `bash bash --only …`.
+driver_invocation() {
+  local s="${BASH_SOURCE[0]:-}"
+  if [ -n "$s" ] && [ -r "$s" ]; then printf 'bash %s' "$s"; else printf 'curl -fsSL <the same URL> | bash -s --'; fi
+}
+
+# driver_pick_auto — 0 iff the menu is the right default for THIS invocation: a plain install with
+# nothing chosen by flag, and a person at a terminal. An agent's shell, CI, or output piped into a
+# file all say "nobody is watching", and there the default profile runs as it always has.
+driver_pick_auto() {
+  [ "$BOOTSTRAP_MODE" = install ] || return 1
+  [ "$BOOTSTRAP_PICK" = auto ] || return 1
+  [ -z "$BOOTSTRAP_ONLY$BOOTSTRAP_EXCEPT$BOOTSTRAP_PROFILE" ] || return 1
+  [ -z "${CI:-}${CLAUDECODE:-}${BOOTSTRAP_NONINTERACTIVE:-}" ] || return 1
+  [ -t 1 ] || return 1
+  ( exec 4</dev/tty ) 2>/dev/null
+}
+
+# driver_pick_read — one line from the person into PICK_LINE. rc 1 on end-of-input or a timeout.
+PICK_LINE=""
+driver_pick_read() {
+  PICK_LINE=""
+  IFS= read -r -t "${BOOTSTRAP_PICK_TIMEOUT:-1800}" PICK_LINE <&4 && return 0
+  [ -n "$PICK_LINE" ]                         # a last line with no newline still counts
+}
+
+# driver_cmd_pick — sets BOOTSTRAP_ONLY to what the person chose, dependencies included.
+# rc 0 chosen and confirmed · 30 they quit, or never answered (nothing was installed).
+driver_cmd_pick() {
+  local i n m f sel tok line resolved chosen k want
+  local -a pm pp pw pc pon
+  sel=" $(driver_select 2>/dev/null) " || return 30
+
+  n=0
+  for m in $BOOTSTRAP_MANIFEST; do
+    f="$(driver_module_file "$m")" || continue
+    pm[n]="$m"
+    pp[n]="$(driver_meta "$f" "$m" profile standard)"
+    pw[n]="$(driver_meta "$f" "$m" what "$m")"
+    pc[n]="$(driver_meta "$f" "$m" cost unpriced)"
+    case "$sel" in *" $m "*) pon[n]=1 ;; *) pon[n]=0 ;; esac
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] || { driver_note_out "bootstrap: no module could be read — nothing to choose from."; return 30; }
+
+  while :; do
+    printf '\n  Pick what to install. [x] is selected now.\n\n' >&5
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      if [ "${pon[i]}" = 1 ]; then k='x'; else k=' '; fi
+      line="${pw[i]}"
+      [ "${#line}" -gt 62 ] && line="${line:0:59}..."
+      printf '   [%s] %2d  %-21s %-8s %s\n' "$k" "$((i + 1))" "${pm[i]}" "${pp[i]}" "$line" >&5
+      i=$((i + 1))
+    done
+    printf '\n  Type numbers to switch modules on or off (e.g. 5 7), or a profile: lite, standard, full, none.\n' >&5
+    printf '  ?5 shows what module 5 costs. Press Enter when the list is right; q quits and installs nothing.\n  > ' >&5
+    driver_pick_read || { printf '\n' >&5; driver_note_out "bootstrap: no answer — nothing was installed."; return 30; }
+
+    if [ -z "$(printf '%s' "$PICK_LINE" | tr -d ' ')" ]; then
+      chosen=""
+      i=0; while [ "$i" -lt "$n" ]; do [ "${pon[i]}" = 1 ] && chosen="$chosen ${pm[i]}"; i=$((i + 1)); done
+      if [ -z "$chosen" ]; then printf '\n  Nothing is selected. Pick at least one, or q to quit.\n' >&5; continue; fi
+      BOOTSTRAP_ONLY="$chosen"; BOOTSTRAP_PROFILE=""; BOOTSTRAP_EXCEPT=""
+      resolved="$(driver_select 2>&5)" || return 30
+      printf '\n  This installs %s module(s):\n\n' "$(printf '%s' "$resolved" | wc -w | tr -d ' ')" >&5
+      for m in $resolved; do
+        i=0; while [ "$i" -lt "$n" ] && [ "${pm[i]}" != "$m" ]; do i=$((i + 1)); done
+        printf '   %-21s %s\n' "$m" "${pc[i]:-unpriced}" >&5
+      done
+      printf '\n  Install these now? [Y/n] ' >&5
+      driver_pick_read || { printf '\n' >&5; driver_note_out "bootstrap: no answer — nothing was installed."; return 30; }
+      case "$(printf '%s' "$PICK_LINE" | tr -d ' ' | tr 'YN' 'yn')" in
+        ''|y|yes) BOOTSTRAP_ONLY="$resolved"; return 0 ;;
+        *)        continue ;;
+      esac
+    fi
+
+    # The answer is word-split on purpose and must NOT be globbed: `?5` is a filename pattern, and in
+    # a directory holding a two-character file ending in 5 it would arrive here as that file's name.
+    set -f
+    for tok in $PICK_LINE; do
+      case "$tok" in
+        q|Q|quit|exit) set +f; driver_note_out "bootstrap: you quit the menu — nothing was installed."; return 30 ;;
+        lite|standard|full|all|none)
+          want="$(driver_profile_rank "$tok")"; [ "$tok" = none ] && want=0
+          i=0
+          while [ "$i" -lt "$n" ]; do
+            if [ "$(driver_profile_rank "${pp[i]}")" -le "$want" ]; then pon[i]=1; else pon[i]=0; fi
+            i=$((i + 1))
+          done ;;
+        \?*)
+          k="${tok#\?}"
+          case "$k" in ''|*[!0-9]*) printf '  ?%s — which number?\n' "$k" >&5; continue ;; esac
+          if [ "$k" -ge 1 ] && [ "$k" -le "$n" ]; then
+            printf '\n  %s — %s\n  cost: %s\n' "${pm[k-1]}" "${pw[k-1]}" "${pc[k-1]}" >&5
+          else printf '  there is no module %s\n' "$k" >&5; fi ;;
+        *[!0-9]*) printf '  "%s" is not a number or a profile name\n' "$tok" >&5 ;;
+        *)
+          if [ "$tok" -ge 1 ] && [ "$tok" -le "$n" ]; then
+            if [ "${pon[tok-1]}" = 1 ]; then pon[tok-1]=0; else pon[tok-1]=1; fi
+          else printf '  there is no module %s\n' "$tok" >&5; fi ;;
+      esac
+    done
+    set +f
+  done
 }
 
 # ── --manifest — every file this release would write, and the sha256 of what it writes from. ──
@@ -764,6 +901,29 @@ else
     plan)     driver_cmd_plan;     exit $? ;;
     manifest) driver_cmd_manifest; exit $? ;;
   esac
+
+  # THE MENU, before anything is judged or written. It is closed again before any module runs, so
+  # no module can ever read the person's terminal.
+  if [ "$BOOTSTRAP_PICK" = yes ] && [ "$BOOTSTRAP_MODE" != install ]; then
+    driver_fail "--pick chooses what to INSTALL; it does not combine with --$BOOTSTRAP_MODE"
+    exit 30
+  fi
+  if [ "$BOOTSTRAP_PICK" = yes ] || driver_pick_auto; then
+    if ! driver_pick_open; then
+      driver_fail "--pick needs a person at a terminal, and this shell has none (an agent or CI?)."
+      driver_fail "   Name the modules instead:  $(driver_invocation) --only <a,b,c>    (--list shows them)"
+      exit 30
+    fi
+    driver_cmd_pick; driver_pick_rc=$?
+    driver_pick_close
+    [ "$driver_pick_rc" = 0 ] || exit "$driver_pick_rc"
+    driver_say ""
+    driver_say "chosen: $BOOTSTRAP_ONLY"
+    driver_say "   the same run without the menu:  $(driver_invocation) --only $(printf '%s' "$BOOTSTRAP_ONLY" | tr ' ' ',')"
+  elif [ "$BOOTSTRAP_MODE" = install ] && [ "$BOOTSTRAP_PICK" = auto ] \
+       && [ -z "$BOOTSTRAP_ONLY$BOOTSTRAP_EXCEPT$BOOTSTRAP_PROFILE" ]; then
+    driver_say "no terminal to ask you on, so this installs the default profile ($BOOTSTRAP_PROFILE_DEFAULT). To choose: run it in a terminal, or pass --only / --profile."
+  fi
 
   BOOTSTRAP_SELECTED="$(driver_select)"
   if [ -z "$BOOTSTRAP_SELECTED" ]; then
