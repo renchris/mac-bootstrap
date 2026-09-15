@@ -45,6 +45,51 @@ statusline_source() {
   return 1
 }
 
+# ── company policy: the status line is installed but the agent will not run it ───────────────
+# The read-back below proves OUR files are right; it cannot see a setting that outranks them. Claude
+# Code runs a status line only where hooks may run: allowManagedHooksOnly or disableAllHooks in a
+# managed source narrows it to IT's own, and a statusLine IT sets outranks ours by precedence. The
+# user's OWN disableAllHooks in $HOME/.claude/settings.json does the same with no IT involved.
+# Copilot CLI: no managed gate on its statusLine has been found (1.0.83) — nothing is claimed either way.
+# A policyHelper means the policy is computed by a program at startup and cannot be read here.
+#
+# statusline_policy — one line per cause, "<it|user>|<sentence>"; rc 1 when nothing stands in the way.
+statusline_policy() {
+  local a name k found=1 what='the context-% status line never shows'
+  for a in claude copilot; do
+    case "$a" in claude) name='Claude Code' ;; *) name='Copilot CLI' ;; esac
+    if bootstrap_policy "$a" policyHelper raw >/dev/null 2>&1; then
+      printf 'it|%s: your company computes its policy with a helper program (policyHelper) that cannot be read from here, so whether the status line shows is unknown; ask IT\n' "$name"
+      found=0
+    fi
+  done
+  for k in allowManagedHooksOnly disableAllHooks; do
+    [ "$(bootstrap_policy claude "$k" raw 2>/dev/null)" = true ] || continue
+    printf "it|Claude Code: your company's policy %s means %s; ask IT\n" "$k" "$what"
+    return 0
+  done
+  if bootstrap_policy claude statusLine raw >/dev/null 2>&1; then
+    printf "it|Claude Code: your company's policy sets its own statusLine, which outranks this one, so %s; ask IT\n" "$what"
+    return 0
+  fi
+  if [ "$(bootstrap_settings_get "$(statusline_claude_settings)" disableAllHooks raw 2>/dev/null)" = true ]; then
+    printf 'user-claude|Claude Code: disableAllHooks is true in your own $HOME/.claude/settings.json, so %s; removing it is your call\n' "$what"
+    return 0
+  fi
+  return "$found"
+}
+
+# statusline_policy_note / _gesture — the causes as ONE line, and the one command that SHOWS the
+# user's own setting (never one that edits it). IT's policy has no command: the gesture is empty.
+statusline_policy_note() { statusline_policy | awk '{ sub(/^[^|]*\|/, ""); printf "%s%s", (NR > 1 ? ". " : ""), $0 }'; }
+statusline_policy_gesture() {
+  local p
+  p="$(statusline_policy)" || return 0
+  printf '%s\n' "$p" | /usr/bin/grep -q '^it|' && return 0
+  printf '%s\n' "$p" | /usr/bin/grep -q '^user-claude|' && printf 'grep -n disableAllHooks "$HOME/.claude/settings.json"'
+  return 0
+}
+
 # statusline_shim_path <dir> — a PATH holding everything the status line needs EXCEPT jq.
 # WHY IT EXISTS: the script has two arms and picks one with `command -v jq`, so a probe that
 # just runs it only ever tests whichever arm THIS Mac selects — the axis under test held
@@ -92,6 +137,8 @@ egress_statusline()  { :; }
 
 verify_statusline() {
   local sl f cur out
+  # Our files can all be right while the agent ignores them: a policy that outranks them is not SATISFIED.
+  statusline_policy >/dev/null 2>&1 && return 1
   sl="$(statusline_script)"
   [ -f "$sl" ] && [ -x "$sl" ] || return 1
 
@@ -136,7 +183,8 @@ verify_statusline() {
 #      bootstrap_settings_merge refuses it by design and only a person can decide what to do;
 #   2. a settings file already carries SOMEBODY ELSE'S status line. Replacing it is a decision,
 #      not an installation. (Once ours is registered this is quiet, so it stays idempotent.)
-gate_statusline() { statusline_gated_file >/dev/null 2>&1; }
+# …and a third that CAN occur on the corporate Mac this bootstrap targets: a policy (statusline_policy).
+gate_statusline() { statusline_policy >/dev/null 2>&1 && return 0; statusline_gated_file >/dev/null 2>&1; }
 
 # statusline_gated_file — prints "<file>|<why>" for the FIRST file that needs the human, rc 1 if none.
 # gate_ is this function, so the gate and the note it prints can never disagree about which
@@ -174,6 +222,7 @@ statusline_short_path() { case "$1" in *.claude/*) printf '$HOME/.claude/setting
 
 note_statusline() {
   local g f why
+  if statusline_policy >/dev/null 2>&1; then statusline_policy_note; return 0; fi
   if g="$(statusline_gated_file)"; then
     f="${g%%|*}"; why="${g##*|}"
     case "$why" in
@@ -190,6 +239,7 @@ note_statusline() {
 
 gesture_statusline() {
   local g f
+  if statusline_policy >/dev/null 2>&1; then statusline_policy_gesture; return 0; fi
   g="$(statusline_gated_file)" || return 0
   f="${g%%|*}"
   printf 'open -e "%s"' "$(statusline_short_path "$f")"

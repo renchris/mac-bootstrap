@@ -60,6 +60,71 @@ hooks_asset() {
   return 1
 }
 
+# ── company policy: the hooks are wired but the agent will not run them ─────────────────────
+# Every count in verify_ reads OUR two files, so it stays true while a setting that outranks them
+# switches the hooks off. Per agent, so a policy on one never fails the other's half of the sentence:
+#   Claude Code  allowManagedHooksOnly · disableAllHooks · strictPluginOnlyCustomization naming hooks
+#                (bootstrap_policy_restricts), or disableAllHooks in the user's OWN settings.json —
+#                no IT involved, and nothing read it before this.
+#   Copilot CLI  the same three in its managed sources (1.0.83 enforces them, undocumented), or
+#                disableAllHooks in $HOME/.copilot/settings.json ("both user-level and repo-level").
+# A list form names what it reserves: strictPluginOnlyCustomization ["mcp"] leaves hooks alone.
+# A policyHelper means the policy is computed by a program at startup and cannot be read here.
+#
+# hooks_policy_key <agent> — which managed key reserves hooks to IT, or rc 1.
+hooks_policy_key() {
+  bootstrap_policy_restricts "$1" hooks 2>/dev/null || return 1
+  [ "$(bootstrap_policy "$1" allowManagedHooksOnly raw 2>/dev/null)" = true ] && { printf 'allowManagedHooksOnly'; return 0; }
+  [ "$(bootstrap_policy "$1" disableAllHooks raw 2>/dev/null)" = true ] && { printf 'disableAllHooks'; return 0; }
+  printf 'strictPluginOnlyCustomization'
+}
+
+# hooks_user_disabled <file> — 0 iff the user's own settings file says disableAllHooks: true. Copilot
+# tolerates `//` comment lines in its JSON and plutil does not, so they are dropped before the read.
+hooks_user_disabled() {
+  [ -f "${1:-}" ] || return 1
+  [ "$(/usr/bin/sed '/^[[:space:]]*\/\//d' "$1" 2>/dev/null | /usr/bin/plutil -extract disableAllHooks raw -o - - 2>/dev/null)" = true ]
+}
+
+# hooks_policy — one line per cause, "<it|user-claude|user-copilot>|<sentence>"; rc 1 when none.
+hooks_policy() {
+  local a name k found=1
+  for a in claude copilot; do
+    case "$a" in claude) name='Claude Code' ;; *) name='Copilot CLI' ;; esac
+    if bootstrap_policy "$a" policyHelper raw >/dev/null 2>&1; then
+      printf 'it|%s: your company computes its policy with a helper program (policyHelper) that cannot be read from here, so whether these hooks run is unknown; ask IT\n' "$name"
+      found=0; continue
+    fi
+    if k="$(hooks_policy_key "$a")"; then
+      printf "it|%s: your company's policy %s means these hooks never run; ask IT\n" "$name" "$k"
+      found=0; continue
+    fi
+    case "$a" in
+      claude)  hooks_user_disabled "$HOME/.claude/settings.json" || continue
+               printf 'user-claude|Claude Code: disableAllHooks is true in your own $HOME/.claude/settings.json, so it runs none of these hooks; removing it is your call\n' ;;
+      copilot) hooks_user_disabled "$HOME/.copilot/settings.json" || continue
+               printf 'user-copilot|Copilot CLI: disableAllHooks is true in your own $HOME/.copilot/settings.json, so it runs none of these hooks; removing it is your call\n' ;;
+    esac
+    found=0
+  done
+  return "$found"
+}
+
+# hooks_policy_note / _gesture — the causes as ONE line, and the one command that SHOWS the user's own
+# setting (never one that edits it). IT's policy has no command, so any IT cause empties the gesture.
+hooks_policy_note() { hooks_policy | awk '{ sub(/^[^|]*\|/, ""); printf "%s%s", (NR > 1 ? ". " : ""), $0 }'; }
+hooks_policy_gesture() {
+  local p
+  p="$(hooks_policy)" || return 0
+  printf '%s\n' "$p" | /usr/bin/grep -q '^it|' && return 0
+  if printf '%s\n' "$p" | /usr/bin/grep -q '^user-claude|'; then
+    printf 'grep -n disableAllHooks "$HOME/.claude/settings.json"'
+  else
+    printf 'grep -n disableAllHooks "$HOME/.copilot/settings.json"'
+  fi
+  return 0
+}
+
 # hooks_wire_table — the wire table's path: the clone's copy if we have it, else the installed one.
 hooks_wire_table() {
   if [ -r "${BOOTSTRAP_ASSETS:-}/copilot-hooks.json" ]; then printf '%s' "${BOOTSTRAP_ASSETS}/copilot-hooks.json"; return 0; fi
@@ -165,6 +230,8 @@ egress_hooks()  { :; }
 
 verify_hooks() {
   local d t n i s cmd ev rows T out before after rc=0
+  # Wired exactly once and proven by execution is still not SATISFIED if the agent will not run them.
+  hooks_policy >/dev/null 2>&1 && return 1
   d="$(hooks_dir)"
   t="$(hooks_wire_table)" || return 1
   rows="$(hooks_wire_rows)"; case "$rows" in ''|*[!0-9]*) return 1 ;; esac
@@ -256,8 +323,10 @@ XIN
 # the ONLY gate here is a settings file that exists and that we must not touch: unreadable, not
 # writable, invalid JSON, or an XML/binary plist wearing a .json name. Repairing a file the user
 # owns is their call, not ours — and the alternative, a merge that "fixes" it, is how an agent
-# silently starts with no settings at all.
+# silently starts with no settings at all. The other gate is a setting that switches the hooks off
+# (hooks_policy) — IT's, or the user's own — which only a person can change.
 gate_hooks() {
+  hooks_policy >/dev/null 2>&1 && return 0
   hooks_file_unusable "$(hooks_claude_settings)"  && return 0
   hooks_file_unusable "$(hooks_copilot_settings)" && return 0
   [ -w "$HOME" ] || return 0
@@ -265,7 +334,9 @@ gate_hooks() {
 }
 
 note_hooks() {
-  if hooks_file_unusable "$(hooks_claude_settings)"; then
+  if hooks_policy >/dev/null 2>&1; then
+    hooks_policy_note
+  elif hooks_file_unusable "$(hooks_claude_settings)"; then
     printf 'Your Claude Code settings file exists but is not JSON we can safely merge into (invalid, a plist, or not writable) — nothing was touched.'
   elif hooks_file_unusable "$(hooks_copilot_settings)"; then
     printf 'Your Copilot hooks file exists but is not JSON we can safely merge into (invalid, a plist, or not writable) — nothing was touched.'
@@ -277,7 +348,9 @@ note_hooks() {
 }
 
 gesture_hooks() {
-  if hooks_file_unusable "$(hooks_claude_settings)"; then
+  if hooks_policy >/dev/null 2>&1; then
+    hooks_policy_gesture
+  elif hooks_file_unusable "$(hooks_claude_settings)"; then
     printf 'open -e "%s"' "$(hooks_claude_settings)"
   elif hooks_file_unusable "$(hooks_copilot_settings)"; then
     printf 'open -e "%s"' "$(hooks_copilot_settings)"

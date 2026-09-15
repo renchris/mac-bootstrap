@@ -78,6 +78,35 @@ handoff_source() {
   printf '%s' "$c"
 }
 
+# ── company policy: /handoff is installed but the agent will not load it ────────────────────────
+# strictPluginOnlyCustomization, set to true or to a list naming "skills", stops Claude Code reading
+# $HOME/.claude/commands/ and stops Copilot CLI loading personal skills — so the byte compare in
+# handoff_doc_ok stays true over a /handoff that never appears. Per agent: a lock on one leaves the
+# other's /handoff working, and the sentence names only the one that is locked. A policyHelper means
+# the policy is computed by a program at startup and cannot be read here.
+# (A hook lock does NOT reach this module: nothing in this release wires agent-handoff into a hook, so
+# the typed /handoff is the whole of what it installs.)
+#
+# handoff_policy — one line per cause, "it|<sentence>"; rc 1 when nothing stands in the way.
+handoff_policy() {
+  local a name what found=1
+  for a in claude copilot; do
+    case "$a" in
+      claude) name='Claude Code'; what='the /handoff command in $HOME/.claude/commands never loads' ;;
+      *)      name='Copilot CLI'; what='the handoff skill in $HOME/.copilot/skills never loads' ;;
+    esac
+    if bootstrap_policy "$a" policyHelper raw >/dev/null 2>&1; then
+      printf 'it|%s: your company computes its policy with a helper program (policyHelper) that cannot be read from here, so whether /handoff loads is unknown; ask IT\n' "$name"
+      found=0
+    elif bootstrap_policy_restricts "$a" skills 2>/dev/null; then
+      printf "it|%s: your company's policy strictPluginOnlyCustomization means %s; ask IT\n" "$name" "$what"
+      found=0
+    fi
+  done
+  return "$found"
+}
+handoff_policy_note() { handoff_policy | awk '{ sub(/^[^|]*\|/, ""); printf "%s%s", (NR > 1 ? ". " : ""), $0 }'; }
+
 # ── handoff_frontmatter_ok <file> — a STRUCTURAL parse, not a grep for our own text. ────────────
 # awk walks the document as a document: line 1 must open the block, the block must close, and
 # `description:` must exist inside it with a non-empty value. That is the one property both
@@ -140,6 +169,8 @@ egress_handoff()  {
 
 verify_handoff() {
   local bin succ out rc p
+  # every file right and every negative arm green is still not SATISFIED if the agent will not load it
+  handoff_policy >/dev/null 2>&1 && return 1
   bin="$(handoff_bin)"; succ="$(handoff_succession_dir)"
   [ -f "$bin" ] && [ -x "$bin" ] || return 1
 
@@ -219,6 +250,7 @@ handoff_no_tmux()    { command -v tmux >/dev/null 2>&1 && return 1; return 0; }
 handoff_installed()  { [ -x "$(handoff_bin)" ]; }
 
 gate_handoff() {
+  handoff_policy >/dev/null 2>&1 && return 0
   handoff_blocked_dir >/dev/null 2>&1 && return 0
   # Only after the files exist: see handoff_installed. On a bare machine this returns false so the
   # driver installs; install_ then returns 3 and the driver re-asks, which is the contract's
@@ -228,6 +260,7 @@ gate_handoff() {
 
 note_handoff() {
   local b
+  if handoff_policy >/dev/null 2>&1; then handoff_policy_note; return 0; fi
   if b="$(handoff_blocked_dir 2>/dev/null)" && [ -n "$b" ]; then
     printf 'cannot write %s — it is not writable by this user, so the /handoff files cannot be installed there' "$b"
     return 0
@@ -242,6 +275,7 @@ note_handoff() {
 
 gesture_handoff() {
   local b
+  handoff_policy >/dev/null 2>&1 && return 0          # IT's policy: there is no command, only IT
   if b="$(handoff_blocked_dir 2>/dev/null)" && [ -n "$b" ]; then
     printf 'sudo chown "$(id -un)" %s' "$b"
     return 0

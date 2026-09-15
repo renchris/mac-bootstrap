@@ -56,6 +56,51 @@ instructions_asset() {
   return 1
 }
 
+# ── company policy: the file is in place but Claude Code will not read it ─────────────────────
+# claudeMdExcludes (managed) lists glob patterns matched against absolute paths, and "applies to user,
+# project, and local memory files" — so an entry that matches $HOME/.claude/CLAUDE.md means Claude Code
+# skips the file verify_ just byte-compared. Patterns are matched with the shell's `case`, whose `*`
+# also crosses `/`: that can over-report (NEEDS_HUMAN), never under-report (a false SATISFIED).
+# A policyHelper on either agent means its policy cannot be read here, which is never SATISFIED.
+#
+# instructions_excluded — 0 iff a managed claudeMdExcludes entry matches the global file.
+instructions_excluded() {
+  local f i e target
+  target="$(instructions_global)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    i=0
+    while [ "$i" -lt 256 ]; do
+      e="$(/usr/bin/plutil -extract "claudeMdExcludes.$i" raw -o - -- "$f" 2>/dev/null)" || break
+      # shellcheck disable=SC2088   # a LITERAL tilde: the policy spells the home directory that way
+      case "$e" in "~/"*) e="$HOME/${e#"~/"}" ;; esac
+      # shellcheck disable=SC2254   # unquoted on purpose: the entry IS a glob pattern
+      case "$target" in $e) return 0 ;; esac
+      i=$((i + 1))
+    done
+  done <<EOF
+$(bootstrap_managed_sources claude)
+EOF
+  return 1
+}
+
+# instructions_policy — one line per cause, "it|<sentence>"; rc 1 when nothing stands in the way.
+instructions_policy() {
+  local a name found=1
+  for a in claude copilot; do
+    case "$a" in claude) name='Claude Code' ;; *) name='Copilot CLI' ;; esac
+    bootstrap_policy "$a" policyHelper raw >/dev/null 2>&1 || continue
+    printf 'it|%s: your company computes its policy with a helper program (policyHelper) that cannot be read from here, so whether it reads these instructions is unknown; ask IT\n' "$name"
+    found=0
+  done
+  if instructions_excluded; then
+    printf "it|Claude Code: your company's policy claudeMdExcludes means \$HOME/.claude/CLAUDE.md is never read; ask IT\n"
+    found=0
+  fi
+  return "$found"
+}
+instructions_policy_note() { instructions_policy | awk '{ sub(/^[^|]*\|/, ""); printf "%s%s", (NR > 1 ? ". " : ""), $0 }'; }
+
 # $HOME/x rather than an expanded home directory — rule 9, applied to what we PRINT as well as what we ship.
 instructions_homeify() {
   local p="${1:-}"
@@ -155,6 +200,9 @@ egress_instructions()  { :; }
 verify_instructions() {
   local g t r cop
 
+  # the right bytes in the right place are not SATISFIED if the agent is told to skip them
+  instructions_policy >/dev/null 2>&1 && return 1
+
   g="$(instructions_asset global-CLAUDE.md)" || return 1
   t="$(instructions_asset repo-CLAUDE.md)"   || return 1
   r="$(instructions_asset agent-repo-init)"  || return 1
@@ -181,10 +229,12 @@ verify_instructions() {
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # gate_ — exit 0 iff a human must decide something. Here that is exactly one situation: this
 # machine already has an instructions file of its own at one of the two paths we would write.
-# That is a merge, and a merge is a judgment, so it is the operator's. A fresh Mac never gates.
+# That is a merge, and a merge is a judgment, so it is the operator's. A fresh PERSONAL Mac never
+# gates; a corporate one does when IT's policy tells Claude Code to skip the file (instructions_policy).
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 gate_instructions() {
   local g gl cop
+  instructions_policy >/dev/null 2>&1 && return 0
   g="$(instructions_asset global-CLAUDE.md)" || return 1  # asset unresolvable ⇒ a FAILURE, not a gesture
 
   gl="$(instructions_global)"
@@ -202,6 +252,7 @@ gate_instructions() {
 
 note_instructions() {
   local g gl cop
+  if instructions_policy >/dev/null 2>&1; then instructions_policy_note; return 0; fi
   g="$(instructions_asset global-CLAUDE.md)" || {
     printf 'the shipped instructions file is not in the release tree this run verified'
     return 0; }
@@ -226,6 +277,7 @@ note_instructions() {
 # lands in the receipt. Never a bare path: a path pasted into a shell is executed, not opened.
 gesture_instructions() {
   local g gl cop
+  instructions_policy >/dev/null 2>&1 && return 0     # IT's policy: there is no command, only IT
   g="$(instructions_asset global-CLAUDE.md)" || return 0
 
   gl="$(instructions_global)"
