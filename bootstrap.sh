@@ -93,7 +93,7 @@ BOOTSTRAP_RC=0
 # This list is ALSO the manifest of last resort, used when there is no modules/ directory beside
 # this script — i.e. when bootstrap.sh was curl'd on its own. A module that is not in the release
 # at this pin is recorded SKIPPED, a precondition error (30), never a silent absence.
-BOOTSTRAP_MODULE_ORDER="statusline instructions hooks handoff microsoft365 microsoft365_archive shared_folders pane_equalize voiceink rewrite_model screenshot"
+BOOTSTRAP_MODULE_ORDER="statusline instructions hooks reporting_off handoff microsoft365 microsoft365_archive shared_folders pane_equalize voiceink rewrite_model screenshot"
 
 driver_self_dir() {
   local s="${BASH_SOURCE[0]:-$0}" d

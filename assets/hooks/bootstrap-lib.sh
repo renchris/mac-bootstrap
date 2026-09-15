@@ -1069,10 +1069,17 @@ fi
 # cross-home install: BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1.
 bootstrap_defaults_home_ok() {
   [ "${BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS:-0}" = 1 ] && return 0
+  bootstrap_home_is_real && return 0
+  bootstrap_warn "defaults writes would escape this sandboxed HOME and hit the REAL domain. Refusing. Set BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1 only if that is genuinely what you want."
+  return 1
+}
+
+# bootstrap_home_is_real — 0 iff $HOME is this user's home in the password database (or that cannot be
+# read). The same guard for ANY write that lands outside $HOME — Homebrew's own repository, launchd —
+# because a sandboxed test run must never reach the machine it runs on.
+bootstrap_home_is_real() {
   local real
   real="$(/usr/bin/dscl . -read "/Users/$(/usr/bin/id -un)" NFSHomeDirectory 2>/dev/null | /usr/bin/sed -n 's/^NFSHomeDirectory: //p')"
   [ -n "$real" ] || return 0          # cannot tell => do not block a real install
-  [ "$real" = "${HOME%/}" ] && return 0
-  bootstrap_warn "defaults writes would escape this sandboxed HOME and hit the REAL domain ($real). Refusing. Set BOOTSTRAP_ALLOW_FOREIGN_DEFAULTS=1 only if that is genuinely what you want."
-  return 1
+  [ "$real" = "${HOME%/}" ]
 }
