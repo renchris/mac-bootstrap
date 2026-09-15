@@ -118,6 +118,30 @@ same "user-disable-gesture-shows-it" "$(agent_config_row "$h" hooks human_comman
 if [ "$(json_at "$h/.claude/settings.json" disableAllHooks)" = true ]; then pass "user-disable-left-as-it-was"
 else fail "user-disable-left-as-it-was" "the user's disableAllHooks was changed"; fi
 
+# 8. A standard user with no tmux and no Homebrew of their own: a plain sentence, and no brew to run.
+#    PATH without tmux; the seam treats a Homebrew outside $HOME as an administrator's.
+h="$(fresh_home agent-config-standard)"
+HOME="$h" TMPDIR="$CHECK_WORK" BOOTSTRAP_MANAGED_ROOT="$AGENT_CONFIG/none" BOOTSTRAP_ASSUME_STANDARD_USER=1 \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/env -u CLAUDE_CONFIG_DIR -u COPILOT_HOME \
+  /bin/bash "$CHECK_ROOT/bootstrap.sh" --only handoff >/dev/null 2>&1
+agent_config_expect "standard-user-no-tmux-says-why" "$h" handoff NEEDS_HUMAN "needs an administrator"
+same "standard-user-gets-no-brew-gesture" "$(agent_config_row "$h" handoff human_command)" ""
+#    CONTROL: the same run as an administrator whose Homebrew is writable DOES offer it — so the empty
+#    gesture above is the standard-user rule speaking, not a gesture that can never appear.
+AGENT_CONFIG_BREW="$(PATH=/usr/bin:/bin . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" >/dev/null 2>&1; bootstrap_find_tool brew)" || AGENT_CONFIG_BREW=""
+if [ -n "$AGENT_CONFIG_BREW" ] && [ -w "$(dirname "$AGENT_CONFIG_BREW")" ]; then
+  h="$(fresh_home agent-config-admin)"
+  HOME="$h" TMPDIR="$CHECK_WORK" BOOTSTRAP_MANAGED_ROOT="$AGENT_CONFIG/none" \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/env -u CLAUDE_CONFIG_DIR -u COPILOT_HOME -u BOOTSTRAP_ASSUME_STANDARD_USER \
+    /bin/bash "$CHECK_ROOT/bootstrap.sh" --only handoff >/dev/null 2>&1
+  case "$(agent_config_row "$h" handoff human_command)" in
+    *"install tmux") pass "brew-owner-gets-brew-gesture" ;;
+    *) fail "brew-owner-gets-brew-gesture" "[$(agent_config_row "$h" handoff human_command)]" ;;
+  esac
+else
+  pass "brew-owner-gets-brew-gesture" "n/a: no Homebrew this account can write on this Mac"
+fi
+
 # 9. agent-handoff's own fixtures, including the routing allowlist and its credential controls.
 if /bin/bash "$CHECK_ROOT/assets/agent-handoff" selftest >"$CHECK_WORK/agent-handoff-selftest" 2>&1; then
   pass "agent-handoff-selftest" "$(tail -1 "$CHECK_WORK/agent-handoff-selftest")"

@@ -107,6 +107,23 @@ handoff_policy() {
 }
 handoff_policy_note() { handoff_policy | awk '{ sub(/^[^|]*\|/, ""); printf "%s%s", (NR > 1 ? ". " : ""), $0 }'; }
 
+# ── handoff_brew — a Homebrew this account can install tmux with, or rc 1. ───────────────────────
+# A standard user cannot install Homebrew, and cannot use one an administrator installed: the prefix
+# is theirs. What this account CAN use is a Homebrew whose bin directory it may write — its own, or one
+# IT handed to it. BOOTSTRAP_ASSUME_STANDARD_USER cannot change who owns the files on the Mac it runs
+# on, so under it a Homebrew outside $HOME is treated as an administrator's, which is what it is on a
+# standard user's Mac.
+handoff_brew() {
+  local b
+  b="$(bootstrap_find_tool brew)" || return 1
+  [ -w "$(dirname "$b")" ] || return 1
+  case "$b" in
+    "$HOME"/*) : ;;
+    *) [ "${BOOTSTRAP_ASSUME_STANDARD_USER:-0}" = 1 ] && return 1 ;;
+  esac
+  printf '%s' "$b"
+}
+
 # ── handoff_frontmatter_ok <file> — a STRUCTURAL parse, not a grep for our own text. ────────────
 # awk walks the document as a document: line 1 must open the block, the block must close, and
 # `description:` must exist inside it with a non-empty value. That is the one property both
@@ -227,8 +244,9 @@ verify_handoff() {
   handoff_doc_ok "$(handoff_copilot_skill)" handoff.md || return 1
   # The deliverable is not "a /handoff exists", it is "a FAULT-TOLERANT, zero-human succession".
   # Without tmux the engine falls back to direct mode and loses survives-app-death, so this module
-  # is NOT satisfied — gate_/note_/gesture_ then report it as one `brew install tmux` rather than
-  # letting the receipt read SATISFIED over a guarantee that is not there.
+  # is NOT satisfied — gate_/note_/gesture_ then report it (as one `brew install tmux` where this
+  # account has a Homebrew it can use, as a plain sentence where it does not) rather than letting
+  # the receipt read SATISFIED over a guarantee that is not there.
   handoff_no_tmux && return 1
 
   return 0
@@ -262,11 +280,19 @@ note_handoff() {
   local b
   if handoff_policy >/dev/null 2>&1; then handoff_policy_note; return 0; fi
   if b="$(handoff_blocked_dir 2>/dev/null)" && [ -n "$b" ]; then
-    printf 'cannot write %s — it is not writable by this user, so the /handoff files cannot be installed there' "$b"
+    if bootstrap_is_admin; then
+      printf 'cannot write %s — it is not writable by this user, so the /handoff files cannot be installed there' "$b"
+    else
+      printf 'cannot write %s — it is not writable by this user and changing its owner needs an administrator; ask IT' "$b"
+    fi
     return 0
   fi
   if handoff_no_tmux; then
-    printf 'installed, but WITHOUT its fault tolerance: macOS ships no tmux, so a successor would be born in direct mode and die with the terminal app, and the retire could not be verified'
+    if handoff_brew >/dev/null 2>&1; then
+      printf 'installed, but WITHOUT its fault tolerance: macOS ships no tmux, so a successor would be born in direct mode and die with the terminal app, and the retire could not be verified'
+    else
+      printf 'installed, but WITHOUT its fault tolerance: that needs tmux, and tmux needs Homebrew, which needs an administrator; /handoff still works in direct mode without it, but a successor dies with the terminal app — ask IT for tmux if it must outlive it'
+    fi
     return 0
   fi
   printf 'the autonomous /handoff is not installed: no agent-handoff, no succession engine, no /handoff command, no Copilot skill'
@@ -277,10 +303,14 @@ gesture_handoff() {
   local b
   handoff_policy >/dev/null 2>&1 && return 0          # IT's policy: there is no command, only IT
   if b="$(handoff_blocked_dir 2>/dev/null)" && [ -n "$b" ]; then
-    printf 'sudo chown "$(id -un)" %s' "$b"
+    bootstrap_is_admin && printf 'sudo chown "$(id -un)" %s' "$b"   # a standard user has no sudo to offer
     return 0
   fi
-  handoff_no_tmux && { printf 'brew install tmux'; return 0; }
+  if handoff_no_tmux && b="$(handoff_brew)"; then
+    # the resolved brew, so it runs as typed without brew on PATH; spelled $HOME when it lives there
+    case "$b" in "$HOME"/*) b="\$HOME/${b#"$HOME"/}" ;; esac
+    printf 'HOMEBREW_NO_ANALYTICS=1 "%s" install tmux' "$b"
+  fi
   return 0
 }
 
