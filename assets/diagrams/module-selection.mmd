@@ -8,6 +8,7 @@ flowchart LR
   STD --> handoff["handoff<br/><i>self-recycling /handoff</i>"]
   STD --> rewrite["rewrite_model<br/><i>local rewrite model</i>"]
   STD --> microsoft365["microsoft365<br/><i>Outlook for both agents</i>"]
+  STD --> reporting["reporting_off<br/><i>optional reporting off</i>"]
   FULL --> voiceink["voiceink<br/><i>local VoiceInk build</i>"]
   FULL --> screenshot["screenshot<br/><i>⌘⇧4 to clipboard</i>"]
   FULL --> archive["microsoft365_archive<br/><i>meetings + Copilot as markdown</i>"]
@@ -20,6 +21,6 @@ flowchart LR
   classDef full fill:@red-bg,stroke:@red-fg,color:@text
   classDef prof fill:@gray-bg,stroke:@blue-fg,color:@text-bright
   class statusline,instructions,hooks,panes lite
-  class handoff,rewrite,microsoft365 std
+  class handoff,rewrite,microsoft365,reporting std
   class voiceink,screenshot,archive,shared full
   class LITE,STD,FULL prof
