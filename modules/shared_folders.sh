@@ -31,10 +31,20 @@
 #   * It never reaches a network. The OneDrive app does the syncing; the converter runs pandoc only
 #     sandboxed and markitdown only when it cannot transcribe audio (see markdown-convert.sh), and our
 #     own scripts come from the verified release tree the driver unpacked, never from a fetch.
+#   * It never lets git see a link or its views: a link inside a work tree has `/<link>` and
+#     `/<link>.views/` in that clone's LOCAL exclude file (never a tracked .gitignore), recorded in
+#     $BOOTSTRAP_STATE_DIR/shared-folders/git-excludes so remove and uninstall take out only those lines.
 #
-# TEST SEAM (module-scoped; CONTRACT.md §5 does not carry it):
+# WHEN IT CANNOT BE DELIVERED: a real file where a link belongs, a folder no OneDrive root has, a
+# folder two roots have, a link git has already committed, or your company's OneDrive policy
+# (BlockExternalSync, AllowTenantList) stopping a client's folder from syncing — each is NEEDS_HUMAN,
+# never SATISFIED over a folder that will not stay current.
+#
+# TEST SEAMS (module-scoped; CONTRACT.md §5 does not carry them):
 #   SHARED_FOLDERS_CLOUD_DIR  replaces $HOME/Library/CloudStorage — where the OneDrive* roots are
 #                             looked for. The CLI honours the same variable, so both agree.
+#   BOOTSTRAP_MANAGED_ROOT    the library's seam: prefixes the system paths OneDrive's managed
+#                             preferences are read from.
 #
 # bash 3.2 · set -u, never set -e · every verb runs in its own subshell, so everything below is
 # re-derived per verb and nothing is carried between them.
@@ -90,26 +100,110 @@ shared_folders_physical() {
   (cd -P "$p" 2>/dev/null && pwd -P)
 }
 
-# shared_folders_under_cloud <path> — rc 0 iff <path> physically sits inside a synced tree: the
-# CloudStorage dir in force (seam or real), the real one, or iCloud Drive. Each is compared only
-# when it exists — an absent one resolves to its ancestor, which would swallow all of ~/Library.
-# Both sides are compared with the letter case folded: macOS volumes are case-insensitive by default
-# and `pwd -P` keeps the case that was typed, so $HOME/library/cloudstorage IS the synced folder. On a
-# case-sensitive volume the fold can only refuse more.
+# shared_folders_sync_roots — every folder a sync client uploads, one per line, existing or not. The
+# module's OWN list, deliberately not the CLI's code, holding the same families: the CloudStorage dir
+# in force (seam or real) and the real one (OneDrive, Dropbox, Google Drive and Box in File Provider
+# mode), iCloud Drive, Desktop and Documents when Finder says iCloud keeps them, and each client's
+# pre-File-Provider root — including wherever Dropbox's own info.json says it was moved.
+shared_folders_sync_roots() {
+  local r k d
+  for r in "$(shared_folders_cloud_dir)" "$HOME/Library/CloudStorage" "$HOME/Library/Mobile Documents" \
+           "$HOME/Dropbox" "$HOME/Dropbox ("*")" "$HOME/Google Drive" "$HOME/My Drive" /Volumes/GoogleDrive \
+           /Volumes/GoogleDrive-* "$HOME/Box" "$HOME/Box Sync" "$HOME/OneDrive" "$HOME/OneDrive - "*; do
+    printf '%s\n' "$r"
+  done
+  for k in personal.path business.path; do
+    r="$(/usr/bin/plutil -extract "$k" raw -o - -- "$HOME/.dropbox/info.json" 2>/dev/null)" || continue
+    case "$r" in /*) printf '%s\n' "$r" ;; esac
+  done
+  for d in Desktop Documents; do
+    case "$(/usr/bin/plutil -extract "FXICloudDrive$d" raw -o - -- "$HOME/Library/Preferences/com.apple.finder.plist" 2>/dev/null)" in
+      true|1) printf '%s\n' "$HOME/$d" ;;
+    esac
+  done
+}
+
+# shared_folders_under_cloud <path> — rc 0 iff <path> physically sits inside a synced tree
+# (shared_folders_sync_roots). Each is compared only when it exists — an absent one resolves to its
+# ancestor, which would swallow all of ~/Library. Both sides are compared with the letter case folded:
+# macOS volumes are case-insensitive by default and `pwd -P` keeps the case that was typed, so
+# $HOME/library/cloudstorage IS the synced folder. On a case-sensitive volume the fold can only refuse more.
 shared_folders_lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 shared_folders_under_cloud() {
   local real c cr
   real="$(shared_folders_physical "${1:-}")" || return 1
   [ -n "$real" ] || return 1
   real="$(shared_folders_lower "$real")"
-  for c in "$(shared_folders_cloud_dir)" "$HOME/Library/CloudStorage" "$HOME/Library/Mobile Documents"; do
-    [ -d "$c" ] || continue
+  while IFS= read -r c; do
+    [ -n "$c" ] && [ -d "$c" ] || continue
     cr="$(cd -P "$c" 2>/dev/null && pwd -P)" || continue
     [ -n "$cr" ] || continue
     cr="$(shared_folders_lower "$cr")"
     case "$real/" in "$cr/"*) return 0 ;; esac
+  done <<EOF
+$(shared_folders_sync_roots)
+EOF
+  return 1
+}
+
+# ── git and policy: the module's own readers ────────────────────────────────────────────────────
+# shared_folders_git — a git that runs without opening the Command Line Tools install dialog a fresh
+# Mac's /usr/bin/git shows: the bootstrap's own, Homebrew's, or Apple's only where a developer
+# directory holds it.
+shared_folders_git() {
+  local c dev
+  for c in "$(shared_folders_state_dir)/tools/bin/git" /opt/homebrew/bin/git /usr/local/bin/git; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  dev="$(/usr/bin/xcode-select -p 2>/dev/null)" || return 1
+  [ -x "$dev/usr/bin/git" ] && { printf '%s' "$dev/usr/bin/git"; return 0; }
+  return 1
+}
+
+# shared_folders_work_tree <link> — the folder holding the .git of the work tree <link> sits in.
+shared_folders_work_tree() {
+  local d="${1%/*}"
+  while :; do
+    [ -e "${d:-}/.git" ] && { printf '%s' "${d:-/}"; return 0; }
+    [ -n "$d" ] || return 1
+    d="${d%/*}"
+  done
+}
+
+# shared_folders_tracked <link> — rc 0 when git's INDEX already holds the link or anything in its
+# views: an exclude line cannot untrack it, so only a person can take it out. This asks the index
+# (ls-files); the CLI's `check` asks the ignore rules (check-ignore) — two different questions of git.
+shared_folders_tracked() {
+  local link="${1:-}" tree git rel
+  tree="$(shared_folders_work_tree "$link")" || return 1
+  git="$(shared_folders_git)" || return 1
+  rel="${link#"${tree%/}"/}"
+  [ -n "$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE "$git" --literal-pathspecs -C "$tree" ls-files -- "$rel" "$rel.views" 2>/dev/null)" ]
+}
+
+# shared_folders_onedrive_policy <key> — what IT set for <key> in OneDrive's managed preferences (the
+# per-user and device configuration profiles, and the plist a deployment script writes; standalone
+# and App Store OneDrive). plutil on the files: no admin. The library's bootstrap_policy reads only the
+# agents' domains, so this is its OneDrive twin.
+shared_folders_onedrive_policy() {
+  local r="${BOOTSTRAP_MANAGED_ROOT:-}" u d f v
+  u="$(/usr/bin/id -un 2>/dev/null)"
+  for d in com.microsoft.OneDrive com.microsoft.OneDrive-mac; do
+    for f in "$r/Library/Managed Preferences/$u/$d.plist" "$r/Library/Managed Preferences/$d.plist" "$r/Library/Preferences/$d.plist"; do
+      [ -f "$f" ] || continue
+      v="$(/usr/bin/plutil -extract "$1" raw -o - -- "$f" 2>/dev/null)" && { printf '%s' "$v"; return 0; }
+    done
   done
   return 1
+}
+
+# shared_folders_policy_block — the policy key that stops OneDrive keeping a client's folder current,
+# rc 1 when none. BlockExternalSync stops folders shared from other organisations; an AllowTenantList
+# with any entry lets only those organisations' accounts sync (plutil prints an array's count).
+shared_folders_policy_block() {
+  case "$(shared_folders_onedrive_policy BlockExternalSync)" in true|1) printf 'BlockExternalSync'; return 0 ;; esac
+  case "$(shared_folders_onedrive_policy AllowTenantList)" in ''|0|false) return 1 ;; esac
+  printf 'AllowTenantList'
 }
 
 # shared_folders_matches <relative-path> — every OneDrive root holding <relative-path>, one per line.
@@ -150,9 +244,12 @@ EOF
 #   not-a-link  a real file or folder sits where the link belongs; nothing here will ever move it
 #   unsynced    no OneDrive root has the folder any more (n = 0)
 #   ambiguous   n > 1 roots have it, so no link can be chosen without a person
+#   tracked     git has already committed the link or its views; an exclude line cannot undo that
+#   policy      your company's OneDrive policy stops a client's folder syncing (n = the policy key);
+#               named against the first link, since it holds for every one
 # gate_, note_ and gesture_ all read this, so they can never disagree about which folder they name.
 shared_folders_needs_human() {
-  local link rel url n tab
+  local link rel url n tab first="" key
   tab="$(printf '\t')"
   while IFS="$tab" read -r link rel url; do
     [ -n "$link" ] || continue
@@ -161,9 +258,14 @@ shared_folders_needs_human() {
     if [ -e "$link" ] && [ ! -L "$link" ]; then printf 'not-a-link\t%s\t%s\t%s\t%s' "$link" "$rel" "$n" "$url"; return 0; fi
     if [ "$n" = 0 ]; then printf 'unsynced\t%s\t%s\t%s\t%s' "$link" "$rel" "$n" "$url"; return 0; fi
     if [ "$n" -gt 1 ]; then printf 'ambiguous\t%s\t%s\t%s\t%s' "$link" "$rel" "$n" "$url"; return 0; fi
+    if shared_folders_tracked "$link"; then printf 'tracked\t%s\t%s\t%s\t%s' "$link" "$rel" "$n" "$url"; return 0; fi
+    [ -n "$first" ] || first="$link$tab$rel"
   done <<EOF
 $(shared_folders_records)
 EOF
+  if [ -n "$first" ] && key="$(shared_folders_policy_block)"; then
+    printf 'policy\t%s\t%s\t' "$first" "$key"; return 0
+  fi
   return 1
 }
 
@@ -302,10 +404,13 @@ verify_shared_folders() {
   while IFS="$tab" read -r link rel url; do
     [ -n "$link" ] || continue
     shared_folders_record_healthy "$link" "$rel" || return 1
+    shared_folders_tracked "$link" && return 1          # committed to git: goes wherever the repo is pushed
     [ -n "$first" ] || first="$rel"
   done <<EOF
 $(shared_folders_records)
 EOF
+  # A link can resolve perfectly and still be a folder OneDrive has stopped keeping current.
+  shared_folders_policy_block >/dev/null && return 1
   # …and the same read-back must be able to say NO: a link that does not exist, over a folder that
   # DOES resolve, is not healthy — so the pass above is about the links, not merely the folders.
   shared_folders_record_healthy "$(shared_folders_dir)/__shared_folders_no_such_link__" "$first" && return 1
@@ -340,6 +445,10 @@ EOF
                    "$(shared_folders_short_path "$link")" "$rel" ;;
       ambiguous) printf 'the shared folder "%s" (linked at %s) is present under %s OneDrive roots in %s, so which one the link follows is your call; in the OneDrive app, stop syncing the root you no longer use, and never delete a folder under CloudStorage by hand.' \
                    "$rel" "$(shared_folders_short_path "$link")" "$n" "$(shared_folders_short_path "$(shared_folders_cloud_dir)")" ;;
+      tracked)   printf 'git has already committed the link %s or its views in the repo %s, so they go wherever that repo is pushed and no exclude line can stop it; take them out of the index with the command below (your files stay), and check no pushed commit carries them.' \
+                   "$(shared_folders_short_path "$link")" "$(shared_folders_short_path "$(shared_folders_work_tree "$link")")" ;;
+      policy)    printf 'your company'\''s OneDrive policy (%s) stops OneDrive syncing folders from other organizations, so the shared folder "%s" (linked at %s) may look present but will not be kept current; ask IT to allow the client'\''s organization.' \
+                   "$n" "$rel" "$(shared_folders_short_path "$link")" ;;
       *)         printf 'the shared folder "%s" (linked at %s) is no longer synced: no OneDrive root in %s has it, so the link points nowhere; add it back with Add shortcut to My files (or Sync on the client'\''s site) and the next run relinks it.' \
                    "$rel" "$(shared_folders_short_path "$link")" "$(shared_folders_short_path "$(shared_folders_cloud_dir)")" ;;
     esac
@@ -369,6 +478,11 @@ EOF
              esac ;;
         *)   printf 'open -R "%s"' "$(shared_folders_short_path "$link")" ;;
       esac
+    elif [ "$why" = tracked ]; then
+      # git rm --cached changes only the index, never a file. Printed only when both paths quote safely.
+      shared_folders_untrack_command "$link"
+    elif [ "$why" = policy ]; then
+      :                                    # only IT can change it; the note says so, and there is no command
     elif [ "$why" = unsynced ] && shared_folders_url_ok "$url"; then
       printf "open '%s'" "$url"
     else
@@ -377,6 +491,17 @@ EOF
     return 0
   fi
   return 0
+}
+
+# shared_folders_untrack_command <link> — `git -C "<repo>" rm -r --cached --ignore-unmatch -- '<rel>'
+# '<rel>.views'`, or nothing when the repo or the path holds a character that would break the quotes.
+shared_folders_untrack_command() {
+  local tree rel
+  tree="$(shared_folders_work_tree "$1")" || return 0
+  rel="${1#"${tree%/}"/}"
+  case "$rel" in *"'"*) return 0 ;; esac
+  case "${tree#"$HOME"}" in *[\"\$\`\\!]*) return 0 ;; esac
+  printf "git -C \"%s\" rm -r --cached --ignore-unmatch -- '%s' '%s.views'" "$(shared_folders_short_path "$tree")" "$rel" "$rel"
 }
 
 # shared_folders_land <asset-relpath> <installed-path> — stage, PROVE it runs, then land it. Bytes
@@ -462,6 +587,37 @@ EOF
   return 0
 }
 
+# shared_folders_unexclude_all — undo every line the CLI recorded appending to a clone's exclude file
+# (ledger: "<link>\t<exclude-file>\t<line>", or an empty <link> with created-file / created-dir), and
+# remove what it created once it is empty again. Lines somebody else wrote are never in the ledger.
+shared_folders_unexclude_all() {
+  local ledger file tmp rc=0
+  ledger="$(shared_folders_dir)/git-excludes"
+  [ -f "$ledger" ] || return 0
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    if [ -f "$file" ]; then
+      tmp="$file.shared-folders.$$"
+      LEDGER="$ledger" FILE="$file" /usr/bin/awk -F'\t' '
+        FILENAME == ENVIRON["LEDGER"] { if ($1 != "" && $2 == ENVIRON["FILE"]) ours[$3] = 1; next }
+        !($0 in ours) { print }
+      ' "$ledger" "$file" > "$tmp" || { rm -f "$tmp"; rc=1; continue; }
+      if cmp -s "$tmp" "$file"; then rm -f "$tmp"; else cat "$tmp" > "$file" && rm -f "$tmp" || rc=1; fi
+      if FILE="$file" /usr/bin/awk -F'\t' '$1 == "" && $2 == ENVIRON["FILE"] && $3 == "created-file" { f = 1 } END { exit f ? 0 : 1 }' "$ledger" \
+         && [ ! -s "$file" ]; then
+        rm -f "$file"
+      fi
+    fi
+    if FILE="$file" /usr/bin/awk -F'\t' '$1 == "" && $2 == ENVIRON["FILE"] && $3 == "created-dir" { f = 1 } END { exit f ? 0 : 1 }' "$ledger"; then
+      rmdir "$(dirname "$file")" 2>/dev/null
+    fi
+  done <<EOF
+$(/usr/bin/awk -F'\t' '!seen[$2]++ { print $2 }' "$ledger")
+EOF
+  [ "$rc" = 0 ] && rm -f "$ledger"
+  return "$rc"
+}
+
 # uninstall_ removes the CLI, the converter and the record, the symlinks it recorded, and the views
 # folder beside each link that the CLI provably generated — exactly what `shared-folder remove` takes
 # for one link. NEVER a symlink's target, NEVER anything under CloudStorage: a delete there is a
@@ -490,6 +646,7 @@ EOF
   done <<EOF
 $(shared_folders_records)
 EOF
+  shared_folders_unexclude_all || rc=1
   rm -f "$(shared_folders_bin)" 2>/dev/null
   dir="$(shared_folders_dir)"
   if [ -L "$dir" ]; then

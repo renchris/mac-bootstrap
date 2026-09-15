@@ -26,9 +26,28 @@
 #   AMBIGUOUS n   n roots have it; nothing is guessed — remove the duplicate root or re-add
 #   NOT-A-LINK    a real file or folder sits at the link path; it is never touched
 #   STALE-VIEWS n n views are older than their source; `refresh` regenerates them
+#   NOT-EXCLUDED  the link sits in a git work tree and git (asked, not parsed) would commit the link or
+#                 its views; `relink` adds the exclude lines, and a link already committed needs
+#                 `git rm --cached`
+#   BLOCKED-BY-POLICY key   your company's OneDrive policy (BlockExternalSync, AllowTenantList) stops
+#                 OneDrive keeping a client's folder current, so the link may look fine and be stale
 #
 # add exit codes: 20 not synced · 21 ambiguous · 22 link path exists and is not a symlink ·
 #                 23 link path is inside a synced cloud folder · 2 usage · 1 could not write.
+#
+# A LINK INSIDE A GIT WORK TREE IS KEPT OUT OF GIT. `git add -A` would commit the link (an absolute path
+# with your user name in it) and the views (copies of a client's files), and a push would publish them.
+# So `add`, `relink` and `refresh` put `/<link>` and `/<link>.views/` in that clone's LOCAL exclude file
+# (<git dir>/info/exclude, shared by its worktrees) — never in a tracked .gitignore — and record each line
+# they add, so `remove` takes out exactly those lines and nothing somebody else wrote. `refresh` refuses
+# to write views git would still commit.
+#
+# EVERY SYNC ROOT IS REFUSED, not only OneDrive's: a link or a view inside any folder a sync client
+# uploads would be uploaded. They are $HOME/Library/CloudStorage (OneDrive, Dropbox, Google Drive, Box
+# in File Provider mode), iCloud Drive, $HOME/Desktop and $HOME/Documents when iCloud keeps them, and the
+# older roots each client used before File Provider — $HOME/Dropbox (and wherever Dropbox's own
+# info.json says it moved), $HOME/Google Drive, $HOME/My Drive, /Volumes/GoogleDrive, $HOME/Box,
+# $HOME/Box Sync, $HOME/OneDrive and $HOME/OneDrive - <organisation>.
 #
 # VIEWS are a derived copy, so they are treated as one: they live BESIDE the link, never inside a cloud
 # folder (writing there would upload them to the client); every file is chmod 444 because a view is for
@@ -39,9 +58,11 @@
 # SF_DATALESS (0x40000000); opening it downloads it. Its view says so and names the one gesture that
 # fixes it — Always keep on this device — and its bytes are never hashed or converted.
 #
-# Seams (tests): SHARED_FOLDERS_CLOUD_DIR replaces $HOME/Library/CloudStorage; BOOTSTRAP_STATE_DIR moves
-# the records; SHARED_FOLDERS_COMPUTER_NAME replaces `scutil --get ComputerName`; SHARED_FOLDERS_CONVERTER
-# names markdown-convert.sh; DATALESS_STAT_COMMAND replaces /usr/bin/stat for the flag read only.
+# Seams (tests): SHARED_FOLDERS_CLOUD_DIR replaces $HOME/Library/CloudStorage as the place OneDrive roots
+# are found (the real one is still refused); BOOTSTRAP_STATE_DIR moves the records; BOOTSTRAP_MANAGED_ROOT
+# prefixes the system paths OneDrive's managed preferences are read from; SHARED_FOLDERS_COMPUTER_NAME
+# replaces `scutil --get ComputerName`; SHARED_FOLDERS_CONVERTER names markdown-convert.sh;
+# DATALESS_STAT_COMMAND replaces /usr/bin/stat for the flag read only.
 #
 # Nothing here writes inside a cloud folder, deletes a symlink's target, or needs any permission.
 
@@ -57,6 +78,7 @@ SHARED_FOLDER_NOT_SYNCED_HINT="not synced: add it with Add shortcut to My files 
 SHARED_FOLDER_DATALESS_HINT="Always keep on this device"
 
 shared_folder_say()        { printf 'shared-folder: %s\n' "$*" >&2; }
+shared_folder_usage()      { /usr/bin/awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]:-$0}"; }
 shared_folder_state_dir()  { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/shared-folders"; }
 shared_folder_links_file() { printf '%s/links' "$(shared_folder_state_dir)"; }
 shared_folder_cloud_dir()  { printf '%s' "${SHARED_FOLDERS_CLOUD_DIR:-$HOME/Library/CloudStorage}"; }
@@ -108,19 +130,44 @@ shared_folder_physical_parent() {
   printf '%s%s/%s' "${real%/}" "$tail" "$(basename -- "$1")"
 }
 
+# shared_folder_sync_roots — every folder on this Mac that a sync client uploads, one per line, whether
+# or not it exists (the caller skips what does not). See the header for why each is here. Dropbox can be
+# moved anywhere, so its own info.json is asked where it went; iCloud keeps Desktop and Documents only
+# when Finder's own preferences say so. Both are read with plutil, from $HOME, so a sandbox sees its own.
+shared_folder_sync_roots() {
+  local root key folder
+  for root in "$(shared_folder_cloud_dir)" "$HOME/Library/CloudStorage" "$HOME/Library/Mobile Documents" \
+              "$HOME/Dropbox" "$HOME/Dropbox ("*")" "$HOME/Google Drive" "$HOME/My Drive" \
+              /Volumes/GoogleDrive /Volumes/GoogleDrive-* "$HOME/Box" "$HOME/Box Sync" \
+              "$HOME/OneDrive" "$HOME/OneDrive - "*; do
+    printf '%s\n' "$root"
+  done
+  [ -f "$HOME/.dropbox/info.json" ] && for key in personal.path business.path; do
+    root="$(/usr/bin/plutil -extract "$key" raw -o - -- "$HOME/.dropbox/info.json" 2>/dev/null)" || continue
+    case "$root" in /*) printf '%s\n' "$root" ;; esac
+  done
+  for folder in Desktop Documents; do
+    case "$(/usr/bin/plutil -extract "FXICloudDrive$folder" raw -o - -- "$HOME/Library/Preferences/com.apple.finder.plist" 2>/dev/null)" in
+      true|1) printf '%s\n' "$HOME/$folder" ;;
+    esac
+  done
+}
+
 # shared_folder_inside_sync <physical-path> — rc 0 when the path is inside a folder a sync client
-# uploads: the cloud storage dir (every OneDrive root, and every other provider's) or iCloud Drive.
-# Compared with the letter case folded on both sides (see shared_folder_lower); on a case-sensitive
-# volume that can only refuse more, never less.
+# uploads (shared_folder_sync_roots). Each root is compared only when it exists, by its physical path,
+# with the letter case folded on both sides (see shared_folder_lower); on a case-sensitive volume that
+# can only refuse more, never less.
 shared_folder_inside_sync() {
   local area real path
   path="$(shared_folder_lower "$1")"
-  for area in "$(shared_folder_cloud_dir)" "$HOME/Library/Mobile Documents"; do
-    [ -d "$area" ] || continue
+  while IFS= read -r area; do
+    [ -n "$area" ] && [ -d "$area" ] || continue
     real="$(CDPATH='' cd -P -- "$area" 2>/dev/null && pwd -P)" || continue
     real="$(shared_folder_lower "$real")"
     case "$path/" in "$real"/*) return 0 ;; esac
-  done
+  done <<EOF
+$(shared_folder_sync_roots)
+EOF
   return 1
 }
 
@@ -128,13 +175,186 @@ shared_folder_inside_sync() {
 # would sit in, rc 1 when it is in none. Found by walking up for a .git entry, so no git (and no
 # "install the command line tools" dialog on a fresh Mac) is needed to ask.
 shared_folder_git_work_tree() {
-  local dir
-  dir="$(dirname -- "$1")"
+  local dir="${1%/*}"
   while :; do
-    [ -e "$dir/.git" ] && { printf '%s' "$dir"; return 0; }
-    [ "$dir" = "/" ] && return 1
-    dir="$(dirname -- "$dir")"
+    [ -e "${dir:-}/.git" ] && { printf '%s' "${dir:-/}"; return 0; }
+    [ -n "$dir" ] || return 1
+    dir="${dir%/*}"                        # parameter expansion, not dirname: this runs on every check
   done
+}
+
+# ── git: the clone's own exclude file, never a tracked .gitignore ────────────────────────────────────
+# shared_folder_exclude_file <work-tree> — the file `git rev-parse --git-path info/exclude` names, found
+# the way git finds it but without running git (on a fresh Mac /usr/bin/git opens an install dialog):
+# .git is the git dir, or a file saying "gitdir: <path>" (a linked worktree or a submodule, relative to
+# the folder holding it); info/ lives in the COMMON dir, which a worktree's git dir names in commondir.
+shared_folder_exclude_file() {
+  local tree="$1" gitdir common
+  if [ -d "$tree/.git" ]; then
+    gitdir="$tree/.git"
+  elif [ -f "$tree/.git" ]; then
+    gitdir="$(sed -n 's/^gitdir: //p' "$tree/.git" 2>/dev/null | sed -n 1p)"
+    case "$gitdir" in '') return 1 ;; /*) : ;; *) gitdir="$tree/$gitdir" ;; esac
+  else
+    return 1
+  fi
+  [ -d "$gitdir" ] || return 1
+  if [ -f "$gitdir/commondir" ]; then
+    common="$(sed -n 1p "$gitdir/commondir")"
+    case "$common" in '') : ;; /*) gitdir="$common" ;; *) gitdir="$gitdir/$common" ;; esac
+  fi
+  printf '%s/info/exclude' "${gitdir%/}"
+}
+
+# shared_folder_ignore_line <path-in-work-tree> — an exclude line matching exactly that path from the
+# work tree's top: anchored with "/", and the characters git reads as a pattern ([ ] * ? \) and a
+# trailing space escaped.
+shared_folder_ignore_line() {
+  printf '/%s' "$1" | sed -e 's/[][*?\\]/\\&/g' -e 's/ $/\\ /'
+}
+
+shared_folder_ledger() { printf '%s/git-excludes' "$(shared_folder_state_dir)"; }
+
+# shared_folder_ledger_add <link> <exclude-file> <line> — one thing this tool did to an exclude file:
+# a line it appended for <link>, or (with an empty <link>) "created-file" / "created-dir", so that
+# taking the lines back out can leave the clone exactly as it was.
+shared_folder_ledger_add() {
+  mkdir -p "$(shared_folder_state_dir)" 2>/dev/null || return 1
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$(shared_folder_ledger)"
+}
+
+# shared_folder_exclude <link> — keep <link> and <link>.views out of every commit of the work tree the
+# link sits in. Appends only a line that is not there already; prints what it did on stdout. rc 0
+# outside any work tree, or once both lines are in the file.
+shared_folder_exclude() {
+  local link="$1" tree file rel line added="" linkline viewsline
+  tree="$(shared_folder_git_work_tree "$link")" || return 0
+  rel="${link#"${tree%/}"/}"
+  linkline="$(shared_folder_ignore_line "$rel")"; viewsline="$linkline.views/"
+  if ! file="$(shared_folder_exclude_file "$tree")"; then
+    shared_folder_say "$link is inside the git work tree $tree, but its git folder cannot be found — add these two lines to its info/exclude yourself, or git will commit the link and its views:"
+    printf '%s\n%s\n' "$linkline" "$viewsline" >&2
+    return 1
+  fi
+  if [ ! -d "$(dirname -- "$file")" ]; then
+    mkdir -p "$(dirname -- "$file")" || return 1
+    shared_folder_ledger_add "" "$file" created-dir
+  fi
+  if [ ! -e "$file" ]; then
+    : > "$file" || return 1
+    shared_folder_ledger_add "" "$file" created-file
+  fi
+  for line in "$linkline" "$viewsline"; do
+    EXCLUDE_LINE="$line" /usr/bin/awk '$0 == ENVIRON["EXCLUDE_LINE"] { found = 1; exit } END { exit found ? 0 : 1 }' "$file" && continue
+    # A last line with no newline would swallow ours.
+    [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ] && printf '\n' >> "$file"
+    printf '%s\n' "$line" >> "$file" || return 1
+    shared_folder_ledger_add "$link" "$file" "$line"
+    added="$added $line"
+  done
+  if [ -n "$added" ]; then
+    printf 'kept out of git: added%s to %s (this clone only; no .gitignore was touched)\n' "$added" "$file"
+  fi
+  return 0
+}
+
+# shared_folder_unexclude <link> — take out of each exclude file exactly the lines this tool appended
+# for <link>, and nothing else; delete a file (and info/ folder) this tool created once it is empty
+# and no other link has a line in it. Prints what it did on stdout.
+shared_folder_unexclude() {
+  local link="$1" ledger file tmp n
+  ledger="$(shared_folder_ledger)"
+  [ -f "$ledger" ] || return 0
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    if [ -f "$file" ]; then
+      tmp="$file.shared-folder.$$"
+      LEDGER="$ledger" LINK="$link" FILE="$file" /usr/bin/awk -F'\t' '
+        FILENAME == ENVIRON["LEDGER"] { if ($1 == ENVIRON["LINK"] && $2 == ENVIRON["FILE"]) drop[$3] = 1; next }
+        !($0 in drop) { print }
+      ' "$ledger" "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+      n=$(( $(wc -l < "$file") - $(wc -l < "$tmp") ))
+      if cmp -s "$tmp" "$file"; then rm -f "$tmp"; else cat "$tmp" > "$file" && rm -f "$tmp"; fi
+      [ "$n" -gt 0 ] && printf 'took %s line(s) for %s out of %s\n' "$n" "$link" "$file"
+    fi
+    # Forget this link's lines; then, if no link has a line in the file any more, what this tool created goes.
+    LINK="$link" FILE="$file" /usr/bin/awk -F'\t' '!($1 == ENVIRON["LINK"] && $2 == ENVIRON["FILE"])' "$ledger" > "$ledger.tmp.$$" \
+      && mv -f "$ledger.tmp.$$" "$ledger"
+    if ! FILE="$file" /usr/bin/awk -F'\t' '$1 != "" && $2 == ENVIRON["FILE"] { f = 1 } END { exit f ? 0 : 1 }' "$ledger"; then
+      if FILE="$file" /usr/bin/awk -F'\t' '$1 == "" && $2 == ENVIRON["FILE"] && $3 == "created-file" { f = 1 } END { exit f ? 0 : 1 }' "$ledger" \
+         && [ -f "$file" ] && [ ! -s "$file" ]; then
+        rm -f "$file"
+      fi
+      if FILE="$file" /usr/bin/awk -F'\t' '$1 == "" && $2 == ENVIRON["FILE"] && $3 == "created-dir" { f = 1 } END { exit f ? 0 : 1 }' "$ledger"; then
+        rmdir "$(dirname -- "$file")" 2>/dev/null
+      fi
+      FILE="$file" /usr/bin/awk -F'\t' '!($1 == "" && $2 == ENVIRON["FILE"])' "$ledger" > "$ledger.tmp.$$" && mv -f "$ledger.tmp.$$" "$ledger"
+    fi
+  done <<EOF
+$(LINK="$link" /usr/bin/awk -F'\t' '$1 == ENVIRON["LINK"] && !seen[$2]++ { print $2 }' "$ledger")
+EOF
+  [ -s "$ledger" ] || rm -f "$ledger"
+  return 0
+}
+
+# shared_folder_git — a git that runs without opening the Command Line Tools install dialog: the
+# bootstrap's own, Homebrew's, or Apple's only when a developer directory actually holds it.
+shared_folder_git() {
+  local candidate dev
+  for candidate in "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/tools/bin/git" /opt/homebrew/bin/git /usr/local/bin/git; do
+    [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  dev="$(/usr/bin/xcode-select -p 2>/dev/null)" || return 1
+  [ -x "$dev/usr/bin/git" ] && { printf '%s' "$dev/usr/bin/git"; return 0; }
+  return 1
+}
+
+# shared_folder_git_would_commit <link> [views] — rc 0 when GIT ITSELF says it would pick up the link
+# or its ".views/" (with "views", only the latter): it sits in a work tree and `git check-ignore` does
+# not name every path as ignored — which is also its answer for a path already committed. rc 1 when all
+# are ignored, when there is no work tree or no git, or when git cannot read the repo (rc 128: then git
+# cannot commit it either).
+shared_folder_git_would_commit() {
+  local tree git rel out rc want=2
+  tree="$(shared_folder_git_work_tree "$1")" || return 1
+  git="$(shared_folder_git)" || return 1
+  rel="${1#"${tree%/}"/}"
+  if [ "${2:-}" = views ]; then
+    set -- "$rel.views/"; want=1
+  else
+    set -- "$rel" "$rel.views/"
+  fi
+  out="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE "$git" -C "$tree" check-ignore -- "$@" 2>/dev/null)"
+  rc=$?
+  [ "$rc" = 128 ] && return 1
+  [ "$(printf '%s' "$out" | /usr/bin/awk 'END { print NR }')" != "$want" ]
+}
+
+# ── your company's OneDrive policy ─────────────────────────────────────────────────────────────────
+# shared_folder_onedrive_policy <key> — what IT set for <key> in OneDrive's managed preferences: the
+# per-user and the device configuration profile, and the plist a deployment script writes, for the
+# standalone and the App Store OneDrive alike. Files read with plutil: no admin, no defaults, no cache.
+shared_folder_onedrive_policy() {
+  local root="${BOOTSTRAP_MANAGED_ROOT:-}" user="" domain file value
+  [ -d "$root/Library/Managed Preferences" ] && user="$(/usr/bin/id -un 2>/dev/null)"
+  for domain in com.microsoft.OneDrive com.microsoft.OneDrive-mac; do
+    for file in "$root/Library/Managed Preferences/$user/$domain.plist" "$root/Library/Managed Preferences/$domain.plist" \
+                "$root/Library/Preferences/$domain.plist"; do
+      [ -f "$file" ] || continue
+      value="$(/usr/bin/plutil -extract "$1" raw -o - -- "$file" 2>/dev/null)" && { printf '%s' "$value"; return 0; }
+    done
+  done
+  return 1
+}
+
+# shared_folder_policy_blocks — the policy key that stops OneDrive keeping a client's folder current,
+# rc 1 when none: BlockExternalSync ("prevents the sync app from syncing libraries and folders shared
+# from other organizations"), or an AllowTenantList with any entry (only those organisations' accounts
+# sync). plutil prints an array's count and a dictionary's keys, so "0" or nothing is an empty list.
+shared_folder_policy_blocks() {
+  case "$(shared_folder_onedrive_policy BlockExternalSync)" in true|1) printf 'BlockExternalSync'; return 0 ;; esac
+  case "$(shared_folder_onedrive_policy AllowTenantList)" in ''|0|false) : ;; *) printf 'AllowTenantList'; return 0 ;; esac
+  return 1
 }
 
 # shared_folder_clean_relative <relative-path> — no leading or trailing slash, no "." or ".."
@@ -397,7 +617,7 @@ shared_folder_view_build() {
       case "$rc" in
         0)  view_status="converted" ;;
         10) view_status="no-converter"
-            { printf '_No converter is installed for this type._\n\n'; sed -n '1,5p' "$scratch.err" | sed 's/^markdown-convert: //'; } > "$scratch.body" ;;
+            { printf '_Not converted._\n\n'; sed -n '1,5p' "$scratch.err" | sed 's/^markdown-convert: //'; } > "$scratch.body" ;;
         11) view_status="dataless"; sha=""
             printf '_Not downloaded._ Choose **%s** on it in Finder, then run `shared-folder refresh`.\n' "$SHARED_FOLDER_DATALESS_HINT" > "$scratch.body" ;;
         *)  view_status="failed"
@@ -550,7 +770,7 @@ shared_folder_views_ours() {
 # COMMANDS
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
 shared_folder_add() {
-  local link rel url physical current key repo
+  local link rel url physical current key policy
   [ $# -ge 2 ] && [ $# -le 3 ] || { shared_folder_say "usage: shared-folder add <link-path> <relative-path> [<web-url>]"; return 2; }
   link="$(shared_folder_absolute "$1")"
   rel="$(shared_folder_clean_relative "$2")" || { shared_folder_say "not a relative path inside a OneDrive root: $2"; return 2; }
@@ -587,10 +807,13 @@ shared_folder_add() {
   fi
   printf 'linked %s -> %s\n' "$link" "$resolve_target"
   # Inside a git work tree, `git add -A` would commit the link (an absolute path into your OneDrive,
-  # with your user name in it) and the views (copies of the client's files). Say so; never edit the repo.
-  if repo="$(shared_folder_git_work_tree "$link")"; then
-    shared_folder_say "$link is inside the git work tree $repo — unless they are already ignored, add these two lines to $repo/.git/info/exclude (or .gitignore) so the link and its views are never committed:"
-    printf '/%s\n/%s.views/\n' "${link#"${repo%/}"/}" "${link#"${repo%/}"/}" >&2
+  # with your user name in it) and the views (copies of the client's files): keep both out of git.
+  shared_folder_exclude "$link" || return 1
+  if shared_folder_git_would_commit "$link"; then
+    shared_folder_say "git would still commit $link or its views — it is already committed, or a .gitignore line un-ignores it; take it out with git rm --cached before you push"
+  fi
+  if policy="$(shared_folder_policy_blocks)"; then
+    shared_folder_say "your company's OneDrive policy ($policy) stops OneDrive keeping a client's folder current, so $rel may look present and be out of date; ask IT"
   fi
   return 0
 }
@@ -614,17 +837,29 @@ shared_folder_remove() {
   if shared_folder_views_ours "$link.views"; then
     rm -rf -- "$link.views" && printf 'removed views %s.views\n' "$link"
   fi
+  shared_folder_unexclude "$record_key" || return 1
+  [ "$record_key" = "$link" ] || shared_folder_unexclude "$link" || return 1
   shared_folder_record_write "$record_key" "" || return 1
   return 0
 }
 
 shared_folder_check_one() {
-  local link="$1" rel="$2"
+  local link="$1" rel="$2" policy
   shared_folder_link_state "$link" "$rel"
   # Only a views folder this tool made is judged; anything else at <link>.views is not ours to count.
   if [ "$state" = OK ] && [ -d "$state_target" ] && shared_folder_views_ours "$link.views"; then
     shared_folder_views_pass "$state_target" "$link.views" "$link" count
     if [ "$views_stale" -gt 0 ]; then state="STALE-VIEWS $views_stale"; state_detail="shared-folder refresh $link"; fi
+  fi
+  # Stale views first: the installer refreshes on that word, and the two below are only honest about
+  # a link that is otherwise sound.
+  if [ "$state" = OK ] && shared_folder_git_would_commit "$link"; then
+    state="NOT-EXCLUDED"
+    state_detail="git in $(shared_folder_git_work_tree "$link") would commit the link or its views; shared-folder relink adds the exclude lines, and a link already committed needs git rm --cached"
+  fi
+  if [ "$state" = OK ] && policy="$(shared_folder_policy_blocks)"; then
+    state="BLOCKED-BY-POLICY $policy"
+    state_detail="your company's OneDrive policy stops OneDrive keeping a client's folder current, so this one may look present and be out of date; ask IT"
   fi
   printf '%s\t%s\t%s\n' "$state" "$link" "$state_detail"
   [ "$state" = OK ]
@@ -633,6 +868,9 @@ shared_folder_check_one() {
 shared_folder_relink_one() {
   local link="$1" rel="$2" physical
   shared_folder_link_state "$link" "$rel"
+  # A link of ours in a git work tree gets its exclude lines back (to stderr: relink's stdout is one
+  # line per link). A real folder at the link path is somebody's own, and stays visible to git.
+  [ "$state" = NOT-A-LINK ] || shared_folder_exclude "$link" >&2
   case "$state" in
     OK) printf 'OK\t%s\n' "$link"; return 0 ;;
     MOVED)
@@ -665,6 +903,11 @@ shared_folder_refresh_one() {
     physical="$(shared_folder_physical_parent "$link.views")" || return 1
   fi
   if shared_folder_inside_sync "$physical"; then printf 'REFUSED\t%s.views\tinside a synced cloud folder\n' "$link"; return 1; fi
+  # Views are copies of a client's files: never written where git would commit them.
+  shared_folder_exclude "$link" >&2
+  if shared_folder_git_would_commit "$link" views; then
+    printf 'REFUSED\t%s.views\tgit in %s would commit it (a .gitignore line un-ignores it, or it is already committed); no view was written\n' "$link" "$(shared_folder_git_work_tree "$link")"; return 1
+  fi
   shared_folder_views_pass "$state_target" "$link.views" "$link" refresh || return 1
   printf 'REFRESHED\t%s.views\t%s views (%s converted, %s dataless, %s no-converter, %s failed); %s written, %s removed\n' \
     "$link" "$views_total" "$count_converted" "$count_dataless" "$count_no_converter" "$count_failed" "$views_written" "$views_removed"
@@ -712,7 +955,10 @@ shared_folder_selftest() {
   printf 'shared-folder selftest · bash %s · %s\n' "${BASH_VERSION:-?}" "$(sw_vers -productVersion 2>/dev/null)"
   # Everything the CLI touches is redirected into the temp dir, whatever the caller's environment says.
   cloud="$work/cloud"; home="$work/home"
-  export SHARED_FOLDERS_CLOUD_DIR="$cloud" BOOTSTRAP_STATE_DIR="$work/state" SHARED_FOLDERS_COMPUTER_NAME="Test Mac"
+  # BOOTSTRAP_MANAGED_ROOT too: on a Mac whose OneDrive IT manages, the real policy would otherwise turn
+  # every healthy fixture below into BLOCKED-BY-POLICY.
+  export SHARED_FOLDERS_CLOUD_DIR="$cloud" BOOTSTRAP_STATE_DIR="$work/state" SHARED_FOLDERS_COMPUTER_NAME="Test Mac" \
+         BOOTSTRAP_MANAGED_ROOT="$work/managed"
   export MARKDOWN_CONVERT_TOOL_DIRS="" PATH="/usr/bin:/bin:/usr/sbin:/sbin"
   unset DATALESS_STAT_COMMAND SHARED_FOLDERS_CONVERTER
   mkdir -p "$home" "$cloud/OneDrive-Old/Clients/Acme/a/b/c/d/e/f" "$cloud/OneDrive-Old/Clients/Acme/.hidden" "$cloud/OneDrive-Old/Clients/Gone"
@@ -987,14 +1233,85 @@ STUB
   ln -s /nonexistent/elsewhere "$home/mine-link"
   /bin/bash "$self" remove "$home/mine-link" > /dev/null 2>&1; rc=$?
   shared_folder_is "remove of a symlink this tool never recorded: rc 2, the symlink stays" "$rc $([ -L "$home/mine-link" ] && echo kept)" "2 kept"
-  # a link inside a git work tree: the two exclude lines are printed, and only there
-  mkdir -p "$home/repo/.git"
-  out="$(/bin/bash "$self" add "$home/repo/sub/docs" "Clients/Acme" 2>&1 >/dev/null)"
-  shared_folder_is "a link inside a git work tree: stderr names both lines for .git/info/exclude" \
-    "$(printf '%s\n' "$out" | /usr/bin/awk '$0 == "/sub/docs" || $0 == "/sub/docs.views/" { n++ } END { print n + 0 }')" "2"
-  out="$(/bin/bash "$self" add "$home/guard" "Clients/Acme" 2>&1 >/dev/null)"
-  shared_folder_is "negative control — a link outside any work tree prints no exclude lines" "$out" ""
-  for rel in guard own evil repo/sub/docs; do /bin/bash "$self" remove "$home/$rel" > /dev/null 2>&1; done
+  # ── a link inside a git work tree: two exclude lines in the clone's own exclude file, never a .gitignore ──
+  # The .git here has no info/ at all (as `git init` makes it under a template without one), so the
+  # file and its folder are created — and remove must take both away again. No git is needed for any of it.
+  mkdir -p "$home/repo/.git" "$home/repo/sub"; printf 'keep\n' > "$home/repo/.gitignore"
+  before="$(shared_folder_tree_print "$home/repo")"
+  /bin/bash "$self" add "$home/repo/sub/docs" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "a link in a work tree: rc 0, and the exclude file holds exactly its two lines" \
+    "$rc|$(tr '\n' '|' < "$home/repo/.git/info/exclude")" "0|/sub/docs|/sub/docs.views/|"
+  shared_folder_is "…and the tracked .gitignore is untouched" "$(cat "$home/repo/.gitignore")" "keep"
+  after="$(shared_folder_tree_print "$home/repo/.git")"
+  /bin/bash "$self" add "$home/repo/sub/docs" "Clients/Acme" > /dev/null 2>&1
+  shared_folder_is "a second add writes no line (the exclude file is byte-identical)" "$(shared_folder_tree_print "$home/repo/.git")" "$after"
+  /bin/bash "$self" add "$home/repo/sub/two" "Clients/Acme" > /dev/null 2>&1
+  /bin/bash "$self" remove "$home/repo/sub/docs" > /dev/null 2>&1
+  shared_folder_is "remove takes out only that link's lines; another link's stay" \
+    "$(tr '\n' '|' < "$home/repo/.git/info/exclude")" "/sub/two|/sub/two.views/|"
+  /bin/bash "$self" remove "$home/repo/sub/two" > /dev/null 2>&1
+  shared_folder_is "removing the last link leaves the repo exactly as it was (no info/, no exclude file)" "$(shared_folder_tree_print "$home/repo")" "$before"
+  # a line the person had already written is theirs: add writes none, and remove leaves it
+  mkdir -p "$home/repo/.git/info"; printf '# theirs\n/sub/docs\n/sub/docs.views/\n' > "$home/repo/.git/info/exclude"
+  before="$(shared_folder_tree_print "$home/repo/.git")"
+  /bin/bash "$self" add "$home/repo/sub/docs" "Clients/Acme" > /dev/null 2>&1
+  /bin/bash "$self" remove "$home/repo/sub/docs" > /dev/null 2>&1
+  shared_folder_is "negative control — lines the person already had are neither duplicated nor removed" "$(shared_folder_tree_print "$home/repo/.git")" "$before"
+  # a linked worktree: its .git is a file, and the exclude file is the MAIN clone's (info/ is shared)
+  mkdir -p "$home/main/.git/worktrees/wt/" "$home/main/.git/info" "$home/wt"
+  printf 'gitdir: %s\n' "$home/main/.git/worktrees/wt" > "$home/wt/.git"; printf '../..\n' > "$home/main/.git/worktrees/wt/commondir"
+  : > "$home/main/.git/info/exclude"
+  /bin/bash "$self" add "$home/wt/docs" "Clients/Acme" > /dev/null 2>&1
+  shared_folder_is "a link in a linked worktree: the lines land in the main clone's info/exclude" \
+    "$(tr '\n' '|' < "$home/main/.git/info/exclude")$([ -e "$home/main/.git/worktrees/wt/info/exclude" ] && echo ' and in the worktree dir')" "/docs|/docs.views/|"
+  /bin/bash "$self" remove "$home/wt/docs" > /dev/null 2>&1
+  shared_folder_is "…and remove empties it again, leaving the file that was there" "$( [ -f "$home/main/.git/info/exclude" ] && wc -c < "$home/main/.git/info/exclude" | tr -d ' ')" "0"
+  out="$(/bin/bash "$self" add "$home/guard" "Clients/Acme" 2>&1)"
+  shared_folder_is "negative control — a link outside any work tree mentions no exclude file" "$(printf '%s\n' "$out" | /usr/bin/awk '/exclude/ { n++ } END { print n + 0 }')" "0"
+
+  # ── your company's OneDrive policy: a folder it stops syncing is never reported OK ──────────────
+  /bin/bash "$self" add "$home/policy" "Clients/Acme" > /dev/null 2>&1        # a link with no views: check stays cheap
+  out="$(/bin/bash "$self" check "$home/policy")"; rc=$?
+  shared_folder_is "with no managed OneDrive preferences at all: OK, rc 0" "$(printf '%s\n' "$out" | cut -f1) $rc" "OK 0"
+  mkdir -p "$work/managed/Library/Managed Preferences"
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>BlockExternalSync</key><true/></dict></plist>\n' \
+    > "$work/managed/Library/Managed Preferences/com.microsoft.OneDrive.plist"
+  out="$(/bin/bash "$self" check "$home/policy")"; rc=$?
+  shared_folder_is "BlockExternalSync set by a profile: check says BLOCKED-BY-POLICY, rc 1" "$(printf '%s\n' "$out" | cut -f1) $rc" "BLOCKED-BY-POLICY BlockExternalSync 1"
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>BlockExternalSync</key><false/><key>AllowTenantList</key><array><dict><key>TenantId1</key><string>00000000-0000-0000-0000-000000000001</string></dict></array></dict></plist>\n' \
+    > "$work/managed/Library/Managed Preferences/com.microsoft.OneDrive.plist"
+  out="$(/bin/bash "$self" check "$home/policy")"; rc=$?
+  shared_folder_is "an AllowTenantList with one tenant: BLOCKED-BY-POLICY, rc 1" "$(printf '%s\n' "$out" | cut -f1) $rc" "BLOCKED-BY-POLICY AllowTenantList 1"
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>BlockExternalSync</key><false/><key>AllowTenantList</key><array/></dict></plist>\n' \
+    > "$work/managed/Library/Managed Preferences/com.microsoft.OneDrive.plist"
+  out="$(/bin/bash "$self" check "$home/policy")"; rc=$?
+  shared_folder_is "negative control — BlockExternalSync false and an empty AllowTenantList: OK, rc 0" "$(printf '%s\n' "$out" | cut -f1) $rc" "OK 0"
+  rm -rf "$work/managed/Library"
+
+  # ── every sync client's root is refused, not only OneDrive's: HOME is a fixture here. One of each
+  #    KIND of root (a File Provider one outside the seam, a pre-File-Provider one, one a client's own
+  #    config moved, one Finder's iCloud setting adds); scripts/checks/shared-folders.sh runs them all. ──
+  mkdir -p "$work/fakehome/.dropbox" "$work/fakehome/Library/Preferences" "$work/moved-dropbox" "$work/fakehome/plain"
+  printf '{"personal": {"path": "%s"}}\n' "$work/moved-dropbox" > "$work/fakehome/.dropbox/info.json"
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>FXICloudDriveDocuments</key><true/><key>FXICloudDriveDesktop</key><false/></dict></plist>\n' \
+    > "$work/fakehome/Library/Preferences/com.apple.finder.plist"
+  out=""
+  for rel in "Library/CloudStorage/GoogleDrive-a@b.example" "Dropbox (Acme Team)" "Documents"; do
+    mkdir -p "$work/fakehome/$rel"
+    HOME="$work/fakehome" /bin/bash "$self" add "$work/fakehome/$rel/link" "Clients/Acme" > /dev/null 2>&1; rc=$?
+    [ "$rc" = 23 ] && [ ! -L "$work/fakehome/$rel/link" ] || out="$out [$rel: rc $rc]"
+  done
+  HOME="$work/fakehome" /bin/bash "$self" add "$work/moved-dropbox/link" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  [ "$rc" = 23 ] || out="$out [Dropbox moved by its info.json: rc $rc]"
+  shared_folder_is "a link under CloudStorage past the seam, a team Dropbox, a moved Dropbox, iCloud's Documents: rc 23" "$out" ""
+  mkdir -p "$work/fakehome/Desktop"
+  HOME="$work/fakehome" /bin/bash "$self" add "$work/fakehome/Desktop/link" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "negative control — Desktop, which Finder says iCloud does NOT keep: rc 0" "$rc" "0"
+  HOME="$work/fakehome" /bin/bash "$self" add "$work/fakehome/plain/link" "Clients/Acme" > /dev/null 2>&1; rc=$?
+  shared_folder_is "negative control — a plain folder in the same HOME: rc 0" "$rc" "0"
+  for rel in "$work/fakehome/Desktop/link" "$work/fakehome/plain/link"; do /bin/bash "$self" remove "$rel" > /dev/null 2>&1; done
+
+  for rel in guard own evil policy; do /bin/bash "$self" remove "$home/$rel" > /dev/null 2>&1; done
   shared_folder_is "the cloud kept every file it had (plan.md, the sibling README)" \
     "$(cat "$cloud/OneDrive-New/Clients/Other/plan.md" "$cloud/OneDrive-New/Clients/README.md")" "# plan
 # SIBLING, not shared with the link"
@@ -1017,7 +1334,7 @@ case "${1:-}" in
   list)       shared_folder_list; exit $? ;;
   --version)  printf '%s\n' "$SHARED_FOLDER_VERSION"; exit 0 ;;
   --selftest) shared_folder_selftest; exit $? ;;
-  -h|--help)  sed -n '2,36p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  "")         sed -n '2,36p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  -h|--help)  shared_folder_usage; exit 0 ;;
+  "")         shared_folder_usage >&2; exit 2 ;;
   *)          shared_folder_say "unknown command: $1 (try --help)"; exit 2 ;;
 esac
