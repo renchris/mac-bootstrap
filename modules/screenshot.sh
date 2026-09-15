@@ -432,8 +432,14 @@ egress_screenshot() {
 # hs.autoLaunch() (MJPreferencesWindowController.m:175, MJLua.m:76), and neither this module nor the
 # vendored init.lua calls either — so the background line says "left running", not "at login".
 clearance_screenshot() {
+  # The route install_ takes (:662): Homebrew's cask only for an administrator who has Homebrew. A
+  # standard user's line must not name a route they cannot take (terminal-plan-offers-no-homebrew).
+  if bootstrap_is_admin && screenshot_brew >/dev/null 2>&1; then
+    printf '%s\n' 'software Hammerspoon from Homebrew'"'"'s cask into /Applications (Developer ID team VQCYSNZB89) — not distributed by IT'
+  else
+    printf '%s\n' 'software Hammerspoon 1.1.1 (Developer ID team VQCYSNZB89) from its GitHub release into ~/Applications — not distributed by IT'
+  fi
   printf '%s\n' \
-    'software Hammerspoon 1.1.1 (Developer ID team VQCYSNZB89) from its GitHub release into ~/Applications, or Homebrew'"'"'s cask for an administrator who already has Homebrew — not distributed by IT' \
     'background Hammerspoon is left running with a local command port open (hs.ipc, which init.lua installs); it is not added to your login items' \
     'permission Accessibility for Hammerspoon — and because init.lua opens hs.ipc, any program you run can send Hammerspoon code and so borrow that grant to press keys and read other apps'"'"' windows' \
     'permission a system-wide keyboard hook (an hs.eventtap on every key press) that sees every keystroke you type, so it can turn Cmd+V into Ctrl+V when an image is on the clipboard'
