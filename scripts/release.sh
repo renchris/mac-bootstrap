@@ -134,7 +134,9 @@ release_verify() {
 
   for rel in $(release_payload "$pin"); do
     n=$((n + 1))
-    if ! release_fetch "$pin" "$rel" "$tmp/blob"; then
+    # One retry after a pause: a path pushed seconds ago can answer 404 from the raw host once
+    # (measured on the 2026-09-15 cut, 200 on the next request), and curl --retry never retries a 404.
+    if ! release_fetch "$pin" "$rel" "$tmp/blob" && { sleep 5; ! release_fetch "$pin" "$rel" "$tmp/blob"; }; then
       release_fail "  MISSING  $rel"; bad=$((bad + 1)); continue
     fi
     got="$(release_sha_file "$tmp/blob")"
@@ -162,6 +164,8 @@ release_verify() {
       esac
     done
     [ "$prompt_bad" = 0 ] && release_say "  hop 3: the prompt's looking commands (--list, --plan, --egress, --advise-model) all answer"
+  elif [ "$bad" != 0 ]; then
+    release_say "  hop 3: skipped — hop 2 is incomplete, so the published script could not assemble its tree"
   else
     release_say "  hop 3: skipped — the driver runs only on macOS"
   fi
