@@ -680,6 +680,23 @@ microsoft365_archive_label_taken() {
 
 microsoft365_archive_home_ok() { bootstrap_defaults_home_ok >/dev/null 2>&1; }
 
+# ── Background Items ─────────────────────────────────────────────────────────────────────────
+# macOS 13+ lets a person — or MDM — switch a LaunchAgent off in System Settings › Login Items
+# ("Allow in the Background"). launchd then refuses to load it, and without this check install_'s
+# `launchctl bootstrap` failed and the row read FAILED for a switch only the person can turn back on.
+# The read is launchd's own table of disabled labels, which needs no admin; `sfltool dumpbtm` shows
+# more but waits on an authorization prompt (measured: stalled over 120 s), so a verb never calls it.
+# microsoft365_archive_disabled_in <print-disabled output> — rc 0 iff our label is listed disabled.
+# Lines read `\t\t"<label>" => disabled` (measured, macOS 15.7).
+microsoft365_archive_disabled_in() {
+  printf '%s\n' "$1" | awk -v l="\"$MICROSOFT365_ARCHIVE_LABEL\"" '$1 == l && $2 == "=>" && $3 == "disabled" { f = 1 } END { exit f ? 0 : 1 }'
+}
+microsoft365_archive_background_off() {
+  local out
+  out="$(/bin/launchctl print-disabled "$(microsoft365_archive_domain)" 2>/dev/null)" || return 1
+  microsoft365_archive_disabled_in "$out"
+}
+
 # ── the read-backs ───────────────────────────────────────────────────────────────────────────
 # microsoft365_archive_files_ok — every engine file and the converter present, and byte-identical to
 # the verified release tree whenever the driver provides one.
@@ -784,6 +801,7 @@ microsoft365_archive_gate_reason() {
   microsoft365_archive_signed_in "$account" "$list" || { printf 'account-signed-out'; return 0; }
   microsoft365_archive_home_ok || { printf 'foreign-home'; return 0; }
   microsoft365_archive_label_taken && { printf 'label-taken'; return 0; }
+  microsoft365_archive_background_off && { printf 'background-off'; return 0; }
   return 0
 }
 
@@ -885,6 +903,7 @@ microsoft365_archive_note_text() {
     foreign-home)  printf 'everything is installed, but this run has a sandboxed HOME ($HOME is not your real home) and launchctl ignores $HOME, so loading the hourly job would put it in your REAL launchd domain; nothing was loaded.' ;;
     label-taken)   printf 'launchd already runs a job named %s from another plist (%s), and replacing it is your call, not mine.' \
                      "$MICROSOFT365_ARCHIVE_LABEL" "$(microsoft365_archive_short_path "$(microsoft365_archive_loaded_path)")" ;;
+    background-off) printf 'macOS has the hourly archive job (%s) switched off in System Settings › General › Login Items, so launchd will not run it; turn on "Allow in the Background" for it, then run this again. If the switch is greyed out, your organization manages it: ask IT.' "$MICROSOFT365_ARCHIVE_LABEL" ;;
     *)             printf 'the meeting archive engine, its wrapper, its hourly LaunchAgent and the archive folder are not all in place yet.' ;;
   esac
 }
@@ -912,6 +931,7 @@ gesture_microsoft365_archive() {
     account-many)  : ;;   # the choice IS the step: a command with one account filled in would make it for you
     foreign-home)  microsoft365_archive_rerun microsoft365_archive ;;       # from your own account, with no HOME override
     label-taken)   printf 'launchctl bootout %s/%s' "$(microsoft365_archive_domain)" "$MICROSOFT365_ARCHIVE_LABEL" ;;
+    background-off) printf 'open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"' ;;
     *)             : ;;
   esac
 }
@@ -1011,6 +1031,7 @@ EOF
   microsoft365_archive_signed_in "$account" "$list" || return 3
   microsoft365_archive_home_ok || return 3
   microsoft365_archive_label_taken && return 3
+  microsoft365_archive_background_off && return 3
 
   # ── launchd: re-load when what it holds is not THIS plist, load when it is not loaded ─────────
   # "What it holds" is the sha256 recorded after the last successful load — not whether this run

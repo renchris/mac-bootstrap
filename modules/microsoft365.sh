@@ -462,14 +462,229 @@ microsoft365_install_guard() {
   return 0
 }
 
+# ── IT policy, per agent ──────────────────────────────────────────────────────────────────────
+# Everything above reads back the files THIS module wrote; the agent reads a managed policy that
+# outranks them. Two outcomes matter, and they are not the same (managed-policy.md §0):
+#   HOOKS LOCKED (allowManagedHooksOnly, disableAllHooks, strictPluginOnlyCustomization naming hooks —
+#     or disableAllHooks in the person's own settings): the mail guard would never run there, so the
+#     server is NOT registered on that agent at all, and a registration an earlier run made is taken
+#     back. Registering it would hand an injected prompt send-mail with nothing in the way.
+#   MCP NOT ADMITTED (managed-mcp.json, allowManagedMcpServersOnly, an allowedMcpServers that does not
+#     name it, a deniedMcpServers that does, strictPluginOnlyCustomization naming mcp; for Copilot also
+#     "MCP servers in Copilot" off for the seat): the agent will not start the server. Registering it
+#     is harmless — the guard is wired — and it works the day IT admits it.
+# Either way that agent's half is not delivered, so the row is NEEDS_HUMAN, "ask IT", and never
+# SATISFIED; the other agent's half is installed as usual. Both are gates found AFTER the reversible
+# work, like the sign-in — a gate before install_ would make the driver skip the other agent's half —
+# unless neither agent can take the server, when there is nothing worth installing.
+MICROSOFT365_AGENTS="claude copilot"
+MICROSOFT365_SOFTERIA_APP="084a3e9f-a9f4-43f7-89f9-d229cf97853e"   # the server's default app (read from its dist/)
+microsoft365_agent_name()   { case "$1" in claude) printf 'Claude Code' ;; *) printf 'Copilot CLI' ;; esac; }
+microsoft365_agent_config() { case "$1" in claude) microsoft365_claude_config ;; *) microsoft365_copilot_config ;; esac; }
+microsoft365_agent_type()   { case "$1" in claude) printf 'stdio' ;; *) printf 'local' ;; esac; }
+microsoft365_agent_user_settings() { case "$1" in claude) printf '%s' "$HOME/.claude/settings.json" ;; *) printf '%s' "$HOME/.copilot/settings.json" ;; esac; }
+
+# microsoft365_policy_source <agent> <key> — the first managed source carrying <key>, as a short path.
+microsoft365_policy_source() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    /usr/bin/plutil -extract "$2" raw -o - -- "$f" >/dev/null 2>&1 && { microsoft365_short_path "$f"; return 0; }
+    /usr/bin/plutil -type "$2" -- "$f" >/dev/null 2>&1 && { microsoft365_short_path "$f"; return 0; }
+  done <<EOF
+$(bootstrap_managed_sources "$1")
+EOF
+  return 1
+}
+# microsoft365_policy_text <agent> <key> — the policy's value as flat text: backslashes dropped, since
+# plutil escapes "/" and Copilot's MDM keys hold JSON inside a string.
+microsoft365_policy_text() { bootstrap_policy "$1" "$2" json 2>/dev/null | LC_ALL=C tr -d '\\\n'; }
+microsoft365_names_ms365() { printf '%s' "$1" | LC_ALL=C grep -Eq "(^|[^A-Za-z0-9_-])$MICROSOFT365_SERVER_KEY([^A-Za-z0-9_-]|\$)"; }
+
+# microsoft365_hooks_lock <agent> — prints what locks that agent's hooks, rc 0; rc 1 when nothing does.
+microsoft365_hooks_lock() {
+  local a="$1" k src f
+  if bootstrap_policy_restricts "$a" hooks; then
+    for k in allowManagedHooksOnly disableAllHooks; do
+      [ "$(bootstrap_policy "$a" "$k" 2>/dev/null)" = true ] || continue
+      src="$(microsoft365_policy_source "$a" "$k")" && { printf '%s in %s' "$k" "$src"; return 0; }
+    done
+    src="$(microsoft365_policy_source "$a" strictPluginOnlyCustomization)" \
+      && { printf 'strictPluginOnlyCustomization in %s' "$src"; return 0; }
+    printf 'a managed policy'; return 0
+  fi
+  f="$(microsoft365_agent_user_settings "$a")"
+  [ "$(bootstrap_settings_get "$f" disableAllHooks raw 2>/dev/null)" = true ] \
+    && { printf 'disableAllHooks in %s' "$(microsoft365_short_path "$f")"; return 0; }
+  return 1
+}
+microsoft365_withheld() { microsoft365_hooks_lock "$1" >/dev/null 2>&1; }
+
+# microsoft365_bounded <ms> <program> <args…> — its stdout, and its rc (124 on timeout). macOS has no
+# timeout(1); node carries the ceiling, and node is on every path that gets this far.
+MICROSOFT365_BOUNDED_JS='
+const a = process.argv.slice(1);
+const r = require("child_process").spawnSync(a[1], a.slice(2), {timeout: Number(a[0]), stdio: ["ignore", "pipe", "pipe"], encoding: "utf8"});
+process.stdout.write(String(r.stdout || "") + String(r.stderr || ""));
+process.exit(r.status === null ? 124 : r.status);
+'
+microsoft365_bounded() { local node; node="$(microsoft365_node)" || return 1; "$node" -e "$MICROSOFT365_BOUNDED_JS" "$@"; }
+
+# microsoft365_claude_refuses — rc 0 iff Claude Code itself, asked, does not load the ms365 server this
+# module registered: `claude mcp get ms365` exits 1 with `No MCP server named "ms365"` when a policy
+# blocks it (measured: a deniedMcpServers entry), and 0 with the server's details when it loads. It
+# reads every source Claude Code does, the server-managed cache and IT's policyHelper included, which
+# the file reads above cannot. Skipped: before our registration exists (there is nothing to ask
+# about), without the CLI, and under BOOTSTRAP_MANAGED_ROOT, where the CLI reads the real policy files
+# while this module reads the fixture. CLAUDE_CONFIG_DIR is dropped so it reads the file we wrote.
+microsoft365_claude_refuses() {
+  local cl out rc
+  [ -z "${BOOTSTRAP_MANAGED_ROOT:-}" ] || return 1
+  [ "$(bootstrap_settings_get "$(microsoft365_claude_config)" "mcpServers.$MICROSOFT365_SERVER_KEY.args.0" raw 2>/dev/null)" = "$(microsoft365_entry)" ] || return 1
+  cl="$(bootstrap_find_tool claude)" || return 1
+  out="$(microsoft365_bounded 30000 /usr/bin/env -u CLAUDE_CONFIG_DIR DISABLE_AUTOUPDATER=1 \
+         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$cl" mcp get "$MICROSOFT365_SERVER_KEY" 2>/dev/null)"; rc=$?
+  [ "$rc" = 1 ] || return 1
+  case "$out" in *"No MCP server named"*) return 0 ;; esac
+  return 1
+}
+
+# microsoft365_admitted <allowlist-text> — rc 0 iff the allowlist admits OUR server. Once it holds any
+# serverCommand entry a stdio server must match one exactly, so then both our node and our entry must
+# appear; otherwise an entry naming ms365 admits it. Anything this cannot prove is not admission.
+microsoft365_admitted() {
+  local node
+  case "$1" in
+    *serverCommand*)
+      node="$(microsoft365_node 2>/dev/null)" || return 1
+      case "$1" in *"$(microsoft365_entry)"*) : ;; *) return 1 ;; esac
+      case "$1" in *"$node"*) return 0 ;; esac
+      return 1 ;;
+  esac
+  microsoft365_names_ms365 "$1"
+}
+
+# microsoft365_mcp_block <agent> — prints why that agent will not start the ms365 server, rc 0; rc 1
+# when nothing stops it.
+microsoft365_mcp_block() {
+  local a="$1" v f
+  if [ "$a" = claude ] && [ -e "${BOOTSTRAP_MANAGED_ROOT:-}/Library/Application Support/ClaudeCode/managed-mcp.json" ]; then
+    printf 'managed-mcp.json in %s, where IT lists every server' "$(microsoft365_short_path "${BOOTSTRAP_MANAGED_ROOT:-}/Library/Application Support/ClaudeCode")"; return 0
+  fi
+  v="$(bootstrap_policy "$a" strictPluginOnlyCustomization json 2>/dev/null)" && case "$v" in true|*'"mcp"'*)
+    printf 'strictPluginOnlyCustomization in %s' "$(microsoft365_policy_source "$a" strictPluginOnlyCustomization)"; return 0 ;; esac
+  v="$(microsoft365_policy_text "$a" deniedMcpServers)"
+  if [ -n "$v" ] && { microsoft365_names_ms365 "$v" || case "$v" in *"$(microsoft365_entry)"*) true ;; *) false ;; esac; }; then
+    printf 'deniedMcpServers in %s names it' "$(microsoft365_policy_source "$a" deniedMcpServers)"; return 0
+  fi
+  # Only the managed allowlist counts under allowManagedMcpServersOnly — so with none, nothing is admitted.
+  v="$(microsoft365_policy_text "$a" allowedMcpServers)"
+  if [ -n "$v" ]; then
+    microsoft365_admitted "$v" || { printf 'allowedMcpServers in %s does not admit it' "$(microsoft365_policy_source "$a" allowedMcpServers)"; return 0; }
+  elif [ "$(bootstrap_policy "$a" allowManagedMcpServersOnly 2>/dev/null)" = true ]; then
+    printf 'allowManagedMcpServersOnly in %s, and no managed allowlist names it' "$(microsoft365_policy_source "$a" allowManagedMcpServersOnly)"; return 0
+  fi
+  if [ "$a" = copilot ]; then
+    # The org policy "MCP servers in Copilot" arrives with the signed-in seat, cached here after the
+    # first Copilot sign-in (a vendor verdict, not our write). Before that sign-in it cannot be known.
+    f="$HOME/Library/Caches/copilot/copilot-user-cache.json"
+    if [ -r "$f" ] && LC_ALL=C grep -Eq '"is_mcp_enabled"[[:space:]]*:[[:space:]]*false' "$f"; then
+      printf 'the "MCP servers in Copilot" policy for your Copilot seat is off'; return 0
+    fi
+  fi
+  if [ "$a" = claude ] && microsoft365_claude_refuses; then
+    printf 'claude mcp get says it has no ms365 server although %s registers one — a policy this Mac cannot read, such as one set in the Claude admin console' "$(microsoft365_short_path "$(microsoft365_claude_config)")"
+    return 0
+  fi
+  return 1
+}
+
+# microsoft365_usable_agents — the agents that can take the server (not withheld, not blocked).
+microsoft365_usable_agents() {
+  local a out=""
+  for a in $MICROSOFT365_AGENTS; do
+    microsoft365_withheld "$a" && continue
+    microsoft365_mcp_block "$a" >/dev/null 2>&1 && continue
+    out="$out $a"
+  done
+  printf '%s' "${out# }"
+}
+microsoft365_any_policy_block() {
+  local a
+  for a in $MICROSOFT365_AGENTS; do
+    microsoft365_withheld "$a" && return 0
+    microsoft365_mcp_block "$a" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+# microsoft365_policy_note — one sentence per blocked agent, joined, for note_ and what_.
+microsoft365_policy_note() {
+  local a why out="" s node
+  node="$(microsoft365_node 2>/dev/null)"; node="${node:-<node>}"
+  for a in $MICROSOFT365_AGENTS; do
+    s=""
+    if why="$(microsoft365_hooks_lock "$a")"; then
+      case "$why" in
+        "disableAllHooks in \$HOME/"*)
+          s="$(microsoft365_agent_name "$a") runs no hooks ($why), so the mail guard could not run there and the server is deliberately not registered with it; removing that setting is your call" ;;
+        *)
+          s="$(microsoft365_agent_name "$a")'s policy runs only hooks IT deploys ($why), so the mail guard could not run there and the server is deliberately not registered with it; ask IT to allow user hooks, or to deploy guard-mail-send.sh as a managed hook" ;;
+      esac
+    elif why="$(microsoft365_mcp_block "$a")"; then
+      s="$(microsoft365_agent_name "$a") will not start the ms365 server ($why); ask IT to admit it — serverCommand [\"$(microsoft365_short_path "$node")\",\"$(microsoft365_short_path "$(microsoft365_entry)")\"]"
+    fi
+    [ -n "$s" ] && out="${out:+$out. }$s"
+  done
+  printf '%s' "$out"
+}
+
+# microsoft365_signin_note — what signing in takes on THIS tenant. A work tenant's default consent
+# policy usually removes mail and calendar access from what a user may approve (managed-policy.md §6),
+# so "sign in and approve" is promised only where it can be true. When an account is already signed in
+# and failing, the AADSTS code Microsoft answered with names the fix.
+microsoft365_signin_note() {
+  local node="$1" tenant id code out
+  tenant="$(microsoft365_tenant)"; id="$(microsoft365_client_id)"
+  if microsoft365_account_in_tenant "$node" 2>/dev/null; then
+    out="$(microsoft365_run "$node" -e "$MICROSOFT365_LOGIN_JS" "$(microsoft365_entry)" 2>/dev/null)"
+    code="$(printf '%s' "$out" | LC_ALL=C grep -Eo 'AADSTS[0-9]+' | head -n 1)"
+    case "$code" in
+      AADSTS65001|AADSTS90094|AADSTS90095)
+        printf 'Microsoft refused the sign-in (%s): your tenant lets only an administrator approve this app'\''s mail and calendar access; ask IT to grant admin consent to app %s, or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID.' "$code" "${id:-$MICROSOFT365_SOFTERIA_APP}"; return 0 ;;
+      AADSTS53000|AADSTS53001)
+        printf 'Microsoft refused the sign-in (%s): your organization lets only compliant or managed devices sign in; ask IT to enrol this Mac (Company Portal), then sign in again.' "$code"; return 0 ;;
+      AADSTS53003)
+        printf 'Microsoft refused the sign-in (%s): a Conditional Access policy blocks it; if it is the code sign-in it blocks, sign in again with --auth-browser, otherwise ask IT which policy applies.' "$code"; return 0 ;;
+      AADSTS50105)
+        printf 'Microsoft refused the sign-in (%s): IT has not assigned you to this app; ask them to.' "$code"; return 0 ;;
+      '') : ;;
+      *) printf 'the signed-in Microsoft account no longer works (%s); sign in again.' "$code"; return 0 ;;
+    esac
+  fi
+  case "$tenant" in
+    consumers) printf 'the Microsoft 365 server is installed; sign in once with your personal Microsoft account and approve the app.' ;;
+    *)
+      if [ -n "$id" ]; then
+        printf 'the Microsoft 365 server is installed; sign in once with your work account (%s), through the app your IT registered (%s).' "$tenant" "$id"
+      else
+        printf 'the Microsoft 365 server is installed; sign in once with your work account (%s). Most work tenants let only an administrator approve this app'\''s mail and calendar access — if Microsoft answers AADSTS65001 or AADSTS90094, ask IT to grant admin consent to app %s (Softeria), or to register their own and give you its id for BOOTSTRAP_MICROSOFT_CLIENT_ID; AADSTS53000 means only compliant devices may sign in, and AADSTS53003 that Conditional Access blocks it (add --auth-browser if it is the code sign-in it blocks).' "$tenant" "$MICROSOFT365_SOFTERIA_APP"
+      fi ;;
+  esac
+}
+
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
 # what_ is the line --plan prints for a module it would install, so it says what THIS Mac would get.
 what_microsoft365() {
+  local pol
   printf '%s' 'Outlook mail, calendar, contacts and OneDrive for both agents, through a local MCP server that talks only to Microsoft; the agent drafts mail but never sends it on its own'
   microsoft365_node >/dev/null 2>&1 || microsoft365_node_blocked >/dev/null 2>&1 \
     || printf '. This Mac has no node %s or later, so it first fetches node %s from nodejs.org into %s (checked against its pinned sha256; no Homebrew, no admin)' \
          "$MICROSOFT365_NODE_FLOOR" "$MICROSOFT365_NODE_VERSION" "$(microsoft365_short_path "$(bootstrap_tools_dir)")"
+  pol="$(microsoft365_policy_note)"
+  [ -n "$pol" ] && printf '. %s' "$pol"
+  return 0
 }
 cost_microsoft365()    { printf '%s' "~85 MB, plus ~200 MB for node $MICROSOFT365_NODE_VERSION from nodejs.org when this Mac has no node $MICROSOFT365_NODE_FLOOR or later (no admin needed). One Microsoft sign-in in your browser; a work tenant usually needs IT to approve the app."; }
 profile_microsoft365() { printf '%s' 'standard'; }
@@ -498,10 +713,9 @@ verify_microsoft365() {
   # READ-BACK BY EXECUTION: the pinned version answers from the installed bytes.
   [ "$(microsoft365_run "$node" "$(microsoft365_entry)" --version 2>/dev/null)" = "$MICROSOFT365_SERVER_VERSION" ] || return 1
 
-  # Both registrations, read back through plutil — a different engine from the jq that usually wrote.
-  microsoft365_registered "$(microsoft365_claude_config)" stdio "$node" || return 1
-  microsoft365_registered "$(microsoft365_copilot_config)" local "$node" || return 1
-  [ "$(bootstrap_settings_get "$(microsoft365_copilot_config)" "mcpServers.$MICROSOFT365_SERVER_KEY.tools.0" raw 2>/dev/null)" = "*" ] || return 1
+  # Each agent as this module owes it, read back through plutil — a different engine from the jq that
+  # usually wrote: our registration, whole and current — or, where hooks are locked, none of ours.
+  microsoft365_agents_in_place "$node" || return 1
 
   # The send guard: installed, passing its own fixtures, wired for both events on both agents.
   microsoft365_guarded || return 1
@@ -514,7 +728,34 @@ verify_microsoft365() {
   out="$(microsoft365_probe "$node" tools/no-such-method)" && return 1
   [ -z "$out" ] || return 1
 
+  # An agent IT's policy keeps from the server — or from the guard — is a half not delivered.
+  microsoft365_any_policy_block && return 1
+
   microsoft365_signed_in "$node"
+}
+
+# microsoft365_ours_on <agent> — rc 0 iff that agent's config holds OUR registration (by entry path).
+microsoft365_ours_on() {
+  [ "$(bootstrap_settings_get "$(microsoft365_agent_config "$1")" "mcpServers.$MICROSOFT365_SERVER_KEY.args.0" raw 2>/dev/null)" = "$(microsoft365_entry)" ]
+}
+
+# microsoft365_agents_in_place <node> — every agent is as this module owes it: where hooks are locked,
+# NO registration of ours (the guard could not stop a send there); elsewhere ours, whole and current,
+# and Copilot's with the tools filter its own `copilot mcp add` writes.
+microsoft365_agents_in_place() {
+  local node="$1" a f
+  for a in $MICROSOFT365_AGENTS; do
+    f="$(microsoft365_agent_config "$a")"
+    if microsoft365_withheld "$a"; then
+      microsoft365_ours_on "$a" && return 1
+      continue
+    fi
+    microsoft365_registered "$f" "$(microsoft365_agent_type "$a")" "$node" || return 1
+    if [ "$a" = copilot ]; then
+      [ "$(bootstrap_settings_get "$f" "mcpServers.$MICROSOFT365_SERVER_KEY.tools.0" raw 2>/dev/null)" = "*" ] || return 1
+    fi
+  done
+  return 0
 }
 
 # microsoft365_gated_file — prints "<file>|<why>" for the first config file only a person can decide
@@ -541,15 +782,14 @@ microsoft365_gated_file() {
   return 1
 }
 
-# The two gates that exist only AFTER the reversible work: node missing, and not signed in. The
-# second must not fire on a bare machine — gate_ runs before install_, and a true gate there makes
-# the driver skip the install it was about to do (the handoff module measured exactly that).
+# The gates that exist only AFTER the reversible work — an agent IT's policy keeps from the server,
+# and not signed in — must not fire on a bare machine: gate_ runs before install_, and a true gate
+# there makes the driver skip the install it was about to do (the handoff module measured exactly that).
 microsoft365_ready_for_sign_in() {
   local node
   node="$(microsoft365_node)" || return 1
   microsoft365_installed || return 1
-  microsoft365_registered "$(microsoft365_claude_config)" stdio "$node" || return 1
-  microsoft365_registered "$(microsoft365_copilot_config)" local "$node" || return 1
+  microsoft365_agents_in_place "$node" || return 1
   microsoft365_guarded quick
 }
 
@@ -560,8 +800,11 @@ gate_microsoft365() {
   microsoft365_tls_load
   microsoft365_tls_untrusted && return 0
   microsoft365_node_blocked >/dev/null && return 0
+  # Neither agent can take the server: installing ~85 MB for no one is not worth doing.
+  [ -n "$(microsoft365_usable_agents)" ] || return 0
   microsoft365_node >/dev/null 2>&1 || return 1
   microsoft365_ready_for_sign_in || return 1
+  microsoft365_any_policy_block && return 0
   microsoft365_signed_in "$(microsoft365_node)" && return 1
   return 0
 }
@@ -580,7 +823,7 @@ microsoft365_rerun() {
 }
 
 note_microsoft365() {
-  local g f why
+  local g f why pol sig node
   microsoft365_tls_load
   if g="$(microsoft365_gated_file)"; then
     f="$(microsoft365_short_path "${g%%|*}")"; why="${g##*|}"
@@ -605,11 +848,23 @@ note_microsoft365() {
     esac
     return 0
   fi
-  if microsoft365_ready_for_sign_in; then
-    printf 'the Microsoft 365 server is installed for both agents; sign in once with your work account (%s) and approve the app.' "$(microsoft365_tenant)"
+  pol="$(microsoft365_policy_note)"
+  if [ -z "$(microsoft365_usable_agents)" ]; then
+    printf 'neither agent can take the Microsoft 365 server, so nothing was installed. %s.' "$pol"
     return 0
   fi
-  printf 'the Microsoft 365 server is not installed or not registered with both agents yet.'
+  if microsoft365_ready_for_sign_in; then
+    node="$(microsoft365_node)"
+    sig=""; microsoft365_signed_in "$node" || sig="$(microsoft365_signin_note "$node")"
+    if [ -n "$pol" ]; then
+      printf '%s.' "$pol"
+      [ -n "$sig" ] && printf ' Meanwhile, for %s: %s' "$(for a in $(microsoft365_usable_agents); do microsoft365_agent_name "$a"; printf ' '; done | sed 's/ $//; s/ Copilot/ and Copilot/')" "$sig"
+    else
+      printf '%s' "$sig"
+    fi
+    return 0
+  fi
+  printf 'the Microsoft 365 server is not installed or not registered with the agents yet.'
 }
 
 gesture_microsoft365() {
@@ -630,7 +885,15 @@ gesture_microsoft365() {
     return 0
   fi
   node="$(microsoft365_node)" || return 0
+  # The one policy line a person may change themselves: disableAllHooks in their own settings file.
+  for g in $MICROSOFT365_AGENTS; do
+    case "$(microsoft365_hooks_lock "$g")" in
+      "disableAllHooks in \$HOME/"*) printf 'open -e "%s"' "$(microsoft365_short_path "$(microsoft365_agent_user_settings "$g")")"; return 0 ;;
+    esac
+  done
+  [ -n "$(microsoft365_usable_agents)" ] || return 0      # IT's to change: no command exists
   microsoft365_ready_for_sign_in || return 0
+  microsoft365_signed_in "$node" && return 0             # only IT's steps remain
   id="$(microsoft365_client_id)"
   pre="MS365_MCP_TENANT_ID=$(microsoft365_tenant)"
   [ -n "$id" ] && pre="$pre MS365_MCP_CLIENT_ID=$id"
@@ -638,7 +901,7 @@ gesture_microsoft365() {
 }
 
 install_microsoft365() {
-  local node dir npm out ent rc envj ca
+  local node dir npm out ent rc envj ca a f why
   microsoft365_tls_load
   microsoft365_tls_untrusted && { bootstrap_warn "microsoft365: TLS to npm or Microsoft is intercepted by a certificate this Mac does not trust"; return 1; }
   if ! node="$(microsoft365_node)"; then
@@ -679,18 +942,32 @@ install_microsoft365() {
   microsoft365_install_guard || { bootstrap_warn "microsoft365: the mail guard is not in place — not registering the server"; return 1; }
 
   envj="$(microsoft365_env_json)"
-  ent="{\"type\":\"stdio\",\"command\":\"$(bootstrap_json_escape "$node")\",\"args\":[\"$(bootstrap_json_escape "$(microsoft365_entry)")\"],\"env\":$envj}"
-  bootstrap_settings_merge "$(microsoft365_claude_config)" "mcpServers.$MICROSOFT365_SERVER_KEY" "$ent"; rc=$?
-  [ "$rc" = 0 ] || { bootstrap_warn "microsoft365: could not register with Claude Code (rc $rc)"; return 1; }
+  for a in $MICROSOFT365_AGENTS; do
+    f="$(microsoft365_agent_config "$a")"
+    # Hooks locked: no guard can run there, so no server either — and one an earlier run registered
+    # comes out, or it would be a live send-mail with nothing in front of it.
+    if why="$(microsoft365_hooks_lock "$a")"; then
+      if microsoft365_ours_on "$a"; then
+        bootstrap_settings_remove "$f" "mcpServers.$MICROSOFT365_SERVER_KEY" \
+          || { bootstrap_warn "microsoft365: could not take the server back out of $f"; return 1; }
+      fi
+      bootstrap_warn "microsoft365: not registering with $(microsoft365_agent_name "$a"): its hooks are locked ($why), so the mail guard could not run there"
+      continue
+    fi
+    if [ "$a" = claude ]; then
+      ent="{\"type\":\"stdio\",\"command\":\"$(bootstrap_json_escape "$node")\",\"args\":[\"$(bootstrap_json_escape "$(microsoft365_entry)")\"],\"env\":$envj}"
+    else
+      mkdir -p "$(dirname "$f")" 2>/dev/null
+      # Copilot's own `copilot mcp add` writes this exact shape: type "local" and a tools filter.
+      ent="{\"type\":\"local\",\"command\":\"$(bootstrap_json_escape "$node")\",\"args\":[\"$(bootstrap_json_escape "$(microsoft365_entry)")\"],\"env\":$envj,\"tools\":[\"*\"]}"
+    fi
+    bootstrap_settings_merge "$f" "mcpServers.$MICROSOFT365_SERVER_KEY" "$ent"; rc=$?
+    [ "$rc" = 0 ] || { bootstrap_warn "microsoft365: could not register with $(microsoft365_agent_name "$a") (rc $rc)"; return 1; }
+  done
 
-  mkdir -p "$(dirname "$(microsoft365_copilot_config)")" 2>/dev/null
-  # Copilot's own `copilot mcp add` writes this exact shape: type "local" and a tools filter.
-  ent="{\"type\":\"local\",\"command\":\"$(bootstrap_json_escape "$node")\",\"args\":[\"$(bootstrap_json_escape "$(microsoft365_entry)")\"],\"env\":$envj,\"tools\":[\"*\"]}"
-  bootstrap_settings_merge "$(microsoft365_copilot_config)" "mcpServers.$MICROSOFT365_SERVER_KEY" "$ent"; rc=$?
-  [ "$rc" = 0 ] || { bootstrap_warn "microsoft365: could not register with Copilot (rc $rc)"; return 1; }
-
-  # Everything reversible is done. Not signed in is a gate the installer has now DISCOVERED, so
-  # return non-zero and let the driver re-ask gate_, which reports the sign-in as NEEDS_HUMAN.
+  # Everything reversible is done. An agent IT keeps from the server, and not signed in, are gates the
+  # installer has now DISCOVERED: return non-zero and the driver re-asks gate_, which reports them.
+  microsoft365_any_policy_block && return 3
   microsoft365_signed_in "$node" || return 3
   return 0
 }

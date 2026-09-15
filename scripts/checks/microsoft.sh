@@ -216,3 +216,30 @@ fi
 # A failure recorded by an EARLIER run is not a gate: this run tries the fetch again.
 ms_out="$(ms_run "$h" "$MS_NO_NODE; printf '1 not-fetched\n' > \"\$(microsoft365_node_marker)\"; gate_microsoft365 && printf gated || printf install")"
 same "microsoft-no-node-old-failure-retries" "$ms_out" install
+
+# IT policy — read from the agents' own policy files (fixtures under BOOTSTRAP_MANAGED_ROOT). The worst
+# case managed-policy research found: hooks locked while MCP stays allowed means the mail guard never
+# runs, so the server must not be registered on that agent at all. Each arm has a no-policy control.
+ms_policy() {                                   # ms_policy <root> <function> [args] — one module function
+  local root="$1"; shift
+  ( export HOME="$MS_POLICY_HOME" BOOTSTRAP_MANAGED_ROOT="$root" CLAUDE_CONFIG_DIR="$MS_POLICY_HOME/.claude"
+    . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh" >/dev/null 2>&1; . "$CHECK_ROOT/modules/microsoft365.sh" >/dev/null 2>&1
+    "$@" ) 2>/dev/null
+}
+MS_POLICY_HOME="$(fresh_home ms-policy)"
+MS_NONE="$CHECK_TMP/ms-policy-none"; mkdir -p "$MS_NONE"
+MS_HOOKS="$CHECK_TMP/ms-policy-hooks/Library/Application Support/ClaudeCode"; mkdir -p "$MS_HOOKS"
+printf '{"allowManagedHooksOnly": true}\n' > "$MS_HOOKS/managed-settings.json"
+MS_DENY="$CHECK_TMP/ms-policy-deny/Library/Application Support/ClaudeCode"; mkdir -p "$MS_DENY"
+printf '{"deniedMcpServers": [{"serverName": "ms365"}]}\n' > "$MS_DENY/managed-settings.json"
+
+same "ms365-policy-control-no-lock" "$(ms_policy "$MS_NONE" microsoft365_hooks_lock claude >/dev/null; echo $?)" 1
+case "$(ms_policy "$CHECK_TMP/ms-policy-hooks" microsoft365_hooks_lock claude)" in
+  *allowManagedHooksOnly*) pass "ms365-hooks-locked-is-named" ;; *) fail "ms365-hooks-locked-is-named" ;; esac
+same "ms365-hooks-locked-withholds-the-server" "$(ms_policy "$CHECK_TMP/ms-policy-hooks" microsoft365_withheld claude; echo $?)" 0
+same "ms365-hooks-locked-leaves-copilot-alone" "$(ms_policy "$CHECK_TMP/ms-policy-hooks" microsoft365_withheld copilot; echo $?)" 1
+same "ms365-policy-control-no-block" "$(ms_policy "$MS_NONE" microsoft365_mcp_block claude >/dev/null; echo $?)" 1
+case "$(ms_policy "$CHECK_TMP/ms-policy-deny" microsoft365_mcp_block claude)" in
+  *deniedMcpServers*) pass "ms365-denied-server-is-named" ;; *) fail "ms365-denied-server-is-named" ;; esac
+case "$(ms_policy "$CHECK_TMP/ms-policy-deny" microsoft365_policy_note)" in
+  *[Aa]sk\ IT*|*IT*) pass "ms365-policy-note-names-it" ;; *) fail "ms365-policy-note-names-it" ;; esac
