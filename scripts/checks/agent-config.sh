@@ -198,3 +198,32 @@ same "handoff-pass-env-of-carried-name-rc0" "$?" 0
 agent_config_ah -- \
   "AH_PASS_ENV=CLAUDE_CODE_SESSION_ID ah_write_launcher '$AGENT_CONFIG_AH/run' '$AGENT_CONFIG_AH/run/cfg' '$AGENT_CONFIG_AH/run' /bin/echo claude SID 0" >/dev/null 2>&1
 same "handoff-pass-env-still-refuses-session-marker" "$?" 2
+
+# 11. The route report names the GitHub host Copilot will use and Copilot's fully local route. Both
+#     are ok lines: a GitHub Enterprise host is Copilot's own vendor, so the exit code stays 0.
+mkdir -p "$AGENT_CONFIG/local-home"
+agent_config_local() {                          # agent_config_local <VAR=value…> → stdout; CHECK_RC
+  env -i HOME="$AGENT_CONFIG/local-home" PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR="$CHECK_WORK" "$@" \
+    /bin/bash "$CHECK_ROOT/assets/local-only-check.sh" --only agents 2>/dev/null
+}
+agent_config_local_has() {                      # agent_config_local_has <check> <output> <ERE>
+  if printf '%s\n' "$2" | grep -qE "$3"; then pass "$1"; else fail "$1" "no line matches [$3]: $(printf '%s' "$2" | tr '\n' '|')"; fi
+}
+out="$(agent_config_local GH_HOST=acme.ghe.com)"; rc=$?
+agent_config_local_has "route-report-names-ghe-host" "$out" '^    ok    environment GH_HOST — Copilot signs in to acme\.ghe\.com'
+same "route-report-ghe-host-is-not-a-finding" "$rc" 0
+out="$(agent_config_local GH_HOST=ghes.example.com COPILOT_GH_HOST=https://acme.ghe.com)"
+agent_config_local_has "route-report-copilot-gh-host-wins" "$out" '^    ok    environment COPILOT_GH_HOST — Copilot signs in to acme\.ghe\.com.*GH_HOST \(ghes\.example\.com\) is for gh'
+out="$(agent_config_local GH_HOST=https://someone:hunter2@acme.ghe.com)"
+case "$out" in *hunter2*|*someone*) fail "route-report-host-drops-userinfo" "userinfo reached the output" ;;
+               *) pass "route-report-host-drops-userinfo" ;; esac
+out="$(agent_config_local COPILOT_OFFLINE=true COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:11434/v1)"; rc=$?
+agent_config_local_has "route-report-names-offline-local-route" "$out" "^    ok    environment COPILOT_OFFLINE — Copilot's fully local route"
+same "route-report-offline-is-not-a-finding" "$rc" 0
+# CONTROL: offline with a provider off this Mac is not called fully local
+out="$(agent_config_local COPILOT_OFFLINE=true COPILOT_PROVIDER_BASE_URL=https://gateway.example.com/v1)"
+if printf '%s\n' "$out" | grep -q 'fully local'; then fail "route-report-remote-provider-not-fully-local" "$out"
+else agent_config_local_has "route-report-remote-provider-not-fully-local" "$out" '^    ok    environment COPILOT_OFFLINE — offline mode: .*gateway\.example\.com'; fi
+# NEGATIVE CONTROL: with neither exported, neither line appears
+out="$(agent_config_local)"
+same "route-report-neither-set-prints-neither" "$(printf '%s\n' "$out" | grep -cE 'GH_HOST|COPILOT_OFFLINE')" 0

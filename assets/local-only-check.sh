@@ -680,6 +680,51 @@ agent_route() {                                 # agent_route <source> <NAME> <v
   AGENT_FOUND=1
   emit warn "$1 $2" "routes $(agent_label "$(agent_var_owner "$2")") through $(printf '%s' "$4" | /usr/bin/tr '_' ' ') — a cloud AI endpoint that is your choice, not the agent's default"
 }
+# Copilot's offline mode and its GitHub host (`copilot help environment`): COPILOT_OFFLINE="true"
+# skips GitHub sign-in, telemetry, web tools, the GitHub MCP server and auto-update, and needs
+# COPILOT_PROVIDER_BASE_URL; COPILOT_GH_HOST overrides GH_HOST as the GitHub Copilot signs in to and
+# sends its requests to. Neither is a cloud-AI finding: a GitHub Enterprise host is Copilot's own
+# vendor on the company's tenant, so both are ok lines and never touch the exit code. A hostname
+# is not a secret, so it is printed (host only, through url_host, which drops any userinfo).
+# Only the environment is read: Copilot's config files document no host key.
+agent_copilot_offline() {                       # agent_copilot_offline <exported-names> → rc 0 iff offline is on
+  local v h
+  case "$1" in *" COPILOT_OFFLINE "*) : ;; *) return 1 ;; esac
+  v="${COPILOT_OFFLINE:-}"
+  case "$(lower "$v")" in ''|0|false|no|off) return 1 ;; esac
+  if [ "$v" != true ]; then
+    emit warn "environment COPILOT_OFFLINE" "set to $(clean "$v"), but Copilot documents only \"true\" — offline mode may be off"
+    return 1
+  fi
+  case "$1" in *" COPILOT_PROVIDER_BASE_URL "*) h="$(url_host "${COPILOT_PROVIDER_BASE_URL:-}")" ;; *) h="" ;; esac
+  if [ -z "$h" ]; then
+    emit warn "environment COPILOT_OFFLINE" "offline mode is on, but no COPILOT_PROVIDER_BASE_URL is exported — Copilot needs a local model provider and will not start a session"
+  elif is_loopback_host "$h"; then
+    emit ok "environment COPILOT_OFFLINE" "Copilot's fully local route: offline mode (no GitHub sign-in, telemetry, web tools or auto-update) and its model on this Mac ($(clean "$h"))"
+  else
+    emit ok "environment COPILOT_OFFLINE" "offline mode: no GitHub sign-in, telemetry, web tools or auto-update — its model is $(clean "$h"), judged on the COPILOT_PROVIDER_BASE_URL line"
+  fi
+  return 0
+}
+agent_copilot_host() {                          # agent_copilot_host <exported-names> <offline 0|1>
+  local nm="" h gh="" tail=""
+  case "$1" in *" COPILOT_GH_HOST "*) [ -n "${COPILOT_GH_HOST:-}" ] && nm=COPILOT_GH_HOST ;; esac
+  case "$1" in *" GH_HOST "*) [ -n "${GH_HOST:-}" ] && gh="$(url_host "$GH_HOST")" ;; esac
+  [ -n "$nm" ] || { [ -n "$gh" ] && nm=GH_HOST; }
+  [ -n "$nm" ] || return 0
+  h="$(url_host "${!nm}")"
+  if [ -z "$h" ]; then emit warn "environment $nm" "set, but no host could be read from it — Copilot may not sign in"; return 0; fi
+  if [ "$2" = 1 ]; then
+    emit ok "environment $nm" "names $(clean "$h"), unused while COPILOT_OFFLINE=true — offline mode skips GitHub sign-in"
+    return 0
+  fi
+  [ "$nm" = COPILOT_GH_HOST ] && [ -n "$gh" ] && [ "$gh" != "$h" ] && tail="; GH_HOST ($(clean "$gh")) is for gh, not Copilot"
+  case "$h" in
+    github.com) emit ok "environment $nm" "Copilot signs in to github.com, the default host, and sends its requests to GitHub$tail" ;;
+    *.ghe.com)  emit ok "environment $nm" "Copilot signs in to $(clean "$h") (GitHub Enterprise Cloud, data residency) and sends its requests to that tenant — its own vendor$tail" ;;
+    *)          emit ok "environment $nm" "Copilot signs in to $(clean "$h") (a GitHub Enterprise host) and sends its requests there — its own vendor$tail" ;;
+  esac
+}
 
 probe_agents() {
   local name value r nm where src
@@ -694,6 +739,9 @@ probe_agents() {
     case "$exported" in *" $nm "*) agent_route environment "$nm" "${!nm}" "$where" ;; esac
   done
   [ "$AGENT_FOUND" = 1 ] || emit ok "environment" "no AI provider override or cloud AI credential is exported"
+  local offline=0
+  agent_copilot_offline "$exported" && offline=1
+  agent_copilot_host "$exported" "$offline"
 
   # ── Claude Code settings.json `env` (reaches every MCP server and hook Claude starts) ──
   local dirs="$HOME/.claude" d f keys
