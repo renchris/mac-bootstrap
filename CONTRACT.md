@@ -1,6 +1,6 @@
 # The module contract
 
-This is the document you write a `modules/mN_name.sh` against. The rail — `bootstrap.sh`,
+This is the document you write a `modules/<name>.sh` against. The rail — `bootstrap.sh`,
 `verify.sh`, `assets/hooks/bootstrap-lib.sh` — is finished and will not change shape under you. Read
 §1, §2 and §8; the rest is reference.
 
@@ -24,9 +24,15 @@ That is not an implementation detail you may ignore:
   definitions and `readonly`-style constants. Anything expensive there is paid six times.
 
 The driver discovers modules in this order: `BOOTSTRAP_MODULES` (a space-separated list, used by
-tests) → `modules/*.sh` beside `bootstrap.sh` → the built-in manifest, fetched from the pinned
-raw URL. A module named in the manifest that cannot be resolved is recorded `SKIPPED`, which is
-a precondition error (exit 30), never a silent absence.
+tests) → `modules/*.sh` in the tree. The tree is the clone when `modules/` sits beside
+`bootstrap.sh`; a curl'd `bootstrap.sh` has nothing beside it, so it first assembles the release
+into `$BOOTSTRAP_STATE_DIR/release/<pin>/` and checks every file against the sha256 manifest
+`scripts/release.sh` stamps into it (§9). A module named in the manifest that cannot be resolved
+is recorded `SKIPPED`, which is a precondition error (exit 30), never a silent absence.
+
+**A module never fetches this repo's own files.** `$BOOTSTRAP_ASSETS` is always the verified
+tree's `assets/`; read from it (or from a copy the module installed earlier). A module's own
+download of our code would be the one byte the manifest never checked.
 
 Keypath segments in anything you pass to the library may not contain a `.` — the library splits
 on it.
@@ -120,13 +126,20 @@ are the contract.
 
 | Variable | Set by | Meaning |
 |---|---|---|
-| `BOOTSTRAP_MODE` | the driver | `install` · `verify` · `bench` · `uninstall` |
+| `BOOTSTRAP_MODE` | the driver | `install` · `verify` · `bench` · `uninstall` (the read-only modes `list`, `plan`, `manifest`, `egress` never reach a verb that changes anything) |
+| `BOOTSTRAP_ENTRY` | the driver | the entry script a hint may tell the person to re-run: the clone's `bootstrap.sh`, or the copy of a file-run `bootstrap.sh` kept at `$BOOTSTRAP_STATE_DIR/bootstrap.sh`. **Empty under `curl … \| bash`** — there is no file to name, so print no command rather than one that does not run. |
+| `BOOTSTRAP_RAW` | the operator | where a curl'd run fetches the release file by file when GitHub's tarball host is unreachable. Default: the pinned raw.githubusercontent.com URL. A company whose proxy blocks GitHub points it at its own mirror of the same commit — safe, because every byte is checked against the manifest, whatever served it. |
+| `BOOTSTRAP_TARBALL` | tests | replaces the tarball URL of the pinned commit. |
+| `BOOTSTRAP_PICK_INPUT` · `BOOTSTRAP_PICK_TIMEOUT` | tests · the operator | a file of answers for the menu (the menu then goes to stderr) · seconds the menu waits for each answer (default 1800); an unanswered menu installs nothing. |
+| `BOOTSTRAP_NONINTERACTIVE` | the operator · tests | set: never show the menu uninvited, as under CI or an agent (`CI` and `CLAUDECODE` do the same). |
+| `BOOTSTRAP_ASSUME_STANDARD_USER` | tests | `1`: `bootstrap_is_admin` answers no, so the standard-user path is tested on an admin's Mac. |
+| `BOOTSTRAP_MANAGED_ROOT` | tests | prefixes the system paths the policy readers look in, so an IT policy is a fixture. |
 | `BOOTSTRAP_MODEL` | `--model <name>` | the model a module should install. |
 | `BOOTSTRAP_BENCH` | `--bench <model>` | the candidate `bench_` should measure. |
 | `BOOTSTRAP_STATE_DIR` | the driver | `$HOME/.mac-bootstrap`. **All runtime state goes here**, never in the repo. |
 | `BOOTSTRAP_ASSETS` | the driver | the `assets/` directory beside `bootstrap.sh`, when running from a clone. |
 | `BOOTSTRAP_LIB` | the driver | the absolute path to the `bootstrap-lib.sh` in force. |
-| `BOOTSTRAP_PIN` / `BOOTSTRAP_RAW` | the driver | the release sha and the raw URL prefix, for a module that must fetch an asset. |
+| `BOOTSTRAP_PIN` | the driver | the release commit whose tree this run uses — for a hint that names it, never for a fetch of your own. |
 | `BOOTSTRAP_LOG` | the driver | the log file. `bootstrap_warn` writes there as well as to stderr. |
 | `BOOTSTRAP_MODULES` | tests | overrides module discovery. |
 | `BOOTSTRAP_NO_JQ` | tests | forces every library path onto its plutil arm, so the no-jq degrade is *tested* rather than asserted. |
@@ -184,6 +197,11 @@ It is:
 | `bootstrap_jq` · `bootstrap_have_jq` | absolute jq path, or rc 1 |
 | `bootstrap_json payload path` · `bootstrap_emit_ctx event text` · `bootstrap_git dir args…` · `bootstrap_count` · `bootstrap_trunk dir` | hook helpers |
 | `bootstrap_warn text` | stderr + the log. **Never stdout** — a hook's stdout is parsed as JSON. |
+| `bootstrap_is_admin` | 0 iff this user is in the admin group. A standard user cannot run the Homebrew installer or write `/Applications`, so never offer them a gesture that needs either. |
+| `bootstrap_find_tool name` · `bootstrap_find_app Name.app` · `bootstrap_tools_dir` | the one search order: a pinned user-owned copy in `$BOOTSTRAP_STATE_DIR/tools/bin`, Homebrew's two prefixes, then `PATH` · `/Applications`, then `$HOME/Applications` |
+| `bootstrap_fetch_pinned url sha256 dest` | a third-party download kept only when its sha256 is the one pinned in the module. rc 0 kept · 1 not fetched · 2 refused and deleted |
+| `bootstrap_brew brew args…` | Homebrew with its analytics off |
+| `bootstrap_managed_sources agent` · `bootstrap_policy agent key [raw\|json]` · `bootstrap_policy_restricts agent hooks\|mcp\|skills` | read the policy files Claude Code (`claude`) and Copilot CLI (`copilot`) themselves read. A module whose surface IT reserves must not report `SATISFIED`: it is `NEEDS_HUMAN`, "ask IT", with no gesture. |
 
 ---
 
@@ -277,9 +295,16 @@ it. **That is a denylist of spellings inside the fetched artifact**, it is defea
 lines of string-splitting, and modules are *sourced*, so top-level code in one runs before any
 check of ours. It is defence-in-depth against our own mistakes and nothing more.
 
-**The SHA pin on the fetched tree is the only real integrity control.** The enforcement that is
-real is the refusal inside `bootstrap_settings_merge`, because that is the chokepoint that actually
-writes — a guard on the act rather than on the text.
+**The real integrity control is the release manifest.** `scripts/release.sh` stamps into
+`bootstrap.sh`, beside the pin, the sha256 of every module and asset at that commit, computed from
+git's own blobs; `--check` refuses a published script whose manifest does not equal its pinned tree.
+A curl'd run checks every file against it — with one `shasum -c` — before sourcing anything, so
+the one hash a person verifies, `bootstrap.sh`'s own, covers the whole release, and a mirror or a
+proxy that serves one different byte is refused with the file named. The pin alone was weaker
+than it looked: it named an immutable commit, but nothing checked that the bytes a host served
+were that commit's. The enforcement on WRITES that is real is the refusal inside
+`bootstrap_settings_merge`, because that is the chokepoint that actually writes — a guard on the
+act rather than on the text.
 
 ---
 
@@ -299,7 +324,7 @@ bash verify.sh --only <name>                      # a cold, separate process agr
 A module is done when `verify_` passes from a cold process, the second install run is a no-op,
 the no-jq arm reaches the same end state, and every gesture you print runs as typed.
 
-## Catalog metadata — four OPTIONAL verbs
+## Catalog metadata — five OPTIONAL verbs
 
 A module may describe itself. These are optional by design: the six required verbs are the
 contract, and a module declaring none of them still works.
@@ -310,6 +335,14 @@ contract, and a module declaring none of them still works.
 | `cost_<m>` | one line: disk, minutes, and the human gestures it will ask for | `unpriced` |
 | `profile_<m>` | the smallest profile containing it: `lite`, `standard`, `full` | `standard` |
 | `needs_<m>` | space-separated modules it requires to be meaningful | none |
+| `egress_<m>` | one line per host it or an app it sets up can reach: `<host> <install\|run> <purpose>`. Empty output means no network at all | **UNDECLARED**, which fails `--egress` |
+
+`egress_` is the one catalog verb whose absence is not neutral. `--egress` prints every
+declaration, then runs `assets/local-only-check.sh`, which reads the machine — the configuration
+of every app and agent a module sets up — without trusting any declaration, and fails when anything
+there can send local data to a cloud AI service. A declaration is a promise; the check is the
+evidence. Do not list the driver's own fetch of this repo (it declares that once) or the agents'
+own providers (the report states those once).
 
 **Why the default profile is `standard` and not `lite`:** silence must never be dangerous. An
 undeclared module is not in `lite`, so a module nobody has priced can never arrive by default on a
