@@ -126,7 +126,7 @@ are the contract.
 
 | Variable | Set by | Meaning |
 |---|---|---|
-| `BOOTSTRAP_MODE` | the driver | `install` · `verify` · `bench` · `uninstall` (the read-only modes `list`, `plan`, `manifest`, `egress` never reach a verb that changes anything) |
+| `BOOTSTRAP_MODE` | the driver | `install` · `verify` · `bench` · `uninstall`. The looking modes — `list`, `plan`, `manifest`, `egress`, `advise` — change nothing: the driver exports `BOOTSTRAP_READ_ONLY=1`, points `BOOTSTRAP_LOG` at `/dev/null`, and creates no state directory, so a verb they call must not write either. `verify` and `uninstall` with no selection act on the modules this Mac has rows for. |
 | `BOOTSTRAP_ENTRY` | the driver | the entry script a hint may tell the person to re-run: the clone's `bootstrap.sh`, or the copy of a file-run `bootstrap.sh` kept at `$BOOTSTRAP_STATE_DIR/bootstrap.sh`. **Empty under `curl … \| bash`** — there is no file to name, so print no command rather than one that does not run. |
 | `BOOTSTRAP_RAW` | the operator | where a curl'd run fetches the release file by file when GitHub's tarball host is unreachable. Default: the pinned raw.githubusercontent.com URL. A company whose proxy blocks GitHub points it at its own mirror of the same commit — safe, because every byte is checked against the manifest, whatever served it. |
 | `BOOTSTRAP_TARBALL` | tests | replaces the tarball URL of the pinned commit. |
