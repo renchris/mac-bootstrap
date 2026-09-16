@@ -8,9 +8,11 @@
 #            NSUserKeyEquivalents:"Arrange Split Panes Evenly" = "@$e" (= Cmd+Shift+E), and
 #            NSUserKeyEquivalents:"Show Timestamps" exists and does NOT hold "@$e", because
 #            Show Timestamps is the stock occupant of that chord.
-#   kitty  — the config kitty itself resolves has `splits` as its FIRST (default) layout and
-#            binds cmd+shift+e to `layout_action equalize`.
-# Zero permissions, zero GUI clicking, zero agent involvement. The iTerm2 half takes effect at
+#   kitty  — the config kitty itself resolves has `splits` as its FIRST (default) layout, binds
+#            cmd+shift+e to `layout_action equalize`, and enables REMOTE CONTROL over a
+#            per-instance unix socket (allow_remote_control + a listen_on carrying {kitty_pid}),
+#            which is what /handoff's kitty driver refuses to run without.
+# Zero permissions, zero GUI clicking. The iTerm2 half takes effect at
 # the NEXT iTerm2 launch: a write made while iTerm2 is running survives its quit, but the
 # running instance ignores it (measured 2026-09-11, iTerm2 3.6.11 / macOS 15.7.9).
 #
@@ -359,9 +361,13 @@ for path, tag in (
 ):
     lay = []
     eq = 'no'
+    rc = ''
+    lo = ''
     try:
         c = load_config(path)
         lay = [str(x) for x in c.enabled_layouts]
+        rc = str(getattr(c, 'allow_remote_control', ''))
+        lo = str(getattr(c, 'listen_on', ''))
         try:
             km = c.keyboard_modes[''].keymap
         except Exception:
@@ -380,6 +386,8 @@ for path, tag in (
     print(tag + '_LAYOUT0=' + (lay[0].split(':')[0] if lay else ''))
     print(tag + '_LAYOUTS=' + ','.join(lay))
     print(tag + '_EQ=' + eq)
+    print(tag + '_RC=' + rc)
+    print(tag + '_LISTEN=' + lo)
 PY
 }
 
@@ -388,7 +396,9 @@ pane_equalize_kitty_probe() {                               # prints the KEY=VAL
   kb="$(pane_equalize_kitty_bin)" || return 1
   td="$(mktemp -d -t pbm5 2>/dev/null)" || return 1
   mkdir -p "$td/ctl" "$td/neg" 2>/dev/null
-  printf '%s\n%s\n' "$(pane_equalize_kitty_layout_line 'stack')" 'map cmd+shift+e layout_action equalize' \
+  printf '%s\n%s\n%s\n%s\n' "$(pane_equalize_kitty_layout_line 'stack')" \
+    'map cmd+shift+e layout_action equalize' \
+    "allow_remote_control $PANE_EQUALIZE_KITTY_RC" "listen_on $PANE_EQUALIZE_KITTY_LISTEN" \
     > "$td/ctl/kitty.conf" 2>/dev/null
   : > "$td/neg/kitty.conf" 2>/dev/null
   out="$(KITTY_PROBE_CONTROL_CONF="$td/ctl/kitty.conf" KITTY_PROBE_NEGATIVE_CONF="$td/neg/kitty.conf" \
@@ -401,7 +411,40 @@ pane_equalize_kitty_probe() {                               # prints the KEY=VAL
   [ "$(pane_equalize_probe_field "$out" CTL_EQ)" = yes ] || return 1
   [ "$(pane_equalize_probe_field "$out" CTL_LAYOUT0)" = splits ] || return 1
   [ "$(pane_equalize_probe_field "$out" NEG_EQ)" = no ] || return 1
+  # …and for remote control, whose two options a kitty that never heard of them would report as
+  # the empty string on BOTH arms — a reading indistinguishable from "off" without these.
+  pane_equalize_kitty_rc_ok "$(pane_equalize_probe_field "$out" CTL_RC)" \
+                            "$(pane_equalize_probe_field "$out" CTL_LISTEN)" || return 1
+  pane_equalize_kitty_rc_ok "$(pane_equalize_probe_field "$out" NEG_RC)" \
+                            "$(pane_equalize_probe_field "$out" NEG_LISTEN)" && return 1
   printf '%s' "$out"
+}
+
+# ── kitty remote control, which /handoff needs and kitty ships OFF ────────────────────────────
+# `assets/succession/driver-kitty.sh` refuses without it (its footgun F4): `kitty @` needs
+# allow_remote_control AND a listen_on carrying a PER-INSTANCE token. The two footguns that decide
+# the shape below, both measured and both silent:
+#   · a LITERAL listen_on path is ignored — no socket, EMPTY stderr — so {kitty_pid} is load-bearing.
+#     verify_ therefore asserts the token, not merely that listen_on is not 'none'.
+#   · only a RESTART creates the socket. SIGUSR1 and `kitty @ load-config` do not, and on a kitty
+#     that never had remote control `load-config` cannot even be delivered — so the relaunch is the
+#     whole gesture, and install_ says so in its own words rather than offering a reload.
+# `socket-only` is the narrowest value that works: it refuses the terminal-escape channel, so only a
+# process that can open the socket can drive the terminal.
+PANE_EQUALIZE_KITTY_RC='socket-only'
+PANE_EQUALIZE_KITTY_LISTEN='unix:/tmp/kitty-{kitty_pid}'
+PANE_EQUALIZE_KITTY_PID_TOKEN='{kitty_pid}'
+
+# pane_equalize_kitty_rc_ok <allow_remote_control> <listen_on> — 0 iff this pair actually reaches a
+# socket. Any value but `no` enables remote control, and we accept every one of them rather than
+# imposing ours: `yes`, `socket` and `socket-only` all work as they stand, and `password` is the
+# operator's own deliberate choice, which this module may not weaken and may not satisfy either —
+# writing the password would be writing a credential (house rule 6). A config kitty did not
+# recognise reports the empty string, which is not an enabling value and must read as no.
+pane_equalize_kitty_rc_ok() {
+  case "${1:-}" in ''|no) return 1 ;; esac
+  case "${2:-}" in *"$PANE_EQUALIZE_KITTY_PID_TOKEN"*) return 0 ;; esac
+  return 1
 }
 
 # EQUALIZE-ON-WINDOW-CLOSE: `equalize_on_window_close`, which is what kitty implements. `equalize_on_close` — the
@@ -433,6 +476,8 @@ pane_equalize_kitty_verify() {
   }
   [ "$(pane_equalize_probe_field "$out" USR_LAYOUT0)" = splits ] || return 1
   [ "$(pane_equalize_probe_field "$out" USR_EQ)" = yes ] || return 1
+  pane_equalize_kitty_rc_ok "$(pane_equalize_probe_field "$out" USR_RC)" \
+                            "$(pane_equalize_probe_field "$out" USR_LISTEN)" || return 1
   return 0
 }
 
@@ -463,7 +508,7 @@ pane_equalize_kitty_strip() {
 }
 
 pane_equalize_kitty_install() {
-  local conf out l0 eq layouts rest need_layout=0 need_map=0
+  local conf out l0 eq layouts rest rc lo need_layout=0 need_map=0 need_rc=0 need_listen=0
   pane_equalize_kitty_ver_ok "$(pane_equalize_kitty_bin)" || return 1
   out="$(pane_equalize_kitty_probe)" || {
     bootstrap_warn "pane_equalize: kitty's own config parser did not answer, so this install cannot be verified"
@@ -478,9 +523,16 @@ pane_equalize_kitty_install() {
   l0="$(pane_equalize_probe_field "$out" USR_LAYOUT0)"
   eq="$(pane_equalize_probe_field "$out" USR_EQ)"
   layouts="$(pane_equalize_probe_field "$out" USR_LAYOUTS)"
+  rc="$(pane_equalize_probe_field "$out" USR_RC)"
+  lo="$(pane_equalize_probe_field "$out" USR_LISTEN)"
   [ "$l0" = splits ] || need_layout=1
   [ "$eq" = yes ] || need_map=1
-  [ "$need_layout" = 0 ] && [ "$need_map" = 0 ] && return 0
+  # The two remote-control options are decided SEPARATELY, so an operator who already chose a value
+  # keeps it: only `no` — kitty's own default — is replaced, and a listen_on that already carries the
+  # per-instance token is left exactly as they wrote it.
+  case "$rc" in ''|no) need_rc=1 ;; esac
+  case "$lo" in *"$PANE_EQUALIZE_KITTY_PID_TOKEN"*) : ;; *) need_listen=1 ;; esac
+  [ "$need_layout" = 0 ] && [ "$need_map" = 0 ] && [ "$need_rc" = 0 ] && [ "$need_listen" = 0 ] && return 0
   {
     printf '%s\n' "$PANE_EQUALIZE_MARK_BEGIN"
     printf '%s\n' "# Cmd+Shift+E gives every split an equal share again after manual resizing."
@@ -495,6 +547,13 @@ pane_equalize_kitty_install() {
       printf '%s\n' "$(pane_equalize_kitty_layout_line "$rest")"
     fi
     [ "$need_map" = 1 ] && printf '%s\n' 'map cmd+shift+e layout_action equalize'
+    if [ "$need_rc" = 1 ] || [ "$need_listen" = 1 ]; then
+      printf '%s\n' "# kitty remote control, which /handoff drives the terminal through. A LITERAL"
+      printf '%s\n' "# listen_on path is silently ignored — no socket, no error — so {kitty_pid} is"
+      printf '%s\n' "# load-bearing, and only RESTARTING kitty creates the socket."
+      [ "$need_rc" = 1 ]     && printf 'allow_remote_control %s\n' "$PANE_EQUALIZE_KITTY_RC"
+      [ "$need_listen" = 1 ] && printf 'listen_on %s\n' "$PANE_EQUALIZE_KITTY_LISTEN"
+    fi
     printf '%s\n' "$PANE_EQUALIZE_MARK_END"
   } >> "$conf" 2>/dev/null || return 1
   return 0
@@ -626,8 +685,8 @@ pane_equalize_gate_reason() {
 # ── the six verbs ────────────────────────────────────────────────────────────────────────────
 
 # ── catalog metadata (optional verbs; see CONTRACT.md) ────────────────────────────────────────
-what_pane_equalize()    { printf '%s' 'Cmd+Shift+E evens out split panes, in kitty and iTerm2 alike'; }
-cost_pane_equalize()    { printf '%s' 'two config lines and one plist key. No installs, no permissions. Needs one terminal relaunch.'; }
+what_pane_equalize()    { printf '%s' 'Cmd+Shift+E evens out split panes, in kitty and iTerm2 alike — and kitty can be driven by /handoff'; }
+cost_pane_equalize()    { printf '%s' 'four config lines and one plist key. No installs, no permissions. Needs one terminal relaunch.'; }
 profile_pane_equalize() { printf '%s' 'lite'; }
 # No network at all: it writes two config files. The one command it may hand a person downloads a
 # terminal, and that is the person's command, run by them, named in the receipt.
@@ -635,6 +694,8 @@ egress_pane_equalize()  { :; }
 # What a company's IT or security team governs here. The module itself installs nothing; the one
 # command it hands a person with no usable terminal (or a too-old one) downloads a vendor app.
 clearance_pane_equalize() {
+  printf '%s\n' 'background kitty is told to listen on a per-instance unix socket (/tmp/kitty-<pid>) so a local process can drive the terminal; it is owned by this user, it carries no network port, and it disappears when kitty quits'
+  printf '%s\n' 'agent enabling that socket is what lets /handoff open, type into and close terminal windows on its own, with nobody at the keyboard'
   printf '%s\n' 'software only if you run the command it offers when neither kitty nor iTerm2 is usable: the official iTerm2 3.7.1 or kitty 0.48.2 release, a vendor download not distributed by IT'
 }
 
@@ -741,7 +802,11 @@ install_pane_equalize() {
     if pane_equalize_kitty_install; then
       did=1
       printf '%s\n' "pane_equalize: kitty — cmd+shift+e mapped to layout_action equalize, splits made the default layout."
-      printf '%s\n' "pane_equalize: a running kitty picks it up on restart, or with: kitty @ --to \"\$KITTY_LISTEN_ON\" load-config"
+      printf '%s\n' "pane_equalize: a running kitty picks THAT up on restart, or with: kitty @ --to \"\$KITTY_LISTEN_ON\" load-config"
+      printf '%s\n' "pane_equalize: remote control (allow_remote_control + listen_on) is written too, and it is"
+      printf '%s\n' "pane_equalize: the ONE thing load-config cannot deliver — the socket is created at startup only."
+      printf '%s\n' "pane_equalize: GESTURE — relaunch kitty (quit it and open it again). Until you do, /handoff's"
+      printf '%s\n' "pane_equalize: kitty driver stays unreachable and says so."
     else
       rc=1
     fi

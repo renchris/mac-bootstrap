@@ -18,7 +18,19 @@
 # No permission, no credential, no allow-list keypath is written here or anywhere below.
 
 statusline_script() { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/bin/agent-statusline.sh"; }
-statusline_claude_settings() { printf '%s' "$HOME/.claude/settings.json"; }
+# ── Claude Code's config root: CLAUDE_CONFIG_DIR when the operator sets it, $HOME/.claude when
+# not — the expression the library's bootstrap_managed_sources already reads IT's policy through.
+# Every verb runs in its own subshell with ONE module sourced, so this cannot live in one place.
+# Hardcoding $HOME/.claude registered the status line in a file the agent never opens.
+statusline_config_dir() {
+  local d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  case "$d" in */) [ "$d" = / ] || d="${d%/}" ;; esac
+  # A relative value is made absolute here: this path is stored and linked from elsewhere, and
+  # only an absolute one still names the same file from another directory.
+  case "$d" in /*) : ;; *) d="$(pwd -P)/$d" ;; esac
+  printf '%s' "$d"
+}
+statusline_claude_settings() { printf '%s/settings.json' "$(statusline_config_dir)"; }
 statusline_copilot_settings() { printf '%s' "$HOME/.copilot/settings.json"; }
 
 # The three fixtures verify_ runs the INSTALLED script against. Their shapes are measured, not
@@ -73,7 +85,7 @@ statusline_policy() {
     return 0
   fi
   if [ "$(bootstrap_settings_get "$(statusline_claude_settings)" disableAllHooks raw 2>/dev/null)" = true ]; then
-    printf 'user-claude|Claude Code: disableAllHooks is true in your own $HOME/.claude/settings.json, so %s; removing it is your call\n' "$what"
+    printf 'user-claude|Claude Code: disableAllHooks is true in your own %s, so %s; removing it is your call\n' "$(statusline_short_path "$(statusline_claude_settings)")" "$what"
     return 0
   fi
   return "$found"
@@ -86,7 +98,8 @@ statusline_policy_gesture() {
   local p
   p="$(statusline_policy)" || return 0
   printf '%s\n' "$p" | /usr/bin/grep -q '^it|' && return 0
-  printf '%s\n' "$p" | /usr/bin/grep -q '^user-claude|' && printf 'grep -n disableAllHooks "$HOME/.claude/settings.json"'
+  printf '%s\n' "$p" | /usr/bin/grep -q '^user-claude|' \
+    && printf 'grep -n disableAllHooks "%s"' "$(statusline_short_path "$(statusline_claude_settings)")"
   return 0
 }
 
@@ -220,9 +233,12 @@ statusline_gated_file() {
   return 1
 }
 
-# The note and the gesture name the file as $HOME/… literally: that string is executable as
-# typed in any shell AND carries no username, which is the rule this public repo runs under.
-statusline_short_path() { case "$1" in *.claude/*) printf '$HOME/.claude/settings.json' ;; *) printf '$HOME/.copilot/settings.json' ;; esac; }
+# The note and the gesture name the file as $HOME/… where it lives there: that string is executable
+# as typed in any shell AND carries no username, which is the rule this public repo runs under. A
+# CLAUDE_CONFIG_DIR outside $HOME is printed whole — it is the operator's own path, not one of ours.
+statusline_short_path() {
+  case "$1" in "$HOME"/*) printf '$HOME/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac
+}
 
 note_statusline() {
   local g f why

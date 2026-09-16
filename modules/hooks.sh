@@ -40,7 +40,24 @@
 # ── small helpers this module needs and bootstrap-lib.sh does not have. Noted as contract deviations. ──
 
 hooks_dir()      { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/hooks"; }
-hooks_claude_settings()       { printf '%s' "$HOME/.claude/settings.json"; }
+# ── Claude Code's config root: CLAUDE_CONFIG_DIR when the operator sets it, $HOME/.claude when
+# not — the expression the library's bootstrap_managed_sources already reads IT's policy through.
+# Every verb runs in its own subshell with ONE module sourced, so this cannot live in one place.
+# Hardcoding $HOME/.claude wrote a settings file the agent never opens, and verify_ agreed.
+hooks_config_dir() {
+  local d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  case "$d" in */) [ "$d" = / ] || d="${d%/}" ;; esac
+  # A relative value is made absolute here: this path is stored and linked from elsewhere, and
+  # only an absolute one still names the same file from another directory.
+  case "$d" in /*) : ;; *) d="$(pwd -P)/$d" ;; esac
+  printf '%s' "$d"
+}
+# A note or a gesture names the file with $HOME so no user name reaches the receipt, and so the
+# command runs as typed. A config root outside $HOME is printed whole; it is the operator's own.
+hooks_short_path() {
+  case "$1" in "$HOME"/*) printf '$HOME/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac
+}
+hooks_claude_settings()       { printf '%s/settings.json' "$(hooks_config_dir)"; }
 hooks_copilot_settings()      { printf '%s' "$HOME/.copilot/hooks/00-lifecycle.json"; }
 hooks_scripts()  { printf '%s' "session-start.sh stop.sh guard-write.sh guard-bash.sh"; }
 hooks_unwired()  { printf '%s' "guard-bash.sh"; }
@@ -100,8 +117,8 @@ hooks_policy() {
       found=0; continue
     fi
     case "$a" in
-      claude)  hooks_user_disabled "$HOME/.claude/settings.json" || continue
-               printf 'user-claude|Claude Code: disableAllHooks is true in your own $HOME/.claude/settings.json, so it runs none of these hooks; removing it is your call\n' ;;
+      claude)  hooks_user_disabled "$(hooks_claude_settings)" || continue
+               printf 'user-claude|Claude Code: disableAllHooks is true in your own %s, so it runs none of these hooks; removing it is your call\n' "$(hooks_short_path "$(hooks_claude_settings)")" ;;
       copilot) hooks_user_disabled "$HOME/.copilot/settings.json" || continue
                printf 'user-copilot|Copilot CLI: disableAllHooks is true in your own $HOME/.copilot/settings.json, so it runs none of these hooks; removing it is your call\n' ;;
     esac
@@ -118,7 +135,7 @@ hooks_policy_gesture() {
   p="$(hooks_policy)" || return 0
   printf '%s\n' "$p" | /usr/bin/grep -q '^it|' && return 0
   if printf '%s\n' "$p" | /usr/bin/grep -q '^user-claude|'; then
-    printf 'grep -n disableAllHooks "$HOME/.claude/settings.json"'
+    printf 'grep -n disableAllHooks "%s"' "$(hooks_short_path "$(hooks_claude_settings)")"
   else
     printf 'grep -n disableAllHooks "$HOME/.copilot/settings.json"'
   fi
