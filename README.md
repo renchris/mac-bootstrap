@@ -7,7 +7,7 @@ and **GitHub Copilot CLI 1.0.83**.
 you pick, and it installs what you picked:
 
 ```bash
-curl -fsSLo /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh && echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
+curl -fsSLo /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/5a564df1c93b585cb3024d0454dc5f7ab2a7ba9c/bootstrap.sh && echo "fb7720229eb61490dab265a94f0336a694aee49bc29680969f5507c990eee65b  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
 ```
 
 It checks the script's sha256 before running a line of it, and the script checks every file it then
@@ -135,10 +135,10 @@ procedure** — and writes only to `$HOME/.mac-bootstrap/`.
 
 ### If an agent is already running, paste this
 
-Replace `0f46dc504439e4468b96d493efb3940ec59fd83c` with the release commit — never `main`, whose
+Replace `5a564df1c93b585cb3024d0454dc5f7ab2a7ba9c` with the release commit — never `main`, whose
 raw URL serves up to five minutes of stale CDN bytes (`cache-control: max-age=300`, measured). At
-that pinned commit `bootstrap.sh` is 1368 lines and `shasum -a 256` reads
-`097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414`; step 1 checks it,
+that pinned commit `bootstrap.sh` is 1481 lines and `shasum -a 256` reads
+`fb7720229eb61490dab265a94f0336a694aee49bc29680969f5507c990eee65b`; step 1 checks it,
 and anything else means stop. Fetched on its own it has no `modules/` beside it, so it makes a
 second fetch, from the commit pinned *inside* it — which is this one's parent, because a commit
 cannot contain its own sha. `scripts/release.sh --check` re-walks both hops anonymously, and CI
@@ -167,11 +167,11 @@ SELECTION: ask
 statusline,hooks,microsoft365 — then step 3 is skipped.)
 
 1. FETCH — never pipe a script into a shell. Save it and check it; the check must print OK:
-     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh
-     echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c -
+     curl -fsSL -o /tmp/mac-bootstrap.sh https://raw.githubusercontent.com/renchris/mac-bootstrap/5a564df1c93b585cb3024d0454dc5f7ab2a7ba9c/bootstrap.sh
+     echo "fb7720229eb61490dab265a94f0336a694aee49bc29680969f5507c990eee65b  /tmp/mac-bootstrap.sh" | shasum -a 256 -c -
    If raw.githubusercontent.com cannot be reached, this is the one other source, under the same check:
-     curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=0f46dc504439e4468b96d493efb3940ec59fd83c'
-   A third source serving the same bytes: https://cdn.jsdelivr.net/gh/renchris/mac-bootstrap@0f46dc504439e4468b96d493efb3940ec59fd83c/bootstrap.sh
+     curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=5a564df1c93b585cb3024d0454dc5f7ab2a7ba9c'
+   A third source serving the same bytes: https://cdn.jsdelivr.net/gh/renchris/mac-bootstrap@5a564df1c93b585cb3024d0454dc5f7ab2a7ba9c/bootstrap.sh
    If none works, ask me for the company's mirror of this repo at that commit (it is served as
    BOOTSTRAP_RAW=<mirror URL>); any source is fine if the check prints OK. Never skip the check.
 
@@ -250,7 +250,7 @@ menu. To read it first, run the part before `&& bash` and then `less /tmp/mac-bo
 checksum, not the host, is what you trust:
 
 ```bash
-curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=0f46dc504439e4468b96d493efb3940ec59fd83c' && echo "097e980914be95c65288c4045d223a86b1a5b7dad30fd378768f7b29ce2a6414  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
+curl -fsSL -H 'Accept: application/vnd.github.raw' -o /tmp/mac-bootstrap.sh 'https://api.github.com/repos/renchris/mac-bootstrap/contents/bootstrap.sh?ref=5a564df1c93b585cb3024d0454dc5f7ab2a7ba9c' && echo "fb7720229eb61490dab265a94f0336a694aee49bc29680969f5507c990eee65b  /tmp/mac-bootstrap.sh" | shasum -a 256 -c - && bash /tmp/mac-bootstrap.sh
 ```
 
 The script then tries GitHub's tarball host, git over github.com (when the Command Line Tools are
