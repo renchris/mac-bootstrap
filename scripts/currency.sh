@@ -51,6 +51,9 @@ copilot-cli-binary  | modules/agent_cli.sh     | AGENT_CLI_COPILOT_VERSION      
 gh                  | modules/github_cli.sh    | GITHUB_CLI_VERSION             | -                                | github:cli/cli
 agent-browser       | modules/browser_automation.sh | BROWSER_AUTOMATION_VERSION      | -                           | npm:agent-browser
 node-agent-browser  | modules/browser_automation.sh | BROWSER_AUTOMATION_NODE_VERSION | -                           | node-line
+codex-cli           | modules/extra_agents.sh  | EXTRA_AGENTS_CODEX_VERSION     | -                                | npm:@openai/codex
+gemini-cli          | modules/extra_agents.sh  | EXTRA_AGENTS_GEMINI_VERSION    | -                                | npm:@google/gemini-cli
+node-extra-agents   | modules/extra_agents.sh  | EXTRA_AGENTS_NODE_VERSION      | -                                | node-line
 CURRENCY_TABLE
 )"
 
