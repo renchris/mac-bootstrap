@@ -39,7 +39,21 @@
 
 # ── where things go ──────────────────────────────────────────────────────────────────────────
 instructions_state()   { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
-instructions_global()  { printf '%s' "$HOME/.claude/CLAUDE.md"; }
+# ── Claude Code's config root: CLAUDE_CONFIG_DIR when the operator sets it, $HOME/.claude when
+# not — the expression the library's bootstrap_managed_sources already reads IT's policy through.
+# Every verb runs in its own subshell with ONE module sourced, so this cannot live in one place.
+# Hardcoding $HOME/.claude installed the instructions file where the agent never looks for it.
+instructions_config_dir() {
+  local d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  case "$d" in */) [ "$d" = / ] || d="${d%/}" ;; esac
+  # 🚨 A RELATIVE VALUE IS MADE ABSOLUTE HERE. The Copilot bridge is a symlink to this file, and a
+  # symlink target resolves against the LINK'S directory ($HOME/.copilot), never the cwd — so a
+  # relative root installed a DANGLING link and the run exited 20. Measured by section 6 of
+  # scripts/checks/config-dir.sh, which fails without this line.
+  case "$d" in /*) : ;; *) d="$(pwd -P)/$d" ;; esac
+  printf '%s' "$d"
+}
+instructions_global()  { printf '%s/CLAUDE.md' "$(instructions_config_dir)"; }
 instructions_copilot_bridge() { printf '%s' "${COPILOT_HOME:-$HOME/.copilot}/copilot-instructions.md"; }
 instructions_template()     { printf '%s/templates/repo-CLAUDE.md' "$(instructions_state)"; }
 instructions_repo_init()    { printf '%s/bin/agent-repo-init' "$(instructions_state)"; }
@@ -94,7 +108,7 @@ instructions_policy() {
     found=0
   done
   if instructions_excluded; then
-    printf "it|Claude Code: your company's policy claudeMdExcludes means \$HOME/.claude/CLAUDE.md is never read; ask IT\n"
+    printf "it|Claude Code: your company's policy claudeMdExcludes means %s is never read; ask IT\n" "$(instructions_homeify "$(instructions_global)")"
     found=0
   fi
   return "$found"
@@ -263,7 +277,7 @@ note_instructions() {
 
   gl="$(instructions_global)"
   if { [ -e "$gl" ] || [ -L "$gl" ]; } && ! cmp -s "$g" "$gl"; then
-    printf 'this Mac already has its own global agent instructions at $HOME/.claude/CLAUDE.md; nothing was overwritten, and merging the two is your call'
+    printf 'this Mac already has its own global agent instructions at %s; nothing was overwritten, and merging the two is your call' "$(instructions_homeify "$gl")"
     return 0
   fi
 
@@ -286,7 +300,7 @@ gesture_instructions() {
 
   gl="$(instructions_global)"
   if { [ -e "$gl" ] || [ -L "$gl" ]; } && ! cmp -s "$g" "$gl"; then
-    printf 'diff "$HOME/.claude/CLAUDE.md" "%s"' "$(instructions_homeify "$g")"
+    printf 'diff "%s" "%s"' "$(instructions_homeify "$gl")" "$(instructions_homeify "$g")"
     return 0
   fi
 

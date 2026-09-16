@@ -62,7 +62,25 @@
 handoff_state_dir()   { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 handoff_bin()     { printf '%s/bin/agent-handoff' "$(handoff_state_dir)"; }
 handoff_succession_dir()    { printf '%s/succession' "$(handoff_state_dir)"; }
-handoff_claude_command()     { printf '%s/.claude/commands/handoff.md' "$HOME"; }
+# ── Claude Code's config root: CLAUDE_CONFIG_DIR when the operator sets it, $HOME/.claude when
+# not — the expression the library's bootstrap_managed_sources already reads IT's policy through,
+# and the one assets/agent-handoff itself resolves the successor's config dir with (line 771).
+# Every verb runs in its own subshell with ONE module sourced, so this cannot live in one place.
+handoff_config_dir() {
+  local d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  case "$d" in */) [ "$d" = / ] || d="${d%/}" ;; esac
+  # A relative value is made absolute here: this path is stored and linked from elsewhere, and
+  # only an absolute one still names the same file from another directory.
+  case "$d" in /*) : ;; *) d="$(pwd -P)/$d" ;; esac
+  printf '%s' "$d"
+}
+handoff_commands_dir()       { printf '%s/commands' "$(handoff_config_dir)"; }
+# A note names the directory with $HOME so no user name reaches the receipt; a config root the
+# operator put outside $HOME is printed whole, because it is theirs.
+handoff_homeify() {
+  case "$1" in "$HOME"/*) printf '$HOME/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac
+}
+handoff_claude_command()     { printf '%s/handoff.md' "$(handoff_commands_dir)"; }
 handoff_copilot_skill()   { printf '%s/.copilot/skills/handoff/SKILL.md' "$HOME"; }
 handoff_parts()   { printf 'oracle.sh seed.sh driver-tmux.sh driver-kitty.sh driver-iterm2.sh README.md'; }
 
@@ -92,7 +110,7 @@ handoff_policy() {
   local a name what found=1
   for a in claude copilot; do
     case "$a" in
-      claude) name='Claude Code'; what='the /handoff command in $HOME/.claude/commands never loads' ;;
+      claude) name='Claude Code'; what="the /handoff command in $(handoff_homeify "$(handoff_commands_dir)") never loads" ;;
       *)      name='Copilot CLI'; what='the handoff skill in $HOME/.copilot/skills never loads' ;;
     esac
     if bootstrap_policy "$a" policyHelper raw >/dev/null 2>&1; then
@@ -157,7 +175,7 @@ handoff_doc_ok() {
 # and a directory we can simply create is not that.
 handoff_blocked_dir() {
   local d p
-  for d in "$(handoff_state_dir)/bin" "$(handoff_succession_dir)" "$HOME/.claude/commands" "$HOME/.copilot/skills/handoff"; do
+  for d in "$(handoff_state_dir)/bin" "$(handoff_succession_dir)" "$(handoff_commands_dir)" "$HOME/.copilot/skills/handoff"; do
     p="$d"
     while [ -n "$p" ] && [ "$p" != "/" ] && [ ! -e "$p" ]; do p="$(dirname "$p")"; done
     [ -d "$p" ] && [ ! -w "$p" ] && { printf '%s' "$p"; return 0; }
@@ -325,7 +343,7 @@ install_handoff() {
   state="$(handoff_state_dir)"; bin="$(handoff_bin)"; succ="$(handoff_succession_dir)"
   cmd="$(handoff_claude_command)"; skill="$(handoff_copilot_skill)"
 
-  mkdir -p "$state/bin" "$state/handoff" "$succ" "$HOME/.claude/commands" \
+  mkdir -p "$state/bin" "$state/handoff" "$succ" "$(handoff_commands_dir)" \
            "$HOME/.copilot/skills/handoff" 2>/dev/null \
     || { bootstrap_warn "handoff: cannot create the install directories"; return 1; }
 

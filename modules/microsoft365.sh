@@ -46,10 +46,32 @@ MICROSOFT365_SERVER_KEY="ms365"
 
 microsoft365_dir()      { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}/microsoft365"; }
 microsoft365_entry()    { printf '%s/node_modules/%s/dist/index.js' "$(microsoft365_dir)" "$MICROSOFT365_PACKAGE"; }
-microsoft365_claude_config()  { printf '%s' "$HOME/.claude.json"; }
+# ── Claude Code's config root: CLAUDE_CONFIG_DIR when the operator sets it, $HOME/.claude when
+# not — the expression the library's bootstrap_managed_sources already reads IT's policy through.
+# Every verb runs in its own subshell with ONE module sourced, so this cannot live in one place.
+microsoft365_config_dir() {
+  local d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  case "$d" in */) [ "$d" = / ] || d="${d%/}" ;; esac
+  # A relative value is made absolute here: this path is stored and linked from elsewhere, and
+  # only an absolute one still names the same file from another directory.
+  case "$d" in /*) : ;; *) d="$(pwd -P)/$d" ;; esac
+  printf '%s' "$d"
+}
+# 🚨 THE MCP REGISTRY TAKES A DIFFERENT BASE FROM settings.json, so it is NOT microsoft365_config_dir
+#    with another leaf. MEASURED on a Mac carrying four config roots: with CLAUDE_CONFIG_DIR set the
+#    registry is $CLAUDE_CONFIG_DIR/.claude.json (all four live, the selected one written that
+#    minute); with it UNSET it is $HOME/.claude.json, never $HOME/.claude/.claude.json. Spelling it
+#    as config_dir/.claude.json would move the registry on every machine that sets nothing.
+#    modules/agent_cli.sh:158 already reads it with this exact expression.
+microsoft365_claude_config()  {
+  local d="${CLAUDE_CONFIG_DIR:-$HOME}"
+  case "$d" in */) [ "$d" = / ] || d="${d%/}" ;; esac
+  case "$d" in /*) : ;; *) d="$(pwd -P)/$d" ;; esac
+  printf '%s/.claude.json' "$d"
+}
 microsoft365_copilot_config() { printf '%s' "$HOME/.copilot/mcp-config.json"; }
 microsoft365_guard()          { printf '%s/hooks/guard-mail-send.sh' "$(microsoft365_dir)"; }
-microsoft365_claude_settings() { printf '%s' "$HOME/.claude/settings.json"; }
+microsoft365_claude_settings() { printf '%s/settings.json' "$(microsoft365_config_dir)"; }
 # Copilot loads every file in hooks/ (measured with a probe file of another name), so the guard gets
 # its own file and never shares one with the hooks module's 00-lifecycle.json.
 microsoft365_copilot_hooks()   { printf '%s' "$HOME/.copilot/hooks/microsoft365-mail.json"; }
@@ -485,7 +507,7 @@ MICROSOFT365_SOFTERIA_APP="084a3e9f-a9f4-43f7-89f9-d229cf97853e"   # the server'
 microsoft365_agent_name()   { case "$1" in claude) printf 'Claude Code' ;; *) printf 'Copilot CLI' ;; esac; }
 microsoft365_agent_config() { case "$1" in claude) microsoft365_claude_config ;; *) microsoft365_copilot_config ;; esac; }
 microsoft365_agent_type()   { case "$1" in claude) printf 'stdio' ;; *) printf 'local' ;; esac; }
-microsoft365_agent_user_settings() { case "$1" in claude) printf '%s' "$HOME/.claude/settings.json" ;; *) printf '%s' "$HOME/.copilot/settings.json" ;; esac; }
+microsoft365_agent_user_settings() { case "$1" in claude) microsoft365_claude_settings ;; *) printf '%s' "$HOME/.copilot/settings.json" ;; esac; }
 
 # microsoft365_policy_source <agent> <key> — the first managed source carrying <key>, as a short path.
 microsoft365_policy_source() {
