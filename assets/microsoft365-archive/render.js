@@ -7,7 +7,8 @@
 //   vttToMarkdown(vttText)                  Teams WebVTT transcript -> turns, consecutive same-speaker cues merged
 //   aiInsightToMarkdown(insight)            one callAiInsight -> notes / action items / mentions
 //   attendanceToMarkdown(report, records)   attendance report -> table (name, email, role, h:mm:ss, joins)
-//   chatToMarkdown(messages)                chatMessage[] -> oldest first, system events on one italic line
+//   chatToMarkdown(messages)                chatMessage[] -> oldest first, system events on one italic line,
+//                                           a DLP-flagged message withheld (who and when only)
 //   htmlToMarkdown(html)                    dependency-free HTML -> GitHub-flavoured markdown
 //   interactionsToSessions(interactions)    Copilot aiInteraction[] -> [{sessionId, startedAt, title, markdown, links}]
 //   consumerCsvToSessions(csvText)          consumer Copilot activity CSV -> same shape, or throws naming the columns
@@ -657,6 +658,13 @@ function chatToMarkdown(messages) {
     const when = utcStamp(m.createdDateTime);
     const who = identityName(m.from) || 'Unknown sender';
     if (m.deletedDateTime) { out.push('*(' + when + ') message from ' + who + ' deleted*'); continue; }
+    // Graph returns policyViolation on a message the tenant's DLP flagged. Copying such a message into a
+    // local markdown file, where DLP and retention no longer reach it, is the one thing DLP exists to stop:
+    // the message is withheld, and only who and when survive. No new scope — it is in the same GET.
+    if (m.policyViolation) {
+      out.push('*(' + when + ') message from ' + who + " withheld: your organisation's data-loss-prevention policy flagged it*");
+      continue;
+    }
     if (m.messageType && m.messageType !== 'message') { out.push('*(' + when + ') ' + summarizeEvent(m) + '*'); continue; }
     const parts = ['**' + who + '** (' + when + ')' + (m.lastEditedDateTime ? ' (edited)' : '') + ':'];
     if (m.subject) parts.push('Subject: ' + oneLine(m.subject));
@@ -1145,6 +1153,9 @@ function selftest(write) {
       body: { contentType: 'text', content: 'Morning!' } },
     { id: '1726048953000', messageType: 'message', createdDateTime: '2026-09-10T08:22:33Z', deletedDateTime: '2026-09-10T08:23:00Z',
       from: { user: { displayName: 'Ana Pérez' } }, body: { contentType: 'html', content: '' } },
+    { id: '1726048954000', messageType: 'message', createdDateTime: '2026-09-10T08:22:34Z', from: { user: { displayName: 'Ben O\'Neil' } },
+      policyViolation: { dlpAction: 'BlockAccess', policyTip: { generalText: 'This message may contain sensitive data.' } },
+      body: { contentType: 'text', content: 'card 4111 1111 1111 1111 exp 03/28' } },
   ];
   const chat = chatToMarkdown(chatMessages);
   same('chat: oldest first, system event on one italic line, html body converted, attachment listed', chat, [
@@ -1153,7 +1164,10 @@ function selftest(write) {
     "**Ben O'Neil** (2026-09-10 08:22:32 UTC):", '',
     'See [the sheet](https://contoso.sharepoint.com/sites/Finance/Q3.xlsx), @Ana.\\', 'Thanks', '',
     '- Attachment: [Q3.xlsx](https://contoso.sharepoint.com/sites/Finance/Shared%20Documents/Q3.xlsx)', '',
-    '*(2026-09-10 08:22:33 UTC) message from Ana Pérez deleted*', ''].join('\n'));
+    '*(2026-09-10 08:22:33 UTC) message from Ana Pérez deleted*', '',
+    "*(2026-09-10 08:22:34 UTC) message from Ben O'Neil withheld: your organisation's data-loss-prevention policy flagged it*", ''].join('\n'));
+  check('chat: a DLP-flagged message keeps nothing of its body (the check can see the body when it is not flagged)',
+    chat.indexOf('4111 1111') < 0 && chatToMarkdown([Object.assign({}, chatMessages[4], { policyViolation: undefined })]).indexOf('4111 1111') >= 0, chat);
   same('chat: input order does not matter (the reversed list renders byte-identically)', chatToMarkdown(chatMessages.slice().reverse()), chat);
   const movedEarlier = chatToMarkdown(chatMessages.map((m) => (m.id === '1726048952000' ? Object.assign({}, m, { createdDateTime: '2026-09-10T08:00:00Z' }) : m)));
   check('chat NEGATIVE CONTROL: moving a message\'s timestamp earlier moves it ahead of the system event',

@@ -1058,7 +1058,14 @@ async function harvestOne(ctx, event, folders, byHash) {
       if (!ok(chat.res)) status.chat = derive('chat', chat.res);
       else if (!chat.items.length) status.chat = 'none';
       else {
-        files.push(['chat.md', '# Chat — ' + subject + '\n\n' + render.chatToMarkdown(chat.items)]);
+        // A message the tenant's DLP flagged is withheld by the renderer; say how many, here and in the
+        // run log, so a reader of the archive never mistakes a short chat for the whole chat.
+        const withheld = chat.items.filter((m) => m && m.policyViolation).length;
+        const withheldNote = withheld
+          ? '_' + withheld + " message(s) withheld: your organisation's data-loss-prevention policy flagged them._\n\n"
+          : '';
+        if (withheld) ctx.log('meeting ' + subject + ': ' + withheld + ' chat message(s) withheld (DLP)');
+        files.push(['chat.md', '# Chat — ' + subject + '\n\n' + withheldNote + render.chatToMarkdown(chat.items)]);
         status.chat = 'available';
         const roots = messageLinks(chat.items);
         if (roots.length) {
@@ -1747,6 +1754,9 @@ async function selftest() {
       oneOffMeeting.artifacts.chat === 'available' && firstOccurrence.artifacts.chat === 'forbidden:needs Chat.Read or Chat.ReadWrite', JSON.stringify([oneOffMeeting.artifacts, firstOccurrence.artifacts, secondOccurrence.artifacts]));
     const chat = art(availableRoot, 'ical-one-off-0001', 'chat.md') || '';
     const links = art(availableRoot, 'ical-one-off-0001', 'links.md') || '';
+    check('chat.md withholds the DLP-flagged message (its note, its sender and time, none of its body)',
+      chat.indexOf("1 message(s) withheld") >= 0 && chat.indexOf('withheld: your organisation') >= 0 &&
+      chat.indexOf('4111111111111111') < 0 && chat.indexOf('door code') < 0, chat);
     check('chat.md holds both pages, oldest first; links.md resolved Plan.docx (fetched) and left the web link external',
       chat.indexOf('Alice Adams') >= 0 && chat.indexOf('reading it now') > chat.indexOf('the plan') && /\| fetched \| sharepoint \| Plan\.docx \|/.test(links) &&
       /\| external \| web \|/.test(links), chat + '\n' + links);

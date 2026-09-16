@@ -169,7 +169,7 @@
     },
     "GET /chats/19:meeting_one@thread.v2/messages?$top=50&$skiptoken=chat-page-two": {
       "status": 200,
-      "body": { "value": [ { "id": "1767625800000", "messageType": "message", "createdDateTime": "2026-01-05T15:10:00Z", "from": { "user": { "id": "bob-id", "displayName": "Bob Brown" } }, "body": { "contentType": "html", "content": "<p>Thanks, <b>reading it now</b>. <a href=\"https://graph.microsoft.com/v1.0/me/drive/spec%69al/approot\">app folder</a> <a href=\"https://graph.microsoft.com/v1.0/me/drive%2Fspecial%2Fapproot\">again</a> <a href=\"https://graph.microsoft.com/v1.0/me/drive/%2573pecial/approot\">twice</a></p>" }, "attachments": [] } ] }
+      "body": { "value": [ { "id": "1767625800000", "messageType": "message", "createdDateTime": "2026-01-05T15:10:00Z", "from": { "user": { "id": "bob-id", "displayName": "Bob Brown" } }, "body": { "contentType": "html", "content": "<p>Thanks, <b>reading it now</b>. <a href=\"https://graph.microsoft.com/v1.0/me/drive/spec%69al/approot\">app folder</a> <a href=\"https://graph.microsoft.com/v1.0/me/drive%2Fspecial%2Fapproot\">again</a> <a href=\"https://graph.microsoft.com/v1.0/me/drive/%2573pecial/approot\">twice</a></p>" }, "attachments": [] }, { "id": "1767625900000", "messageType": "message", "createdDateTime": "2026-01-05T15:11:00Z", "from": { "user": { "id": "bob-id", "displayName": "Bob Brown" } }, "policyViolation": { "dlpAction": "BlockAccess", "policyTip": { "generalText": "This message may contain sensitive data." } }, "body": { "contentType": "text", "content": "acct 4111111111111111 and the door code is 8842" }, "attachments": [] } ] }
     },
     "GET /chats/19:meeting_series@thread.v2/messages?$top=50": {
       "status": 403,

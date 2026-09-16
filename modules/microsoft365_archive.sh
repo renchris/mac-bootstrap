@@ -861,7 +861,7 @@ what_microsoft365_archive() {
 # What IT would ask first is said first: these are COPIES, on this Mac, that the tenant's controls no
 # longer see, and something runs them in the background.
 cost_microsoft365_archive() {
-  printf 'keeps local markdown COPIES of your meeting transcripts, chats, notes, AI notes and Copilot files in %s, outside your tenant'\''s DLP, retention and eDiscovery; uninstall leaves them. ' \
+  printf 'keeps local markdown COPIES of your meeting transcripts, chats, notes, AI notes and Copilot files in %s, outside your tenant'\''s DLP, retention and eDiscovery; uninstall leaves them. A chat message your organisation'\''s DLP flagged is withheld, leaving only who sent it and when. ' \
     "$(microsoft365_archive_short_path "$(microsoft365_archive_root)")"
   if [ "$(microsoft365_archive_schedule)" = hourly ]; then
     printf 'A LaunchAgent (%s) runs it hourly and at every login (BOOTSTRAP_MICROSOFT365_ARCHIVE_SCHEDULE=off: only when you run it). ' "$MICROSOFT365_ARCHIVE_LABEL"
