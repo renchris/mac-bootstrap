@@ -303,10 +303,19 @@ rm_call "$h" rm_nolabel gate_rewrite_model; same "cloud-gate-is-needs-human" "$?
 # assets/local-only-check.sh can. Fixture domain only: the real VoiceInk preferences are never read here.
 RM_FX="$CHECK_TMP/rm-voiceink-fixture"
 plutil -create xml1 "$RM_FX.plist" 2>/dev/null || printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict/></plist>\n' > "$RM_FX.plist"
+# The app bundle is a fixture too: the reader answers "not installed" where there is none, so on a Mac
+# without VoiceInk — a CI runner — this pair proved nothing and the keyed arm read as clean. The binary
+# carries the fork's marker, which is how the reader decides which key stores are authoritative.
+RM_FX_APP="$CHECK_TMP/rm-voiceink-fixture-app/VoiceInk.app"
+mkdir -p "$RM_FX_APP/Contents/MacOS"
+printf 'fixture: LocalKeychain_geminiAPIKey LocalKeychain_\n' > "$RM_FX_APP/Contents/MacOS/VoiceInk"
+chmod 755 "$RM_FX_APP/Contents/MacOS/VoiceInk"
 RM_CLEAN="$( ( . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh"; . "$CHECK_ROOT/modules/rewrite_model.sh"
+               export LOCAL_ONLY_VOICEINK_APP="$RM_FX_APP"
                BOOTSTRAP_ASSETS="$CHECK_ROOT/assets" BOOTSTRAP_REWRITE_MODEL_DOMAIN="$RM_FX" rewrite_model_local_only >/dev/null; echo $? ) 2>/dev/null)"
 plutil -insert LocalKeychain_geminiAPIKey -data AA== "$RM_FX.plist" 2>/dev/null
 RM_KEYED="$( ( . "$CHECK_ROOT/assets/hooks/bootstrap-lib.sh"; . "$CHECK_ROOT/modules/rewrite_model.sh"
+               export LOCAL_ONLY_VOICEINK_APP="$RM_FX_APP"
                BOOTSTRAP_ASSETS="$CHECK_ROOT/assets" BOOTSTRAP_REWRITE_MODEL_DOMAIN="$RM_FX" rewrite_model_local_only ) 2>/dev/null)"
 same "rewrite-model-second-reader-clean-fixture" "$RM_CLEAN" 0
 case "$RM_KEYED" in *Gemini*) pass "rewrite-model-second-reader-sees-a-saved-key" ;;
