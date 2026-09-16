@@ -145,8 +145,24 @@ h="$(fresh_home agentcli-zprofile)"
 printf 'export EDITOR=vi' >"$h/.zprofile"; AC_Z="$(ac_sha "$h/.zprofile")"   # no trailing newline, on purpose
 agent_unit "$h" 'BOOTSTRAP_AGENTS=claude; install_agent_cli' >/dev/null
 same "agentcli-zprofile-appended" "$(ac_blocks "$h")" 1
+# A login zsh must find BOTH the agents and the tools this bootstrap pins — the agents first, the
+# pinned tools last, so a node or gh the person already has still wins.
+AC_PATH_OUT="$(HOME="$h" /bin/zsh -lc 'printf %s "$PATH"' 2>/dev/null)"
+case ":$AC_PATH_OUT:" in
+  *":$h/.local/bin:"*) case ":$AC_PATH_OUT:" in
+      *":$h/.mac-bootstrap/tools/bin:"*) pass "agentcli-zprofile-path-holds-agents-and-tools" ;;
+      *) fail "agentcli-zprofile-path-holds-agents-and-tools" "no tools/bin: $AC_PATH_OUT" ;; esac ;;
+  *) fail "agentcli-zprofile-path-holds-agents-and-tools" "no .local/bin: $AC_PATH_OUT" ;;
+esac
+case "$AC_PATH_OUT" in
+  "$h/.local/bin:"*) pass "agentcli-zprofile-agents-first-tools-last" ;;
+  *) fail "agentcli-zprofile-agents-first-tools-last" "$AC_PATH_OUT" ;;
+esac
 agent_unit "$h" 'uninstall_agent_cli' >/dev/null
 same "agentcli-zprofile-restored-exactly" "$(ac_sha "$h/.zprofile")" "$AC_Z"
+AC_PATH_OUT="$(HOME="$h" /bin/zsh -lc 'printf %s "$PATH"' 2>/dev/null)"
+case ":$AC_PATH_OUT:" in *":$h/.mac-bootstrap/tools/bin:"*) fail "control-agentcli-path-gone-after-uninstall" "$AC_PATH_OUT" ;;
+  *) pass "control-agentcli-path-gone-after-uninstall" ;; esac
 h="$(fresh_home agentcli-zprofile-new)"
 agent_unit "$h" 'BOOTSTRAP_AGENTS=claude; install_agent_cli' >/dev/null
 same "agentcli-zprofile-created" "$(ac_blocks "$h")" 1

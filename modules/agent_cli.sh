@@ -308,7 +308,10 @@ agent_cli_path_block() {
   [ -f "$f" ] && /usr/bin/grep -qxF "$AGENT_CLI_BLOCK_BEGIN" "$f" && return 0
   if [ ! -e "$f" ]; then how=created
   elif [ -s "$f" ] && [ -n "$(/usr/bin/tail -c 1 "$f")" ]; then how=appended-newline; printf '\n' >>"$f"; fi
-  printf '%s\n%s\n%s\n' "$AGENT_CLI_BLOCK_BEGIN" 'export PATH="$HOME/.local/bin:$PATH"   # Claude Code, Copilot CLI' \
+  # The bootstrap's own tools (the pinned node, and whatever other modules put there) go at the END, so a
+  # node or gh the person already has always wins; only the agents' own dir is put first.
+  printf '%s\n%s\n%s\n%s\n' "$AGENT_CLI_BLOCK_BEGIN" 'export PATH="$HOME/.local/bin:$PATH"   # Claude Code, Copilot CLI' \
+    'export PATH="$PATH:$HOME/.mac-bootstrap/tools/bin"   # tools this bootstrap pinned (node, …); last, so yours win' \
     "$AGENT_CLI_BLOCK_END" >>"$f" || return 1
   printf '%s\n' "$how" >"$(agent_cli_state)/zprofile.written"
 }
