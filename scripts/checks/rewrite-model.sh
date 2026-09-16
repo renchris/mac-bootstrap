@@ -94,8 +94,18 @@ rm_call() {
            BOOTSTRAP_REWRITE_MODEL_APP_PROCESS=no-such-voiceink-process
     unset BOOTSTRAP_LOG
     . "$RM_LIB" >/dev/null 2>&1; . "$RM_MOD" >/dev/null 2>&1
+    # This Mac's RAM must not decide a check: the base tag is empty below 12 GB, which turned four
+    # gate cases into DECIDE on a 7 GB CI runner while passing here. Every case runs against a stub
+    # (16 GB unless RM_MEM_GB says otherwise); the low-memory path is asserted deliberately, below.
+    REWRITE_MODEL_SYSCTL="$RM_DIR/bin/sysctl-${RM_MEM_GB:-16}"
     "$@" )
 }
+# sysctl stubs: hw.memsize for 16 GB and for 8 GB, the shape rewrite_model_mem_gb reads.
+mkdir -p "$RM_DIR/bin"
+for rm_gb in 16 8; do
+  printf '#!/bin/sh\ncase "$*" in *hw.memsize*) echo %s ;; *) exit 1 ;; esac\n' "$((rm_gb * 1073741824))" > "$RM_DIR/bin/sysctl-$rm_gb"
+  chmod 755 "$RM_DIR/bin/sysctl-$rm_gb"
+done
 rm_receipt() { mkdir -p "$1/.mac-bootstrap"; printf 'digest=d1g3st\nmodel=voiceink-rewrite\nbase=qwen3:8b\nat=x\n' > "$1/.mac-bootstrap/rewrite-model-gate.receipt"; }
 
 # 1. The done-marker is the MODES, read against a server that is certified and cloud-off. ─────────
@@ -464,3 +474,12 @@ same "local-agent-foreign-tag-not-uninstalled" "$(grep -c '^rm local-agent$' "$R
 # What a person reads before choosing names the tag and how to point an agent at it.
 case "$(rm_call "$h" what_rewrite_model 2>/dev/null)" in *"local-agent tag at 32k context"*"COPILOT_MODEL=local-agent"*) pass "what-rewrite-model-names-local-agent" ;;
   *) fail "what-rewrite-model-names-local-agent" "$(rm_call "$h" what_rewrite_model 2>/dev/null)" ;; esac
+
+# 15. THE FLOOR IS MEASURED, NOT ASSUMED. Below 12 GB no candidate fits, so the gate asks the person to
+#     decide rather than installing something that will not run — and the same fixtures above 12 GB do not.
+h="$(fresh_home rm-mem)"; rm_api; rm_fx "[$RM_MODE_OLLAMA]"
+same "low-memory-mac-has-no-base-and-asks" "$(RM_MEM_GB=8 rm_call "$h" rewrite_model_pending 2>/dev/null)" DECIDE
+case "$(rm_call "$h" rewrite_model_pending 2>/dev/null)" in
+  DECIDE) fail "control-a-16gb-mac-does-not-ask" "DECIDE on 16 GB too, so the check cannot see the floor" ;;
+  *)      pass "control-a-16gb-mac-does-not-ask" ;;
+esac
