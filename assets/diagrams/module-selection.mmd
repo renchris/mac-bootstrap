@@ -5,7 +5,10 @@ flowchart LR
   LITE --> statusline["statusline<br/><i>context-% in the status line</i>"]
   LITE --> instructions["instructions<br/><i>one instructions file</i>"]
   LITE --> hooks["hooks<br/><i>lifecycle hooks</i>"]
+  LITE --> skills["skills<br/><i>three portable skills</i>"]
+  LITE --> agentenv["agent_env<br/><i>the agent's environment</i>"]
   LITE --> panes["pane_equalize<br/><i>⌘⇧E evens panes</i>"]
+  STD --> ghcli["github_cli<br/><i>the GitHub CLI</i>"]
   STD --> handoff["handoff<br/><i>self-recycling /handoff</i>"]
   STD --> rewrite["rewrite_model<br/><i>local rewrite model</i>"]
   STD --> microsoft365["microsoft365<br/><i>Outlook for both agents</i>"]
@@ -14,14 +17,17 @@ flowchart LR
   FULL --> screenshot["screenshot<br/><i>⌘⇧4 to clipboard</i>"]
   FULL --> archive["microsoft365_archive<br/><i>meetings + Copilot as markdown</i>"]
   FULL --> shared["shared_folders<br/><i>links into OneDrive</i>"]
+  FULL --> browser["browser_automation<br/><i>agent-browser + your browser</i>"]
+  FULL --> extra["extra_agents<br/><i>Codex + Gemini CLIs</i>"]
   handoff -.->|"needs — added out loud"| statusline
   handoff -.->|"needs"| hooks
   archive -.->|"needs"| microsoft365
+  browser -.->|"needs"| agents
   classDef lite fill:@green-bg,stroke:@green-fg,color:@text
   classDef std fill:@gold-bg,stroke:@gold-fg,color:@text
   classDef full fill:@red-bg,stroke:@red-fg,color:@text
   classDef prof fill:@gray-bg,stroke:@blue-fg,color:@text-bright
-  class agents,statusline,instructions,hooks,panes lite
-  class handoff,rewrite,microsoft365,reporting std
-  class voiceink,screenshot,archive,shared full
+  class agents,statusline,instructions,hooks,skills,agentenv,panes lite
+  class ghcli,handoff,rewrite,microsoft365,reporting std
+  class voiceink,screenshot,archive,shared,browser,extra full
   class LITE,STD,FULL prof
