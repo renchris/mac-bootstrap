@@ -53,7 +53,7 @@ set -u
 {
 BOOTSTRAP_VERSION=1
 BOOTSTRAP_REPO="renchris/mac-bootstrap"
-BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-ec12b052468b618108d636690af33d9f1b4fa2c9}"          # replaced at release time. NEVER "main": a main-pinned
+BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-e76e8c6382dff9d9872e6d451c204dbfc6bacf17}"          # replaced at release time. NEVER "main": a main-pinned
                                          # raw URL serves up to 5 minutes of stale Fastly bytes.
 # A company whose proxy blocks raw.githubusercontent.com points BOOTSTRAP_RAW at its own mirror of the
 # same tree. That is safe to allow because nothing fetched is trusted by where it came from — see the
@@ -69,7 +69,7 @@ BOOTSTRAP_RAW="${BOOTSTRAP_RAW:-https://raw.githubusercontent.com/$BOOTSTRAP_REP
 # BOOTSTRAP_PIN that names another tree is refused, because this list cannot vouch for that one.
 driver_release_manifest() {
   cat <<'BOOTSTRAP_RELEASE_MANIFEST'
-pin ec12b052468b618108d636690af33d9f1b4fa2c9
+pin e76e8c6382dff9d9872e6d451c204dbfc6bacf17
 f5a460b34de912e940c812253333e1681f49418e23474a8d6d0b23a990ce9997  assets/agent-handoff
 b695d8ed51e343d9c76a504ba3e3effe203b84391db14cb1797212d723fa9f7a  assets/agent-model-brief.md
 5666f93dea01b8ae04e48fd6d8569ddf28df5fae20e3779eb786bbbbfc86b6e6  assets/agent-repo-init
@@ -113,7 +113,7 @@ d6f1647c11513b4419a1da9706b8e762a657e06f68ace3a45aa41de5ca00ffc9  assets/success
 044ea9bd1d6f63b20f03e25da55f5d978427ea28813204f1fe9d8ba049a32003  assets/succession/seed.sh
 644e88baa726905f515a19f2320c172af474953a675f5a8de1c4900a381138ba  assets/verify-instructions-live.sh
 ee4b4d8264a56fa34f4114d1f18a1cdb28fd8e7e7860f132a3cdd5640f9830f0  assets/voiceink-rewrite.Modelfile
-642f1648076419a6863ba0641fb3776c40139a3463cae5b6bde815b4238411d0  modules/agent_cli.sh
+73bebb7f89b6f61c540b6610daa5cecd53dcfe1d734d6c7959c79154eeba7051  modules/agent_cli.sh
 cb9590b6902ba671f487e14e298620987a02a467bd5e92f675cb1898a7c2c93e  modules/handoff.sh
 58b544191e63dc52761352678236928391897a2b0df048f624f6661848ea95ed  modules/hooks.sh
 ca5e93e6e46029a0c12e0d4026e30e92f673dc0114c1d8d777f327570b18133c  modules/instructions.sh
