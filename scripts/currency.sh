@@ -48,6 +48,7 @@ whisper.cpp         | modules/voiceink.sh      | BOOTSTRAP_VOICEINK_WHISPER_PIN 
 copilot-cli         | README.md                | -                              | Copilot CLI ([0-9][0-9.]*[0-9])  | npm:@github/copilot
 claude-code         | modules/agent_cli.sh     | AGENT_CLI_CLAUDE_VERSION       | -                                | text:https://downloads.claude.ai/claude-code-releases/stable
 copilot-cli-binary  | modules/agent_cli.sh     | AGENT_CLI_COPILOT_VERSION      | -                                | npm:@github/copilot
+gh                  | modules/github_cli.sh    | GITHUB_CLI_VERSION             | -                                | github:cli/cli
 CURRENCY_TABLE
 )"
 
