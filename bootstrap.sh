@@ -53,7 +53,7 @@ set -u
 {
 BOOTSTRAP_VERSION=1
 BOOTSTRAP_REPO="renchris/mac-bootstrap"
-BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-e76e8c6382dff9d9872e6d451c204dbfc6bacf17}"          # replaced at release time. NEVER "main": a main-pinned
+BOOTSTRAP_PIN="${BOOTSTRAP_PIN:-9c8493fe2b80c610d6364d2ed47fac1a3f75a4fb}"          # replaced at release time. NEVER "main": a main-pinned
                                          # raw URL serves up to 5 minutes of stale Fastly bytes.
 # A company whose proxy blocks raw.githubusercontent.com points BOOTSTRAP_RAW at its own mirror of the
 # same tree. That is safe to allow because nothing fetched is trusted by where it came from — see the
@@ -69,7 +69,7 @@ BOOTSTRAP_RAW="${BOOTSTRAP_RAW:-https://raw.githubusercontent.com/$BOOTSTRAP_REP
 # BOOTSTRAP_PIN that names another tree is refused, because this list cannot vouch for that one.
 driver_release_manifest() {
   cat <<'BOOTSTRAP_RELEASE_MANIFEST'
-pin e76e8c6382dff9d9872e6d451c204dbfc6bacf17
+pin 9c8493fe2b80c610d6364d2ed47fac1a3f75a4fb
 f5a460b34de912e940c812253333e1681f49418e23474a8d6d0b23a990ce9997  assets/agent-handoff
 b695d8ed51e343d9c76a504ba3e3effe203b84391db14cb1797212d723fa9f7a  assets/agent-model-brief.md
 5666f93dea01b8ae04e48fd6d8569ddf28df5fae20e3779eb786bbbbfc86b6e6  assets/agent-repo-init
@@ -105,6 +105,9 @@ ce46fccbf44933cc22ef390081b86526b839bd90a3a2c89a19f537f5efc0a09a  assets/microso
 98a1d9eb71bdf88db2bd810567a7b03edd9e3ac7a3097e98da80b1c5acf54aa9  assets/model-gate.sh
 60c71be4894dd6c942ad87767fa36cd48b9c861b6d7c42ac4aec7c2841bebd6e  assets/repo-CLAUDE.md
 2ba5fa71d898b0d4e489251d1ff5df0913a9cbf2b24caf821699dad91f51d018  assets/shared-folders/shared-folder
+196ed48019393b91b535d29afe04cdf431758a056e7c6cd9cadfbddb58c4e758  assets/skills/handoff-continuation/SKILL.md
+053203243ddf7c631c27254ae96857346585dfdff92963a314f37c3889c2452c  assets/skills/plan-conventions/SKILL.md
+469b90c2afee2fd2c4da4781e4eebeb81676cfa32ce92ec9337bd60c982b5fad  assets/skills/verify-by-readback/SKILL.md
 715204000c9b7659eab2691b4c7dae3c2eda8e47a84ea4a6cda51ae7c7c28cbc  assets/succession/README.md
 d6f1647c11513b4419a1da9706b8e762a657e06f68ace3a45aa41de5ca00ffc9  assets/succession/driver-iterm2.sh
 553ab1d5959b19098148f6b36cb487a9b9b2d69b77c592f485adc83ce7f70650  assets/succession/driver-kitty.sh
@@ -114,17 +117,22 @@ d6f1647c11513b4419a1da9706b8e762a657e06f68ace3a45aa41de5ca00ffc9  assets/success
 644e88baa726905f515a19f2320c172af474953a675f5a8de1c4900a381138ba  assets/verify-instructions-live.sh
 ee4b4d8264a56fa34f4114d1f18a1cdb28fd8e7e7860f132a3cdd5640f9830f0  assets/voiceink-rewrite.Modelfile
 73bebb7f89b6f61c540b6610daa5cecd53dcfe1d734d6c7959c79154eeba7051  modules/agent_cli.sh
-cb9590b6902ba671f487e14e298620987a02a467bd5e92f675cb1898a7c2c93e  modules/handoff.sh
-58b544191e63dc52761352678236928391897a2b0df048f624f6661848ea95ed  modules/hooks.sh
-ca5e93e6e46029a0c12e0d4026e30e92f673dc0114c1d8d777f327570b18133c  modules/instructions.sh
-23c6f9af30d3a162358ea31b527012b5c72123de2fe5b7e8816340eee4dfd9f6  modules/microsoft365.sh
-045605210352110d6cf18d8158fbb110f4ec2ce92cb407b3d41e09e6943ff9fd  modules/microsoft365_archive.sh
-c90db9a4dfdf6751c4fa868754ae5db81cf72ee73b250c70d56e6caac2ce0fc2  modules/pane_equalize.sh
-08f612eca3ee691f6c2b4ad85fe973a6667212bd4d0ef072d4bbedc92faa9ba4  modules/reporting_off.sh
+c6fc7b3ee0aad46119022855f8fcb91de6802f3384d35b2414e11ade24d98207  modules/agent_env.sh
+741a173537bee25b4634658bfa210d255a05d9d70bca326558eb2b8ca1256487  modules/browser_automation.sh
+08633907436b43bfa56843bd4a929e60a097239b5a28e4945c50d49636cabeb6  modules/extra_agents.sh
+087e1af35ef0f51e9639e49b0845509840cb3e86b7f782a431a6aa577dd68472  modules/github_cli.sh
+9f74269e6819515678a38c36b8d80d6ddced5b9206b74adcb986c9fde65c77bb  modules/handoff.sh
+b7c3c8b18b56b18c8424c5530bdf02657ab10a7b6bff6d442bf2f0b1a12f5f97  modules/hooks.sh
+9e883cde6686bb42dff1e2c5740db68cb0853895b122bb63c893e74c318e680c  modules/instructions.sh
+465157682fbe4679a4fd8bdea5cf81e3ccaa83331b3543afee754bbbbda91274  modules/microsoft365.sh
+f38bf3f718a0dd3e3d12b61a17db0381430a469f2fe4a3138ff56a7a6f55bd96  modules/microsoft365_archive.sh
+b51e31d1d2109e740a97347ffac9670908d36b66b780d1df1ec91ce0431d41ea  modules/pane_equalize.sh
+4fe23c17a647c3c7110e6a6f7be4a37a1a0105fa2639e2ee462817a3aa6368ff  modules/reporting_off.sh
 b3edd97b84d5488c2d88c06eb89216a367f4a98e8eba164827196456fc708f27  modules/rewrite_model.sh
 393b197a01a3b2427b7ed63e755135b75ccf07cbc47559945365b2366b631d6a  modules/screenshot.sh
 bf7960a93b22934f9ab51bf593c3bbc43b5049bbab3fa2e3f329091ed9e5eb64  modules/shared_folders.sh
-37483a97afdd9aff22a209a15a76eaf14157500bfac57b14de9601b1392049a4  modules/statusline.sh
+00983e4de77406c8657a26b2183c7fcc4795f89248b269323566ca197c3a3b2e  modules/skills.sh
+2111812d43ef6e00b4ebe1e973d0f8fb5163e733af95c45bc7860a4156780d77  modules/statusline.sh
 cae6214c5ff75b3d32a46202123177a5673133cd3ad94ab47b3e80c07ec66df3  modules/voiceink.sh
 BOOTSTRAP_RELEASE_MANIFEST
 }
