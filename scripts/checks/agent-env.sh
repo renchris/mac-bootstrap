@@ -9,6 +9,14 @@
 if [ -r "$CHECK_ROOT/modules/agent_env.sh" ]; then
   h="$(fresh_home agentenv)"
 
+  # The spawn-depth key is capability-detected, so every arm below names the package it is deciding
+  # against. This one CARRIES the name, which is the arm where the key is expected to be written.
+  AE_PKG_YES="$CHECK_TMP/agentenv-pkg-knows"; mkdir -p "$AE_PKG_YES"
+  printf 'x CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH x\n' > "$AE_PKG_YES/cli.js"
+  AE_PKG_NO="$CHECK_TMP/agentenv-pkg-unaware"; mkdir -p "$AE_PKG_NO"
+  printf 'x MCP_TIMEOUT x DISABLE_AUTOUPDATER x\n' > "$AE_PKG_NO/cli.js"
+  export BOOTSTRAP_AGENT_ENV_PACKAGE="$AE_PKG_YES"
+
   # A pre-existing value of OURS is overwritten (the value is the deliverable); an unrelated key is not.
   mkdir -p "$h/.claude" && printf '{"env": {"MCP_TIMEOUT": "2000", "KEEP_ME": "mine"}, "theme": "dark"}\n' > "$h/.claude/settings.json"
   drive_at "$h" --only agent_env
@@ -72,4 +80,23 @@ if [ -r "$CHECK_ROOT/modules/agent_env.sh" ]; then
   same "agent-env-managed-key-is-needs-human" "$CHECK_RC" 10
   same "agent-env-managed-mac-is-not-written" \
     "$(json_at "$h3/.claude/settings.json" env.MCP_TIMEOUT || printf absent)" "absent"
+
+  # CAPABILITY DETECTION, the other arm: an agent whose own bytes do not carry the name is never
+  # handed the key. The positive control above proves the instrument can say yes, so this negative
+  # is a finding rather than a silent skip — the timeouts still land, which is what makes it a
+  # per-key decision and not a module-wide refusal.
+  h4="$(fresh_home agentenv-unaware)"
+  BOOTSTRAP_AGENT_ENV_PACKAGE="$AE_PKG_NO" drive_at "$h4" --only agent_env
+  same "agent-env-unaware-agent-rc" "$CHECK_RC" 0
+  same "agent-env-unaware-agent-skips-the-key" \
+    "$(json_at "$h4/.claude/settings.json" env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH || printf absent)" "absent"
+  same "agent-env-unaware-agent-still-writes-the-timeouts" \
+    "$(json_at "$h4/.claude/settings.json" env.MCP_TIMEOUT)/$(json_at "$h4/.claude/settings.json" env.MCP_TOOL_TIMEOUT)" \
+    "60000/600000"
+  # …and a verify from a cold process agrees it is SATISFIED without the key it did not write.
+  HOME="$h4" TMPDIR="$CHECK_WORK" BOOTSTRAP_AGENT_ENV_PACKAGE="$AE_PKG_NO" \
+    /bin/bash "$CHECK_ROOT/verify.sh" --only agent_env >/dev/null 2>&1; CHECK_RC=$?
+  same "agent-env-unaware-agent-verifies-cold" "$CHECK_RC" 0
+
+  unset BOOTSTRAP_AGENT_ENV_PACKAGE
 fi

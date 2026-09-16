@@ -30,10 +30,13 @@
 #                        on this machine (2.1.113, 2.1.114, 2.1.183) — no `SPAWN_DEPTH` string at
 #                        all — while the same grep in the same files finds DISABLE_AUTOUPDATER,
 #                        MCP_TIMEOUT and four other CLAUDE_*SUBAGENT* names, so the instrument can
-#                        say yes. Writing an env key no binary reads is inert, not harmful, and it
-#                        is what this author's shell exports; it is written here so the setting is
-#                        in one declared place rather than a login script. Do NOT read it as a
-#                        bound that is known to hold.
+#                        say yes. So it is CAPABILITY-DETECTED, never written blind: the key is
+#                        written only when the Claude Code package this Mac actually runs contains
+#                        the name, and when it does not, nothing is written and note_ says so. That
+#                        way the Mac decides, this file does not — a version that reads the key gets
+#                        it, and a version that does not is never handed a setting it ignores.
+#                        Do NOT read a written key as a bound that is known to hold; read it as
+#                        "this version knows the name".
 #   DISABLE_AUTOUPDATER  OPT-IN ONLY, and off unless BOOTSTRAP_PIN_AGENT_VERSION is set. Freezing
 #                        the version of somebody's agent is a decision with a security tail, and it
 #                        is theirs, not ours. Set that variable and this module pins; leave it and
@@ -53,8 +56,36 @@ AGENT_ENV_MCP_TOOL_TIMEOUT=600000                  # ms — one MCP tool call; s
 AGENT_ENV_SPAWN_DEPTH=1                            # subagent nesting; unconfirmed, see the header
 AGENT_ENV_AUTOUPDATER=1                            # only ever written when BOOTSTRAP_PIN_AGENT_VERSION is set
 
-AGENT_ENV_ALWAYS="MCP_TIMEOUT MCP_TOOL_TIMEOUT CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"
+AGENT_ENV_ALWAYS="MCP_TIMEOUT MCP_TOOL_TIMEOUT"
+AGENT_ENV_DETECTED="CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"   # written only if this Mac's agent knows the name
 AGENT_ENV_OPTIN="DISABLE_AUTOUPDATER"              # armed by BOOTSTRAP_PIN_AGENT_VERSION, never by default
+
+# The Claude Code package this Mac would actually run, or nothing when it cannot be found. Resolved
+# from the binary on PATH through every symlink, because the native install is a link into a
+# versioned directory and the version is the whole point of asking.
+agent_env_package() {
+  [ -n "${BOOTSTRAP_AGENT_ENV_PACKAGE:-}" ] && { printf '%s' "$BOOTSTRAP_AGENT_ENV_PACKAGE"; return 0; }
+  local b d
+  b="$(bootstrap_find_tool claude 2>/dev/null)" || b=""
+  [ -n "$b" ] || return 1
+  while [ -L "$b" ]; do
+    d="$(readlink "$b")"
+    case "$d" in /*) b="$d" ;; *) b="$(dirname "$b")/$d" ;; esac
+  done
+  d="$(dirname "$b")"
+  # Walk up to the package root: the directory holding the bin/ or the cli the link pointed into.
+  case "$d" in */bin) d="$(dirname "$d")" ;; esac
+  [ -d "$d" ] && printf '%s' "$d"
+}
+
+# Does the agent this Mac runs know the name? A grep over its own bytes, bounded to the package, is
+# the only instrument available: the name appears in no documented reference, so the binary is the
+# reference. Absent package, or absent name, both mean "do not write" — never a guess either way.
+agent_env_knows_spawn_depth() {
+  local p; p="$(agent_env_package)" || return 1
+  [ -n "$p" ] || return 1
+  grep -rqs -- 'CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH' "$p" 2>/dev/null
+}
 
 agent_env_settings() { printf '%s/.claude/settings.json' "$HOME"; }
 
@@ -72,6 +103,7 @@ agent_env_value() {
 # The keys THIS run is responsible for. The opt-in one joins only when the operator armed it.
 agent_env_keys() {
   printf '%s' "$AGENT_ENV_ALWAYS"
+  agent_env_knows_spawn_depth && printf ' %s' "$AGENT_ENV_DETECTED"
   [ -n "${BOOTSTRAP_PIN_AGENT_VERSION:-}" ] && printf ' %s' "$AGENT_ENV_OPTIN"
   printf '\n'
 }
@@ -124,6 +156,7 @@ note_agent_env() {
     printf 'your organisation pins these in managed settings, which override yours: %s' "$m"
   else
     printf 'the agent environment is not set here yet: %s' "$(agent_env_wrong)"
+    agent_env_knows_spawn_depth || printf '. %s is not written: the Claude Code this Mac runs does not carry that name, so it would be a setting nothing reads' "$AGENT_ENV_DETECTED"
   fi
 }
 gesture_agent_env() { :; }
@@ -147,7 +180,11 @@ uninstall_agent_env() {
   local k want got f rc=0
   f="$(agent_env_settings)"
   [ -f "$f" ] || return 0
-  for k in $AGENT_ENV_ALWAYS $AGENT_ENV_OPTIN; do
+  # EVERY key this module can ever write, capability-detected one included, and deliberately NOT the
+  # set this run would write: detection is a property of the agent installed right now, and an agent
+  # that gained or lost the name since install must not strand a key nothing will ever remove. The
+  # value comparison below is what keeps that safe — a key holding anything but ours is left alone.
+  for k in $AGENT_ENV_ALWAYS $AGENT_ENV_DETECTED $AGENT_ENV_OPTIN; do
     want="$(agent_env_value "$k")"
     [ -n "$want" ] || continue
     got="$(bootstrap_settings_get "$f" "env.$k" raw 2>/dev/null)" || continue
