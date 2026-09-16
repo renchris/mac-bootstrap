@@ -69,7 +69,7 @@ microsoft365_archive_domain()    { printf 'gui/%s' "$(/usr/bin/id -u)"; }
 microsoft365_archive_module_server() { printf '%s/microsoft365/node_modules/@softeria/ms-365-mcp-server/dist/index.js' "$(microsoft365_archive_state_dir)"; }
 MICROSOFT365_ARCHIVE_REGISTRATION_KEY="ms365"
 MICROSOFT365_ARCHIVE_SERVER_TAIL="/@softeria/ms-365-mcp-server/dist/index.js"
-microsoft365_archive_agent_config()  { printf '%s/.claude.json' "$HOME"; }
+microsoft365_archive_agent_config()  { printf '%s/.claude.json' "${CLAUDE_CONFIG_DIR:-$HOME}"; }
 
 # The choices a person made through the environment, recorded at install so a cold verify with no
 # environment agrees. Written only when the variable is set, so a re-run without it never resets

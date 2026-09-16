@@ -24,7 +24,7 @@
 REPORTING_OFF_CLAUDE_ENV="DISABLE_ERROR_REPORTING DISABLE_FEEDBACK_COMMAND CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"
 REPORTING_OFF_MARKER_BREW="reporting_off.brew-analytics"   # we turned Homebrew's analytics off, so uninstall turns them back on
 
-reporting_off_claude_settings() { printf '%s/.claude/settings.json' "$HOME"; }
+reporting_off_claude_settings() { printf '%s/settings.json' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
 reporting_off_state()           { printf '%s' "${BOOTSTRAP_STATE_DIR:-$HOME/.mac-bootstrap}"; }
 
 # The Homebrew this user can switch: one that exists and whose repository this user owns. A Homebrew
