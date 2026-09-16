@@ -204,7 +204,7 @@ EOF
       release_fail "hop 3 FAILED: found no looking command in README.md — the reader of this check is broken"
       prompt_bad=$((prompt_bad + 1))
     fi
-    [ "$prompt_bad" = 0 ] && release_say "  hop 3: the README's $ran looking command(s) answer and its $flags flag use(s) all parse"
+    [ "$prompt_bad" = 0 ] && release_say "  hop 3: the README's $ran looking command(s) answer and its $flags flag use(s) all parse (that the FLAGS exist, never that the behaviour the README describes is the published one)"
   elif [ "$bad" != 0 ]; then
     release_say "  hop 3: skipped — hop 2 is incomplete, so the published script could not assemble its tree"
   else
